@@ -1,0 +1,11 @@
+{
+  "name": "@kb/api",
+  "private": true,
+  "scripts": {
+    "setup": "python3 -m venv .venv && . .venv/bin/activate && python -m pip install --upgrade pip && python -m pip install -e .",
+    "dev": ". .venv/bin/activate && uvicorn src.main:app --reload --host 0.0.0.0 --port ${API_PORT:-8000}",
+    "lint": "python3 -m compileall src scripts",
+    "build": "python3 -m compileall src scripts",
+    "test": "python3 -m unittest discover tests"
+  }
+}

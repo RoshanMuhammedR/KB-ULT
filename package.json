@@ -1,0 +1,23 @@
+{
+  "name": "kb-new",
+  "private": true,
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "setup": "pnpm install && ([ -f .env ] || cp .env.example .env) && pnpm --filter @kb/api run setup",
+    "dev": "set -a; [ ! -f .env ] || . ./.env; set +a; turbo run dev --filter=@kb/api --filter=@kb/web",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "test": "turbo run test",
+    "db:migrate": "cd apps/api && . .venv/bin/activate && alembic upgrade head",
+    "db:seed": "cd apps/api && . .venv/bin/activate && python scripts/seed_default_kb.py",
+    "db:sql": "set -a; [ ! -f .env ] || . ./.env; set +a; psql \"postgresql://${POSTGRES_USER:-kb_user}:${POSTGRES_PASSWORD:-kb_password}@localhost:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-kb_new}\"",
+    "docker:build": "sh infra/compose.sh build",
+    "docker:dev": "sh infra/compose.sh up",
+    "docker:db:migrate": "sh infra/compose.sh run --rm api alembic upgrade head",
+    "docker:db:seed": "sh infra/compose.sh run --rm api python scripts/seed_default_kb.py",
+    "docker:db:sql": "sh infra/compose.sh exec db psql -U kb_user -d kb_new"
+  },
+  "devDependencies": {
+    "turbo": "^2.5.4"
+  }
+}

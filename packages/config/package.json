@@ -1,0 +1,11 @@
+{
+  "name": "@kb/config",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "build": "echo \"config package has no build step\"",
+    "lint": "echo \"config package has no lint step\"",
+    "test": "echo \"config package has no test step\""
+  }
+}

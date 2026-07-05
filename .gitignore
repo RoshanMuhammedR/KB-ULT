@@ -1,0 +1,13 @@
+.env
+node_modules/
+.turbo/
+.next/
+dist/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.pyc
+apps/api/.venv/
+apps/api/uploads/
+*.egg-info/

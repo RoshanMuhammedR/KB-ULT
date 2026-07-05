@@ -1,0 +1,32 @@
+[project]
+name = "kb-api"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+  "alembic>=1.13.3",
+  "boto3>=1.35.90",
+  "fastapi>=0.115.6",
+  "langchain-community>=0.3.14",
+  "langchain-openai>=0.2.14",
+  "langchain-text-splitters>=0.3.5",
+  "pgvector>=0.3.6",
+  "psycopg[binary]>=3.2.3",
+  "pydantic-settings>=2.7.1",
+  "pypdf>=5.1.0",
+  "python-multipart>=0.0.20",
+  "sqlalchemy>=2.0.36",
+  "structlog>=24.4.0",
+  "tiktoken>=0.8.0",
+  "uvicorn[standard]>=0.34.0"
+]
+
+[tool.ruff]
+line-length = 100
+
+[build-system]
+requires = ["setuptools>=75.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["src*"]
+exclude = ["alembic*", "scripts*"]
