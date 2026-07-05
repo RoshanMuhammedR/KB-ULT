@@ -49,7 +49,7 @@ legacy binary.
 
 Built now:
 
-- PDF upload and extraction
+- PDF upload and Docling Markdown extraction
 - Filebase S3-compatible object storage for uploaded PDFs
 - Token-aware chunking
 - AICredits/OpenAI-compatible embeddings

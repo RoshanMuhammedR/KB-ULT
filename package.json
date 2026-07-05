@@ -10,6 +10,7 @@
     "test": "turbo run test",
     "db:migrate": "cd apps/api && . .venv/bin/activate && alembic upgrade head",
     "db:seed": "cd apps/api && . .venv/bin/activate && python scripts/seed_default_kb.py",
+    "db:reset": "set -a; [ ! -f .env ] || . ./.env; set +a; psql --set ON_ERROR_STOP=1 \"postgresql://${POSTGRES_USER:-kb_user}:${POSTGRES_PASSWORD:-kb_password}@localhost:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-kb_new}\" -c \"DROP SCHEMA public CASCADE; CREATE SCHEMA public;\" && pnpm run db:migrate && pnpm run db:seed",
     "db:sql": "set -a; [ ! -f .env ] || . ./.env; set +a; psql \"postgresql://${POSTGRES_USER:-kb_user}:${POSTGRES_PASSWORD:-kb_password}@localhost:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-kb_new}\"",
     "docker:build": "sh infra/compose.sh build",
     "docker:dev": "sh infra/compose.sh up",

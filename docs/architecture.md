@@ -1,6 +1,6 @@
 # Architecture
 
-This MVP is a backend-first AI Knowledge Base for uploading PDFs to Filebase object storage, parsing them into `KnowledgeAsset` domain objects, chunking, embedding, storing vectors in PostgreSQL/pgvector, and chatting with citation-backed answers.
+This MVP is a backend-first AI Knowledge Base for uploading PDFs to Filebase object storage, converting them to Docling Markdown-backed `KnowledgeAsset` domain objects, chunking, embedding, storing vectors in PostgreSQL/pgvector, and chatting with citation-backed answers.
 
 ## Backend Structure
 
@@ -31,6 +31,7 @@ apps/api/src/
 │   ├── repositories/    # Postgres repositories
 │   ├── vector_store/    # pgvector adapter
 │   ├── storage/         # Filebase S3-compatible adapter
+│   ├── document_parsing/ # Docling-backed parser adapters
 │   ├── langchain_adapters/
 │   └── ai_providers/    # AICredits providers
 └── core/                # config, logging, exceptions, constants
@@ -56,6 +57,7 @@ sequenceDiagram
   IngestionService->>Registry: get(.pdf)
   Registry-->>IngestionService: PDFParser
   IngestionService->>Parser: parse(FileSource)
+  Parser->>Parser: Docling conversion to Markdown
   Parser-->>IngestionService: KnowledgeAsset
   IngestionService->>Chunker: chunk(asset)
   IngestionService->>Embedder: embed_texts(chunks)

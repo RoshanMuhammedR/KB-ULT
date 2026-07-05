@@ -13,9 +13,9 @@ from src.core.config import Settings, get_settings
 from src.domain.interfaces import IFileStorage
 from src.infrastructure.repositories import ChunkRepository, KnowledgeAssetRepository, KnowledgeBaseRepository
 from src.infrastructure.database.session import get_db
+from src.infrastructure.document_parsing import DoclingPDFAdapter
 from src.infrastructure.langchain_adapters.chat_model import OpenAICompatibleChatAdapter
 from src.infrastructure.langchain_adapters.embeddings import OpenAICompatibleEmbeddingsAdapter
-from src.infrastructure.langchain_adapters.pdf_loader import PdfLoaderAdapter
 from src.infrastructure.langchain_adapters.text_splitter import RecursiveSplitterAdapter
 from src.infrastructure.ai_providers import AICreditsEmbeddingProvider, AICreditsLLMProvider
 from src.infrastructure.storage import FilebaseAdapter
@@ -41,7 +41,7 @@ def get_ingestion_service(db: DbSession, settings: AppSettings) -> IngestionServ
         expected_dimensions=settings.embedding_dimensions,
     )
     parser_registry = ParserRegistry()
-    parser_registry.register(".pdf", PDFParser(PdfLoaderAdapter()))
+    parser_registry.register(".pdf", PDFParser(DoclingPDFAdapter()))
     return IngestionService(
         kb_repo=KnowledgeBaseRepository(db),
         asset_repo=KnowledgeAssetRepository(db),

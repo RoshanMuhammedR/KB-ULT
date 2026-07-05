@@ -26,6 +26,11 @@ class Settings(BaseSettings):
     filebase_secret_key: str = ""
     filebase_bucket_name: str = "kb-rag-new"
     filebase_endpoint: str = "https://s3.filebase.io"
+    cors_allowed_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
+
+    @property
+    def cors_origins(self) -> list[str]:
+        return [origin.strip() for origin in self.cors_allowed_origins.split(",") if origin.strip()]
 
 
 @lru_cache
