@@ -4,6 +4,7 @@ from typing import Any
 
 
 def sanitize_text_for_storage(value: str) -> str:
+    # PostgreSQL text and JSONB strings cannot contain NUL bytes; PDF extractors can emit them.
     return value.replace("\x00", "")
 
 

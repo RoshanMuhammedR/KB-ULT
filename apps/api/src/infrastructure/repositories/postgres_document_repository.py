@@ -109,6 +109,7 @@ class KnowledgeAssetRepository:
         try:
             self.db.commit()
         except Exception:
+            # A failed flush leaves the Session transaction unusable until it is rolled back.
             self.db.rollback()
             raise
 

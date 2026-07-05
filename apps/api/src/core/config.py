@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     aicredits_api_key: str = ""
     aicredits_base_url: str = "https://api.aicredits.in/v1"
     aicredits_chat_model: str = "openai/gpt-4o-mini"
-    aicredits_embedding_model: str = "openai/text-embedding-3-small"
+    aicredits_embedding_model: str = "text-embedding-3-small"
     embedding_dimensions: int = 1536
 
     chunk_size_tokens: int = 800

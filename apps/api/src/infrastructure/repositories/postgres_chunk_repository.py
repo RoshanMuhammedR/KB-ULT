@@ -45,6 +45,7 @@ class ChunkRepository:
         try:
             self.db.commit()
         except Exception:
+            # A failed flush leaves the Session transaction unusable until it is rolled back.
             self.db.rollback()
             raise
 
@@ -73,6 +74,7 @@ class EmbeddingRepository:
         try:
             self.db.commit()
         except Exception:
+            # A failed flush leaves the Session transaction unusable until it is rolled back.
             self.db.rollback()
             raise
 

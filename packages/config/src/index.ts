@@ -1,7 +1,7 @@
 export const configDefaults = {
   aicreditsBaseUrl: "https://api.aicredits.in/v1",
   chatModel: "openai/gpt-4o-mini",
-  embeddingModel: "openai/text-embedding-3-small",
+  embeddingModel: "text-embedding-3-small",
   embeddingDimensions: 1536,
   chunkSizeTokens: 800,
   chunkOverlapTokens: 120,

@@ -17,6 +17,7 @@ class PDFParser:
         for index, page in enumerate(pages, start=1):
             metadata = page.get("metadata", {})
             page_number = int(metadata.get("page", index - 1)) + 1
+            # Clean extracted text before it reaches asset metadata, chunks, embeddings, or PostgreSQL.
             page_text = sanitize_text_for_storage(page["text"]).strip()
             normalized_pages.append({"page_number": page_number, "text": page_text})
             text_parts.append(page_text)
