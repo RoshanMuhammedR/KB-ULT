@@ -9,11 +9,14 @@ class RecursiveSplitterAdapter:
             chunk_overlap=chunk_overlap_tokens,
         )
 
-    def split_pages(self, pages: list[dict]) -> list[dict]:
+    def split_segments(self, segments: list[dict]) -> list[dict]:
+        # Split each source segment's text, carrying that segment's locator onto every
+        # resulting chunk. The locator is opaque here (page for PDF, timestamp/section
+        # for other sources later) — the splitter never inspects it.
         chunks: list[dict] = []
-        for page in pages:
-            page_number = page.get("page_number")
-            for text in self.splitter.split_text(page["text"]):
+        for segment in segments:
+            locator = segment.get("locator")
+            for text in self.splitter.split_text(segment["text"]):
                 if text.strip():
-                    chunks.append({"text": text.strip(), "page_number": page_number})
+                    chunks.append({"text": text.strip(), "locator": locator})
         return chunks

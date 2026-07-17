@@ -30,6 +30,23 @@ services:
       db:
         condition: service_healthy
 
+  # Ingestion worker: same image/code as the api, but runs the Procrastinate worker
+  # instead of uvicorn. It consumes ingestion jobs from the Postgres-backed queue and
+  # runs the extract -> chunk -> embed pipeline. Scale with `--scale worker=N`.
+  worker:
+    build:
+      context: ./apps/api
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://kb_user:kb_password@db:5432/kb_new
+    command: procrastinate --app=src.infrastructure.queue.app.app worker
+    volumes:
+      - ./apps/api:/app
+    depends_on:
+      db:
+        condition: service_healthy
+
   web:
     build:
       context: .

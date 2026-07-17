@@ -1,9 +1,33 @@
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
-import { FileUp, RefreshCw, Send, Trash2 } from "lucide-react";
-import type { ChatResponse, KnowledgeAsset } from "@/types/api";
-import { askQuestion, deleteAsset, listAssets, renameAsset, uploadPdf } from "@/lib/api";
+import Link from "next/link";
+import { Activity, FileUp, RefreshCw, RotateCcw, Send, Trash2 } from "lucide-react";
+import type { ChatResponse, Locator, KnowledgeAsset } from "@/types/api";
+import { TERMINAL_STATUSES } from "@/types/api";
+import {
+  askQuestion,
+  deleteAsset,
+  getAsset,
+  listAssets,
+  renameAsset,
+  retryAsset,
+  uploadPdf
+} from "@/lib/api";
+
+const POLL_INTERVAL_MS = 2000;
+
+function isTerminal(status: string): boolean {
+  return (TERMINAL_STATUSES as readonly string[]).includes(status);
+}
+
+// Render a citation's source-neutral locator. PDF → "page N"; other source types
+// fall back to a generic "type value" label until they get bespoke formatting.
+function formatLocator(locator: Locator | null): string {
+  if (!locator || locator.value === null || locator.value === undefined) return "";
+  if (locator.type === "page") return `page ${locator.value}`;
+  return `${locator.type} ${locator.value}`;
+}
 
 type ChatMessage = {
   role: "user" | "assistant";
@@ -20,6 +44,13 @@ export default function Home() {
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  function upsertAsset(asset: KnowledgeAsset) {
+    setAssets((current) => {
+      const others = current.filter((item) => item.id !== asset.id);
+      return [asset, ...others];
+    });
+  }
+
   async function refreshAssets() {
     setError(null);
     setAssets(await listAssets());
@@ -29,19 +60,48 @@ export default function Home() {
     refreshAssets().catch((err) => setError(err.message));
   }, []);
 
+  // Ingestion runs asynchronously in the worker, so after upload we poll the asset
+  // until it reaches a terminal state (ready/failed) and reflect each stage in the UI.
+  async function pollUntilDone(assetId: string) {
+    while (true) {
+      await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+      try {
+        const latest = await getAsset(assetId);
+        upsertAsset(latest);
+        if (isTerminal(latest.status)) return;
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to poll ingestion status");
+        return;
+      }
+    }
+  }
+
   async function handleUpload(event: FormEvent) {
     event.preventDefault();
     if (!selectedFile) return;
     setUploading(true);
     setError(null);
     try {
+      // Returns immediately with a `queued` asset (HTTP 202); processing happens later.
       const asset = await uploadPdf(selectedFile);
-      setAssets((current) => [asset, ...current.filter((item) => item.id !== asset.id)]);
+      upsertAsset(asset);
       setSelectedFile(null);
+      void pollUntilDone(asset.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Upload failed");
     } finally {
       setUploading(false);
+    }
+  }
+
+  async function handleRetry(assetId: string) {
+    setError(null);
+    try {
+      const asset = await retryAsset(assetId);
+      upsertAsset(asset);
+      void pollUntilDone(asset.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Retry failed");
     }
   }
 
@@ -124,6 +184,16 @@ export default function Home() {
                 </div>
                 {asset.error_message ? <div className="error">{asset.error_message}</div> : null}
               </div>
+              {asset.status === "failed" ? (
+                <button
+                  className="icon-button"
+                  title="Retry ingestion"
+                  type="button"
+                  onClick={() => handleRetry(asset.id)}
+                >
+                  <RotateCcw size={16} />
+                </button>
+              ) : null}
               <button
                 className="icon-button"
                 title="Delete asset"
@@ -143,6 +213,10 @@ export default function Home() {
             <h2>Chat</h2>
             <p>Answers are generated only from retrieved PDF chunks.</p>
           </div>
+          <Link className="nav-link" href="/jobs">
+            <Activity size={16} />
+            Worker Activity
+          </Link>
         </header>
 
         <div className="chat">
@@ -155,7 +229,7 @@ export default function Home() {
                     {message.citations.map((citation) => (
                       <div className="citation" key={citation.chunk_id}>
                         {citation.filename}
-                        {citation.page_number ? `, page ${citation.page_number}` : ""} · score{" "}
+                        {formatLocator(citation.locator) ? `, ${formatLocator(citation.locator)}` : ""} · score{" "}
                         {citation.score.toFixed(3)}
                         <br />
                         {citation.excerpt}

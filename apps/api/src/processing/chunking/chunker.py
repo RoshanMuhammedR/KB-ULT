@@ -9,8 +9,11 @@ class RecursiveKnowledgeAssetChunker:
         self.splitter = splitter
 
     def chunk(self, asset: KnowledgeAsset) -> list[Chunk]:
-        pages = asset.metadata.get("pages", [])
-        split_chunks = self.splitter.split_pages(pages)
+        # Handlers normalize every source into `segments` (text + a typed locator), so
+        # chunking is source-agnostic: it never knows or cares whether a locator is a
+        # page number or a timestamp.
+        segments = asset.metadata.get("segments", [])
+        split_chunks = self.splitter.split_segments(segments)
         chunks: list[Chunk] = []
         for index, split in enumerate(split_chunks):
             chunks.append(
@@ -21,7 +24,7 @@ class RecursiveKnowledgeAssetChunker:
                     metadata={
                         "filename": asset.filename,
                         "title": asset.title,
-                        "page_number": split.get("page_number"),
+                        "locator": split.get("locator"),
                         "source_type": asset.source_type,
                         "knowledge_base_id": str(asset.knowledge_base_id),
                         "knowledge_asset_id": str(asset.id),

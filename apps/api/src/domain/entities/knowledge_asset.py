@@ -9,6 +9,10 @@ from uuid import UUID, uuid4
 
 class AssetStatus(StrEnum):
     PENDING = "pending"
+    # Accepted and waiting for a worker to pick up its ingestion job. This is the
+    # state an asset is left in by the (fast) upload request, before the (slow)
+    # extract/chunk/embed pipeline runs asynchronously in a worker.
+    QUEUED = "queued"
     EXTRACTING = "extracting"
     CHUNKING = "chunking"
     EMBEDDING = "embedding"

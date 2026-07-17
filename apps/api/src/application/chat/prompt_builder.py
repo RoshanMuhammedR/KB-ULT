@@ -7,10 +7,13 @@ class PromptBuilder:
     def build(self, question: str, results: list[RetrievalResult]) -> list[dict[str, str]]:
         context_blocks = []
         for index, result in enumerate(results, start=1):
-            page = result.chunk.metadata.get("page_number")
+            # Source-neutral position: for PDF the locator is a page, but the prompt
+            # just labels it generically so non-file sources need no change here.
+            locator = result.chunk.metadata.get("locator") or {}
+            position = locator.get("value") if isinstance(locator, dict) else None
             source = result.chunk.metadata.get("filename")
             context_blocks.append(
-                f"[{index}] source={source} page={page} score={result.score:.3f}\n{result.chunk.text}"
+                f"[{index}] source={source} at={position} score={result.score:.3f}\n{result.chunk.text}"
             )
 
         system_prompt = (

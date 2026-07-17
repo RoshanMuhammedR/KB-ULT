@@ -11,3 +11,4 @@ __pycache__/
 apps/api/.venv/
 apps/api/uploads/
 *.egg-info/
+*.tsbuildinfo

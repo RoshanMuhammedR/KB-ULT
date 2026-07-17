@@ -6,7 +6,7 @@ from src.domain.entities import (
     KnowledgeBase,
     RetrievalResult,
 )
-from src.domain.interfaces import IEmbedder, ILLMProvider, IParser, IVectorStore
+from src.domain.interfaces import IEmbedder, ILLMProvider, ISourceHandler, IVectorStore
 
 __all__ = [
     "AssetStatus",
@@ -14,7 +14,7 @@ __all__ = [
     "Embedding",
     "IEmbedder",
     "ILLMProvider",
-    "IParser",
+    "ISourceHandler",
     "IVectorStore",
     "KnowledgeAsset",
     "KnowledgeBase",

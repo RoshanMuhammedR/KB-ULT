@@ -32,6 +32,16 @@ class FilebaseAdapter(IFileStorage):
         except Exception as exc:
             raise FileStorageError(f"Failed to upload object: {key}") from exc
 
+    def download(self, key: str) -> bytes:
+        # Read the whole object into memory. Used by the ingestion worker so the
+        # queue payload can stay as just an id, and so extraction is retryable
+        # without the client re-uploading the source file.
+        try:
+            response = self.client.get_object(Bucket=self.bucket_name, Key=key)
+            return response["Body"].read()
+        except Exception as exc:
+            raise FileStorageError(f"Failed to download object: {key}") from exc
+
     def get_presigned_url(self, key: str, expires_in_seconds: int = 900) -> str:
         try:
             return self.client.generate_presigned_url(

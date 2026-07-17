@@ -1,4 +1,4 @@
-import type { ChatResponse, KnowledgeAsset } from "@/types/api";
+import type { ChatResponse, JobEvent, JobSummary, KnowledgeAsset } from "@/types/api";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -28,6 +28,20 @@ export async function uploadPdf(file: File): Promise<KnowledgeAsset> {
   );
 }
 
+// Single-asset read used to poll ingestion progress after an upload.
+export async function getAsset(assetId: string): Promise<KnowledgeAsset> {
+  return parseResponse<KnowledgeAsset>(
+    await fetch(`${API_URL}/documents/${assetId}`, { cache: "no-store" })
+  );
+}
+
+// Re-enqueue a failed asset; the worker re-downloads the source and retries.
+export async function retryAsset(assetId: string): Promise<KnowledgeAsset> {
+  return parseResponse<KnowledgeAsset>(
+    await fetch(`${API_URL}/documents/${assetId}/retry`, { method: "POST" })
+  );
+}
+
 export async function renameAsset(assetId: string, title: string): Promise<KnowledgeAsset> {
   return parseResponse<KnowledgeAsset>(
     await fetch(`${API_URL}/documents/${assetId}`, {
@@ -43,6 +57,18 @@ export async function deleteAsset(assetId: string): Promise<void> {
     await fetch(`${API_URL}/documents/${assetId}`, {
       method: "DELETE"
     })
+  );
+}
+
+// Recent ingestion jobs for the /jobs monitoring dashboard.
+export async function listJobs(): Promise<JobSummary[]> {
+  return parseResponse<JobSummary[]>(await fetch(`${API_URL}/jobs`, { cache: "no-store" }));
+}
+
+// The persisted worker-log trail for one asset (all attempts).
+export async function getAssetEvents(assetId: string): Promise<JobEvent[]> {
+  return parseResponse<JobEvent[]>(
+    await fetch(`${API_URL}/documents/${assetId}/events`, { cache: "no-store" })
   );
 }
 
