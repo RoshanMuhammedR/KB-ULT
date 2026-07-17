@@ -11,7 +11,6 @@ from src.domain.entities import (
     IngestionJob,
     JobEvent,
     KnowledgeAsset,
-    RawContent,
     SourceType,
 )
 from src.domain.interfaces import (
@@ -28,7 +27,11 @@ from src.domain.interfaces import (
     VectorStore,
 )
 from src.ingestion.registry import SourceHandlerRegistry
-from src.ingestion.source_types import source_type_for_filename
+from src.ingestion.source_types import (
+    identity_for_url,
+    source_type_for_filename,
+    source_type_for_url,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -139,6 +142,51 @@ class IngestionService:
         logger.info("ingestion_enqueued", knowledge_asset_id=str(asset.id), filename=safe_filename)
         return asset
 
+    def enqueue_url(self, url: str, user_id: str = "anonymous") -> KnowledgeAsset:
+        """Fast path (HTTP) for URL sources like YouTube — the file-less sibling of
+        `enqueue_ingestion`.
+
+        There are no bytes to store: we resolve the source type, derive a stable identity
+        (dedup/display filename + canonical uri + handler hints) *without fetching*, then
+        persist a QUEUED asset with an empty `storage_key`. The worker's handler fetches
+        the real content in `acquire`. The record/job/enqueue tail is identical to the
+        file path.
+        """
+        source_type = source_type_for_url(url)
+        # Fail fast in the request if we can't handle this source type at all.
+        self.source_handler_registry.get(source_type)
+        filename, source_uri, extra = identity_for_url(source_type, url)
+        knowledge_base = self.kb_repo.ensure_default()
+        previous = self.asset_repo.latest_for_filename(knowledge_base.id, filename)
+        lineage_id = previous.lineage_id if previous else uuid4()
+        version = previous.version + 1 if previous else 1
+
+        asset = self.asset_repo.create_pending(
+            KnowledgeAsset(
+                id=uuid4(),
+                knowledge_base_id=knowledge_base.id,
+                lineage_id=lineage_id,
+                version=version,
+                filename=filename,
+                title=filename,
+                source_type=source_type.value,
+                storage_key="",  # URL sources keep no object-storage file
+                status=AssetStatus.QUEUED,
+                metadata={
+                    "filename": filename,
+                    "source_type": source_type.value,
+                    "source_uri": source_uri,
+                    **extra,
+                },
+            )
+        )
+
+        job = self.job_repo.create(IngestionJob(asset_id=asset.id))
+        self.job_queue.enqueue_ingestion(asset.id)
+        self._record(asset, "queued", f"Queued from URL: {source_uri}", job_id=job.id)
+        logger.info("ingestion_url_enqueued", knowledge_asset_id=str(asset.id), source_uri=source_uri)
+        return asset
+
     def retry(self, asset_id: UUID) -> KnowledgeAsset:
         """Re-enqueue a failed asset. No re-upload needed — the worker re-acquires the
         source from storage, resuming from the step that failed."""
@@ -168,9 +216,9 @@ class IngestionService:
     def process_ingestion(self, asset_id: UUID) -> KnowledgeAsset:
         """Slow path (worker): run the full pipeline for one asset.
 
-        Marks the job running, acquires the source via its handler, runs the state
-        machine, then records the terminal job outcome. On failure it re-raises
-        `IngestionError` so the queue engine can retry — the asset keeps its
+        Marks the job running, then runs the state machine (which acquires the source via
+        its handler as its first step) and records the terminal job outcome. On failure it
+        re-raises `IngestionError` so the queue engine can retry — the asset keeps its
         `failed_step` so the retry resumes rather than starting over.
         """
         asset = self.asset_repo.get(asset_id)
@@ -184,14 +232,7 @@ class IngestionService:
         self._record(asset, "running", f"Attempt {job.attempts + 1 if job else 1} started", job_id=job_id)
 
         handler = self.source_handler_registry.get(SourceType(asset.source_type))
-
-        # Only (re-)acquire the source when extraction actually needs it. A retry that
-        # already got past extraction resumes from chunks stored in the DB.
-        raw: RawContent | None = None
-        if asset.failed_step in (None, "extracting"):
-            raw = handler.acquire(asset)
-
-        result = self._run_pipeline(asset, raw, handler, job_id)
+        result = self._run_pipeline(asset, handler, job_id)
 
         if result.status == AssetStatus.FAILED:
             error = result.error_message or "ingestion failed"
@@ -207,7 +248,6 @@ class IngestionService:
     def _run_pipeline(
         self,
         asset: KnowledgeAsset,
-        raw: RawContent | None,
         handler: ISourceHandler,
         job_id: UUID | None,
     ) -> KnowledgeAsset:
@@ -220,8 +260,11 @@ class IngestionService:
                 self.asset_repo.update_from_domain(asset)
                 self._record(asset, step, "Extracting source content", job_id=job_id)
                 logger.info("ingestion_step", step=step, knowledge_asset_id=str(asset.id), status=asset.status)
-                if raw is None:
-                    raise ValueError("Cannot extract without acquired source content")
+                # Acquire happens here (inside the try) so a fetch failure — e.g. a
+                # YouTube video with no captions — routes through the FAILED path below
+                # instead of escaping uncaught. Only fetched when extraction is needed,
+                # so a retry past extraction skips re-acquiring.
+                raw = handler.acquire(asset)
                 asset = handler.parse(asset, raw)
                 self.asset_repo.update_from_domain(asset)
 

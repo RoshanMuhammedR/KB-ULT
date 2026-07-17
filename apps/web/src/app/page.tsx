@@ -2,13 +2,14 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
-import { Activity, FileUp, RefreshCw, RotateCcw, Send, Trash2 } from "lucide-react";
+import { Activity, FileUp, Link2, RefreshCw, RotateCcw, Send, Trash2 } from "lucide-react";
 import type { ChatResponse, Locator, KnowledgeAsset } from "@/types/api";
 import { TERMINAL_STATUSES } from "@/types/api";
 import {
   askQuestion,
   deleteAsset,
   getAsset,
+  ingestUrl,
   listAssets,
   renameAsset,
   retryAsset,
@@ -21,11 +22,18 @@ function isTerminal(status: string): boolean {
   return (TERMINAL_STATUSES as readonly string[]).includes(status);
 }
 
-// Render a citation's source-neutral locator. PDF → "page N"; other source types
-// fall back to a generic "type value" label until they get bespoke formatting.
+// Render a citation's source-neutral locator per source. PDF → "page N";
+// YouTube → "at m:ss"; anything else falls back to a generic "type value" label.
 function formatLocator(locator: Locator | null): string {
   if (!locator || locator.value === null || locator.value === undefined) return "";
   if (locator.type === "page") return `page ${locator.value}`;
+  if (locator.type === "timestamp") {
+    const total = Number(locator.value);
+    if (Number.isNaN(total)) return "";
+    const mins = Math.floor(total / 60);
+    const secs = Math.floor(total % 60);
+    return `at ${mins}:${secs.toString().padStart(2, "0")}`;
+  }
   return `${locator.type} ${locator.value}`;
 }
 
@@ -38,10 +46,12 @@ type ChatMessage = {
 export default function Home() {
   const [assets, setAssets] = useState<KnowledgeAsset[]>([]);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [sourceUrl, setSourceUrl] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [question, setQuestion] = useState("");
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [ingestingUrl, setIngestingUrl] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   function upsertAsset(asset: KnowledgeAsset) {
@@ -91,6 +101,25 @@ export default function Home() {
       setError(err instanceof Error ? err.message : "Upload failed");
     } finally {
       setUploading(false);
+    }
+  }
+
+  async function handleIngestUrl(event: FormEvent) {
+    event.preventDefault();
+    const trimmed = sourceUrl.trim();
+    if (!trimmed) return;
+    setIngestingUrl(true);
+    setError(null);
+    try {
+      // Same async contract as upload: returns a queued asset, then we poll it.
+      const asset = await ingestUrl(trimmed);
+      upsertAsset(asset);
+      setSourceUrl("");
+      void pollUntilDone(asset.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "URL ingestion failed");
+    } finally {
+      setIngestingUrl(false);
     }
   }
 
@@ -158,6 +187,19 @@ export default function Home() {
           <button className="primary" type="submit" disabled={!selectedFile || uploading}>
             <FileUp size={16} />
             {uploading ? "Ingesting..." : "Upload PDF"}
+          </button>
+        </form>
+
+        <form className="upload" onSubmit={handleIngestUrl}>
+          <input
+            type="url"
+            value={sourceUrl}
+            placeholder="Paste a YouTube URL"
+            onChange={(event) => setSourceUrl(event.target.value)}
+          />
+          <button className="primary" type="submit" disabled={!sourceUrl.trim() || ingestingUrl}>
+            <Link2 size={16} />
+            {ingestingUrl ? "Ingesting..." : "Add from URL"}
           </button>
         </form>
 

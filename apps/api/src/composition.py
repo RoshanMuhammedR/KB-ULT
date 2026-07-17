@@ -35,7 +35,7 @@ from src.infrastructure.repositories import (
 )
 from src.infrastructure.storage import FilebaseAdapter
 from src.infrastructure.vector_store.pgvector import PgVectorStore
-from src.ingestion.handlers import PdfSourceHandler
+from src.ingestion.handlers import PdfSourceHandler, YouTubeSourceHandler
 from src.ingestion.registry import SourceHandlerRegistry
 from src.processing.chunking import RecursiveKnowledgeAssetChunker
 from src.retrieval.retriever import Retriever
@@ -59,6 +59,8 @@ def _build_source_handler_registry(file_storage: IFileStorage) -> SourceHandlerR
     # a new `registry.register(SourceType.X, XHandler(...))` line here — nothing else.
     registry = SourceHandlerRegistry()
     registry.register(SourceType.PDF, PdfSourceHandler(DoclingPDFAdapter(), file_storage))
+    # YouTube fetches its own content (transcript API + oEmbed), so it needs no storage.
+    registry.register(SourceType.YOUTUBE, YouTubeSourceHandler())
     return registry
 
 

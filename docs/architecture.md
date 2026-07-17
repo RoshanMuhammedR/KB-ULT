@@ -4,7 +4,9 @@ This MVP is a backend-first AI Knowledge Base for uploading PDFs to Filebase obj
 
 Ingestion is **asynchronous**. The upload request only stores the file and enqueues a job; a separate **worker** runs the acquire → parse → chunk → embed pipeline. The queue is Postgres-backed (Procrastinate), so no extra infrastructure is required, and it sits behind the `IJobQueue` port so the engine stays swappable.
 
-Ingestion is also **source-agnostic**. Everything source-specific (how to fetch raw content and how to parse it) lives behind a single `ISourceHandler` port, one per `SourceType`, resolved through a `SourceHandlerRegistry`. Only PDF is implemented today; websites/YouTube are added later as new handlers without touching the service, chunker, embedder, or chat. Handlers emit source-neutral **segments** (each with a typed `locator` — a page number for PDF, a timestamp for a future video source), so chunking and citations never special-case a source.
+Ingestion is also **source-agnostic**. Everything source-specific (how to fetch raw content and how to parse it) lives behind a single `ISourceHandler` port, one per `SourceType`, resolved through a `SourceHandlerRegistry`. **PDF** (uploaded file) and **YouTube** (URL) are implemented; websites are added later as another handler without touching the service, chunker, embedder, or chat. Handlers emit source-neutral **segments** (each with a typed `locator` — a page number for PDF, a transcript timestamp for YouTube), so chunking and citations never special-case a source.
+
+There are two request entry points into ingestion: `enqueue_ingestion` for uploaded files (store bytes, then queue) and `enqueue_url` for URL sources like YouTube (no upload — persist the URL + a `queued` asset with an empty `storage_key`; the worker's handler fetches the content in `acquire`). Both converge on the same worker `process_ingestion` path.
 
 The worker keeps a **persisted event log**: each pipeline transition/terminal state writes an `IngestionJobEvent` row (distinct from stdout structlog output), which the `/jobs` dashboard reads.
 
@@ -26,9 +28,9 @@ apps/api/src/
 │   ├── chat/            # retrieval + prompt + LLM use case
 │   └── knowledge_base/  # KB use cases
 ├── ingestion/
-│   ├── source_types.py  # edge resolver: filename/extension -> SourceType
+│   ├── source_types.py  # edge resolvers: filename/extension + URL -> SourceType (+ URL identity)
 │   ├── registry.py      # SourceHandlerRegistry: SourceType -> handler
-│   └── handlers/        # PdfSourceHandler (acquire + parse) for MVP
+│   └── handlers/        # PdfSourceHandler, YouTubeSourceHandler (acquire + parse)
 ├── processing/
 │   └── chunking/        # chunker implementation + strategies
 ├── retrieval/           # query-time retrieval orchestration
@@ -149,7 +151,8 @@ grep -r "import langchain" apps/api/src/
 - `GET /documents`
 - `GET /documents/{asset_id}` — single asset + latest job (status polling)
 - `GET /documents/{asset_id}/events` — persisted worker-log trail for the asset
-- `POST /documents/upload` — enqueues; returns `202` with a `queued` asset
+- `POST /documents/upload` — enqueues an uploaded file; returns `202` with a `queued` asset
+- `POST /documents/ingest-url` — enqueues a URL source (YouTube); returns `202` with a `queued` asset
 - `POST /documents/{asset_id}/retry` — re-enqueues a failed asset (`202`)
 - `PATCH /documents/{asset_id}`
 - `DELETE /documents/{asset_id}`

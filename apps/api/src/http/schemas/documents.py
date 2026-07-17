@@ -39,3 +39,9 @@ class KnowledgeAssetSchema(BaseModel):
 
 class RenameKnowledgeAssetRequest(BaseModel):
     title: str
+
+
+class IngestUrlRequest(BaseModel):
+    """Ingest a URL-based source (e.g. a YouTube video) — no file upload."""
+
+    url: str

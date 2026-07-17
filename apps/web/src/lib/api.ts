@@ -28,6 +28,17 @@ export async function uploadPdf(file: File): Promise<KnowledgeAsset> {
   );
 }
 
+// Ingest a URL-based source (e.g. a YouTube video). Returns a queued asset like upload.
+export async function ingestUrl(url: string): Promise<KnowledgeAsset> {
+  return parseResponse<KnowledgeAsset>(
+    await fetch(`${API_URL}/documents/ingest-url`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url })
+    })
+  );
+}
+
 // Single-asset read used to poll ingestion progress after an upload.
 export async function getAsset(assetId: string): Promise<KnowledgeAsset> {
   return parseResponse<KnowledgeAsset>(

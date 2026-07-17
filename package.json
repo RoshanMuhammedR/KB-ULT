@@ -12,6 +12,7 @@
     "db:queue-schema": "cd apps/api && . .venv/bin/activate && procrastinate --app=src.infrastructure.queue.app.app schema --apply",
     "db:seed": "cd apps/api && . .venv/bin/activate && python scripts/seed_default_kb.py",
     "worker": "cd apps/api && . .venv/bin/activate && procrastinate --app=src.infrastructure.queue.app.app worker",
+    "worker:dev": "cd apps/api && . .venv/bin/activate && watchfiles --target-type command 'procrastinate --app=src.infrastructure.queue.app.app worker' src",
     "db:reset": "set -a; [ ! -f .env ] || . ./.env; set +a; psql --set ON_ERROR_STOP=1 \"postgresql://${POSTGRES_USER:-kb_user}:${POSTGRES_PASSWORD:-kb_password}@localhost:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-kb_new}\" -c \"DROP SCHEMA public CASCADE; CREATE SCHEMA public;\" && pnpm run db:migrate && pnpm run db:queue-schema && pnpm run db:seed",
     "db:sql": "set -a; [ ! -f .env ] || . ./.env; set +a; psql \"postgresql://${POSTGRES_USER:-kb_user}:${POSTGRES_PASSWORD:-kb_password}@localhost:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-kb_new}\"",
     "docker:build": "sh infra/compose.sh build",

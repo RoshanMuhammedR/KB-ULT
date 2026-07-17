@@ -104,6 +104,13 @@ button:disabled {
   font-size: 13px;
 }
 
+.upload input[type="url"] {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: var(--panel);
+}
+
 .primary {
   background: var(--accent);
   color: #fff;

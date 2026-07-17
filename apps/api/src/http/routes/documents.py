@@ -19,6 +19,7 @@ from src.infrastructure.repositories import (
 from src.infrastructure.database.session import get_db
 from src.application.ingestion.service import IngestionService
 from src.http.schemas.documents import (
+    IngestUrlRequest,
     IngestionJobSchema,
     KnowledgeAssetSchema,
     RenameKnowledgeAssetRequest,
@@ -132,6 +133,21 @@ async def upload_document(
             Path(file.filename).name,
             file.content_type,
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _to_schema(asset, file_storage)
+
+
+@router.post("/ingest-url", response_model=KnowledgeAssetSchema, status_code=status.HTTP_202_ACCEPTED)
+def ingest_url(
+    request: IngestUrlRequest,
+    ingestion_service: Annotated[IngestionService, Depends(get_ingestion_service)],
+    file_storage: Annotated[IFileStorage, Depends(get_file_storage)],
+) -> KnowledgeAssetSchema:
+    # URL sources (YouTube today) have no upload: resolve + queue, then return 202. The
+    # worker fetches the transcript. Client polls GET /documents/{id} like an upload.
+    try:
+        asset = ingestion_service.enqueue_url(request.url)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return _to_schema(asset, file_storage)
