@@ -15,6 +15,20 @@ services:
       timeout: 5s
       retries: 10
 
+  # Valkey (Redis-protocol compatible) — the caching layer. Tenant-scoped keys are
+  # namespaced `tenant:{tenant_id}:...` to prevent cross-tenant cache bleed.
+  cache:
+    image: valkey/valkey:8-alpine
+    ports:
+      - "${CACHE_PORT:-6379}:6379"
+    volumes:
+      - kb_valkey_data:/data
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   api:
     build:
       context: ./apps/api
@@ -22,12 +36,19 @@ services:
       - .env
     environment:
       DATABASE_URL: postgresql+psycopg://kb_user:kb_password@db:5432/kb_new
+      # ORM sessions connect as the non-superuser role so RLS applies. Run
+      # `pnpm run docker:db:app-role` once to create it. Superuser URL above stays for
+      # migrations/queue internals.
+      APP_DATABASE_URL: postgresql+psycopg://kb_app:${APP_DB_PASSWORD:-kb_app_password}@db:5432/kb_new
+      CACHE_URL: redis://cache:6379/0
     ports:
       - "${API_PORT:-8000}:8000"
     volumes:
       - ./apps/api:/app
     depends_on:
       db:
+        condition: service_healthy
+      cache:
         condition: service_healthy
 
   # Ingestion worker: same image/code as the api, but runs the Procrastinate worker
@@ -40,11 +61,15 @@ services:
       - .env
     environment:
       DATABASE_URL: postgresql+psycopg://kb_user:kb_password@db:5432/kb_new
+      APP_DATABASE_URL: postgresql+psycopg://kb_app:${APP_DB_PASSWORD:-kb_app_password}@db:5432/kb_new
+      CACHE_URL: redis://cache:6379/0
     command: procrastinate --app=src.infrastructure.queue.app.app worker
     volumes:
       - ./apps/api:/app
     depends_on:
       db:
+        condition: service_healthy
+      cache:
         condition: service_healthy
 
   web:
@@ -67,3 +92,4 @@ services:
 
 volumes:
   kb_postgres_data:
+  kb_valkey_data:

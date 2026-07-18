@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
+from src.application.auth import AuthService
 from src.application.chat.prompt_builder import PromptBuilder
 from src.application.chat.service import ChatService
 from src.application.ingestion.service import IngestionService
@@ -21,7 +22,12 @@ from src.application.knowledge_base import KnowledgeBaseService
 from src.core.config import Settings
 from src.domain.entities import SourceType
 from src.domain.interfaces import IFileStorage, IJobQueue
+from src.domain.interfaces.auth import ITokenService
+from src.domain.interfaces.cache import ICache
+from src.http.middleware import BearerTokenAuthenticator, DefaultTenantAuthenticator
 from src.infrastructure.ai_providers import AICreditsEmbeddingProvider, AICreditsLLMProvider
+from src.infrastructure.auth import Argon2PasswordHasher, JwtTokenService
+from src.infrastructure.cache import ValkeyCache
 from src.infrastructure.document_parsing import DoclingPDFAdapter
 from src.infrastructure.langchain_adapters.chat_model import OpenAICompatibleChatAdapter
 from src.infrastructure.langchain_adapters.embeddings import OpenAICompatibleEmbeddingsAdapter
@@ -32,6 +38,9 @@ from src.infrastructure.repositories import (
     IngestionJobRepository,
     KnowledgeAssetRepository,
     KnowledgeBaseRepository,
+    RefreshTokenRepository,
+    TenantRepository,
+    UserRepository,
 )
 from src.infrastructure.storage import FilebaseAdapter
 from src.infrastructure.vector_store.pgvector import PgVectorStore
@@ -43,6 +52,18 @@ from src.retrieval.retriever import Retriever
 
 def build_file_storage(settings: Settings) -> IFileStorage:
     return FilebaseAdapter(settings)
+
+
+# One cache client (and its connection pool) is shared process-wide; tenant isolation is
+# in the KEYS (see infrastructure/cache/keys.py), not in separate client instances.
+_cache: ValkeyCache | None = None
+
+
+def build_cache(settings: Settings) -> ICache:
+    global _cache
+    if _cache is None:
+        _cache = ValkeyCache(settings.cache_url)
+    return _cache
 
 
 def build_job_queue() -> IJobQueue:
@@ -121,3 +142,37 @@ def build_chat_service(db: Session, settings: Settings) -> ChatService:
 
 def build_knowledge_base_service(db: Session) -> KnowledgeBaseService:
     return KnowledgeBaseService(KnowledgeBaseRepository(db))
+
+
+def build_token_service(settings: Settings) -> ITokenService:
+    # Shared by the auth service (issuing) and the HTTP middleware (decoding), so both
+    # sign/verify with the same secret + algorithm.
+    return JwtTokenService(
+        secret=settings.jwt_secret,
+        algorithm=settings.jwt_algorithm,
+        access_ttl_seconds=settings.access_token_ttl_seconds,
+    )
+
+
+def build_authenticators(settings: Settings) -> list:
+    # The credential-recognition chain the AuthenticationMiddleware runs in order. Bearer
+    # tokens first; the default-tenant fallback (rollout only) last, so a present-but-invalid
+    # token 401s instead of silently falling back to the default tenant.
+    authenticators: list = [BearerTokenAuthenticator(build_token_service(settings))]
+    if settings.tenancy_default_fallback:
+        authenticators.append(DefaultTenantAuthenticator())
+    return authenticators
+
+
+def build_auth_service(db: Session, settings: Settings) -> AuthService:
+    # The request/worker Session doubles as the IUnitOfWork so registration's tenant+user
+    # inserts commit atomically.
+    return AuthService(
+        tenant_repo=TenantRepository(db),
+        user_repo=UserRepository(db),
+        refresh_repo=RefreshTokenRepository(db),
+        password_hasher=Argon2PasswordHasher(),
+        token_service=build_token_service(settings),
+        unit_of_work=db,
+        refresh_ttl_seconds=settings.refresh_token_ttl_seconds,
+    )

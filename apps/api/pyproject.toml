@@ -14,12 +14,15 @@ dependencies = [
   "pgvector>=0.3.6",
   "procrastinate>=2.9.0",
   "psycopg[binary]>=3.2.3",
+  "pwdlib[argon2]>=0.2.1",
   "pydantic-settings>=2.7.1",
+  "pyjwt>=2.9.0",
   "python-multipart>=0.0.20",
   "sqlalchemy>=2.0.36",
   "structlog>=24.4.0",
   "tiktoken>=0.8.0",
   "uvicorn[standard]>=0.34.0",
+  "valkey>=6.0",
   "youtube-transcript-api>=0.6"
 ]
 

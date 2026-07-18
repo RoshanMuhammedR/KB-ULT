@@ -8,9 +8,81 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.infrastructure.database.base import Base
+from src.infrastructure.database.tenancy import TenantScoped
 
 
-class KnowledgeBaseModel(Base):
+class TenantModel(Base):
+    """A tenant — the top-level isolation boundary. Identified by a globally-unique
+    `domain` slug (see the auth/tenancy plan). Not itself `TenantScoped`: it is the
+    root of the tenant chain and is read pre-auth (during login) under `system_scope`.
+    """
+
+    __tablename__ = "tenants"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Globally unique across all tenants — how a login request resolves its tenant.
+    domain: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
+    # active | suspended | deleted (stored as a string, like the existing AssetStatus).
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="active")
+    created_at = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+    deleted_at = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class UserModel(Base):
+    """A tenant's user. Exactly one per tenant today, enforced by `uq_users_one_per_tenant`
+    (a UNIQUE on `tenant_id`) — dropping that constraint later enables multiple users with
+    no domain-table migration. Email is unique **within** a tenant, not globally.
+    Not `TenantScoped`: read pre-auth (login) under `system_scope`.
+    """
+
+    __tablename__ = "users"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", name="uq_users_one_per_tenant"),
+        UniqueConstraint("tenant_id", "email", name="uq_users_tenant_email"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # Stored lowercased; compared case-insensitively at the app layer (no citext).
+    email: Mapped[str] = mapped_column(String(320), nullable=False)
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    # active | suspended | deleted | invited.
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="active")
+    created_at = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+    deleted_at = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class RefreshTokenModel(Base):
+    """Durable, revocable refresh-token record (rotation-based revocation — see plan §4).
+
+    Kept in Postgres, not Valkey: revocation truth must survive cache eviction. Only the
+    token's hash is stored. Reuse of a revoked token revokes the whole `family_id`.
+    Not `TenantScoped`: issued/rotated during auth, under `system_scope`.
+    """
+
+    __tablename__ = "refresh_tokens"
+    __table_args__ = (Index("ix_refresh_tokens_user_id", "user_id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    token_hash: Mapped[str] = mapped_column(String(128), nullable=False, unique=True, index=True)
+    family_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    expires_at = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class KnowledgeBaseModel(TenantScoped, Base):
     __tablename__ = "knowledge_bases"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -22,7 +94,7 @@ class KnowledgeBaseModel(Base):
     assets: Mapped[list[KnowledgeAssetModel]] = relationship(back_populates="knowledge_base")
 
 
-class KnowledgeAssetModel(Base):
+class KnowledgeAssetModel(TenantScoped, Base):
     __tablename__ = "knowledge_assets"
     __table_args__ = (UniqueConstraint("lineage_id", "version", name="uq_asset_lineage_version"),)
 
@@ -47,7 +119,7 @@ class KnowledgeAssetModel(Base):
     chunks: Mapped[list[ChunkModel]] = relationship(back_populates="asset", cascade="all, delete-orphan")
 
 
-class IngestionJobModel(Base):
+class IngestionJobModel(TenantScoped, Base):
     """Domain-owned ingestion job record (see IngestionJob entity).
 
     Separate from Procrastinate's internal tables: this is the job history the app
@@ -77,7 +149,7 @@ class IngestionJobModel(Base):
     updated_at = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
 
-class IngestionJobEventModel(Base):
+class IngestionJobEventModel(TenantScoped, Base):
     """Durable worker log: one row per pipeline transition / terminal state.
 
     structlog output is stdout-only; this is the queryable trail the `/jobs` dashboard
@@ -106,7 +178,7 @@ class IngestionJobEventModel(Base):
     ts = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
-class ChunkModel(Base):
+class ChunkModel(TenantScoped, Base):
     __tablename__ = "chunks"
     __table_args__ = (UniqueConstraint("knowledge_asset_id", "chunk_index", name="uq_chunk_asset_index"),)
 
@@ -121,7 +193,7 @@ class ChunkModel(Base):
     embeddings: Mapped[list[EmbeddingModel]] = relationship(back_populates="chunk", cascade="all, delete-orphan")
 
 
-class EmbeddingModel(Base):
+class EmbeddingModel(TenantScoped, Base):
     __tablename__ = "embeddings"
     __table_args__ = (UniqueConstraint("chunk_id", "model", name="uq_embedding_chunk_model"),)
 

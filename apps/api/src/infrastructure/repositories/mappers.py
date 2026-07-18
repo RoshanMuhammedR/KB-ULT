@@ -7,13 +7,57 @@ from src.domain.entities import (
     KnowledgeAsset,
     KnowledgeBase,
 )
+from src.domain.entities.refresh_token import RefreshToken
+from src.domain.entities.tenant import Tenant, TenantStatus
+from src.domain.entities.user import User, UserStatus
 from src.infrastructure.database.models import (
     ChunkModel,
     IngestionJobEventModel,
     IngestionJobModel,
     KnowledgeAssetModel,
     KnowledgeBaseModel,
+    RefreshTokenModel,
+    TenantModel,
+    UserModel,
 )
+
+
+def tenant_to_domain(model: TenantModel) -> Tenant:
+    return Tenant(
+        id=model.id,
+        name=model.name,
+        domain=model.domain,
+        status=TenantStatus(model.status),
+        created_at=model.created_at,
+        updated_at=model.updated_at,
+        deleted_at=model.deleted_at,
+    )
+
+
+def user_to_domain(model: UserModel) -> User:
+    return User(
+        id=model.id,
+        tenant_id=model.tenant_id,
+        email=model.email,
+        password_hash=model.password_hash,
+        status=UserStatus(model.status),
+        created_at=model.created_at,
+        updated_at=model.updated_at,
+        deleted_at=model.deleted_at,
+    )
+
+
+def refresh_token_to_domain(model: RefreshTokenModel) -> RefreshToken:
+    return RefreshToken(
+        id=model.id,
+        user_id=model.user_id,
+        tenant_id=model.tenant_id,
+        token_hash=model.token_hash,
+        family_id=model.family_id,
+        expires_at=model.expires_at,
+        revoked_at=model.revoked_at,
+        created_at=model.created_at,
+    )
 
 
 def kb_to_domain(model: KnowledgeBaseModel) -> KnowledgeBase:

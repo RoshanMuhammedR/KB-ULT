@@ -14,11 +14,14 @@ class ProcrastinateJobQueue(IJobQueue):
     this file plus app.py/tasks.py and nothing else.
     """
 
-    def enqueue_ingestion(self, asset_id: UUID) -> None:
+    def enqueue_ingestion(self, asset_id: UUID, tenant_id: UUID, user_id: UUID) -> None:
         # `.defer()` inserts a row into Procrastinate's Postgres queue; a running
-        # worker is woken via LISTEN/NOTIFY. Only the id crosses the boundary.
+        # worker is woken via LISTEN/NOTIFY. Only ids cross the boundary — including
+        # tenant_id/user_id, so the worker's @tenant_task wrapper can rebuild context.
         #
         # Called synchronously from the FastAPI request. Because the app is never
         # opened in the web process, the async PsycopgConnector derives a one-off
         # sync connection for this defer under the hood — no `app.open()` needed.
-        ingest_asset.defer(asset_id=str(asset_id))
+        ingest_asset.defer(
+            asset_id=str(asset_id), tenant_id=str(tenant_id), user_id=str(user_id)
+        )

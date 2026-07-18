@@ -1,4 +1,6 @@
 from src.http.dependencies.services import (
+    get_auth_service,
+    get_cache,
     get_chat_service,
     get_file_storage,
     get_ingestion_service,
@@ -6,6 +8,8 @@ from src.http.dependencies.services import (
 )
 
 __all__ = [
+    "get_auth_service",
+    "get_cache",
     "get_chat_service",
     "get_file_storage",
     "get_ingestion_service",

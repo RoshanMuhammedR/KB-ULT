@@ -3,8 +3,11 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from src.composition import build_authenticators
 from src.core.config import get_settings
 from src.core.logging import configure_logging
+from src.http.middleware import AuthenticationMiddleware, TenantContextMiddleware
+from src.http.routes.auth import router as auth_router
 from src.http.routes.chat import router as chat_router
 from src.http.routes.documents import router as documents_router
 from src.http.routes.health import router as health_router
@@ -27,6 +30,18 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="AI Knowledge Base PDF MVP", lifespan=lifespan)
 
+# Middleware runs outermost-first in reverse of add order, so the request flows:
+#   CORS → Authentication (resolve Identity) → TenantContext (bind it) → routes.
+# Auth and tenant binding are separate concerns: authentication owns credentials (bearer
+# now, API keys/OAuth later) and only produces an Identity; the tenant layer binds that
+# Identity to the contextvars without caring how it was proven. Both sit inside CORS so
+# preflight OPTIONS and 401s still carry CORS headers.
+app.add_middleware(TenantContextMiddleware)
+app.add_middleware(
+    AuthenticationMiddleware,
+    authenticators=build_authenticators(settings),
+)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
@@ -36,6 +51,7 @@ app.add_middleware(
 )
 
 app.include_router(health_router)
+app.include_router(auth_router)
 app.include_router(documents_router)
 app.include_router(jobs_router)
 app.include_router(chat_router)

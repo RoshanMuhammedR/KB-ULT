@@ -8,6 +8,7 @@ from procrastinate import RetryStrategy
 from src.core.config import get_settings
 from src.infrastructure.database.session import session_scope
 from src.infrastructure.queue.app import app
+from src.infrastructure.queue.tenant_task import tenant_task
 
 logger = structlog.get_logger(__name__)
 
@@ -18,12 +19,14 @@ _RETRY = RetryStrategy(max_attempts=3, exponential_wait=5)
 
 
 @app.task(name="ingest_asset", retry=_RETRY)
+@tenant_task
 def ingest_asset(asset_id: str) -> None:
     """Worker entrypoint: run the ingestion pipeline for one asset.
 
-    Kept deliberately thin — it only opens a worker-scoped DB session, rebuilds the
-    exact same object graph the HTTP layer uses (shared composition root), and hands
-    off. Anything raised here propagates to Procrastinate to trigger a retry.
+    `@tenant_task` (outer of the body) rebuilds tenant context from the job's
+    tenant_id/user_id before this runs, so the worker-scoped session filters exactly
+    like the HTTP path. Kept deliberately thin — it opens a session, rebuilds the shared
+    object graph, and hands off. Anything raised propagates to Procrastinate for retry.
 
     The import of the composition root is deferred to call time to avoid an import
     cycle (composition -> queue adapter -> this module).

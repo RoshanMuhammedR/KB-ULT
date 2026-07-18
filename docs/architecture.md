@@ -10,6 +10,21 @@ There are two request entry points into ingestion: `enqueue_ingestion` for uploa
 
 The worker keeps a **persisted event log**: each pipeline transition/terminal state writes an `IngestionJobEvent` row (distinct from stdout structlog output), which the `/jobs` dashboard reads.
 
+## Multi-Tenancy & Auth
+
+The system is **multi-tenant with row-level isolation**. A **tenant** is the isolation boundary, identified by a globally-unique `domain` slug; each tenant has (today) exactly one **user**, enforced by a `UNIQUE(tenant_id)` constraint that can be dropped later with no domain-table migration. Every domain table stores `tenant_id` **and** `user_id`.
+
+Isolation is enforced in **two layers**, both driven from one source of truth — the current tenant, held in a `contextvars` variable (`core/tenant_context.py`):
+
+1. **ORM auto-filter** (the Prisma-extension equivalent, `infrastructure/database/tenancy.py`). A `TenantScoped` mixin marks tenant-owned models; session listeners then (a) append a `with_loader_criteria` tenant filter to every SELECT/UPDATE/DELETE touching a scoped entity, and (b) stamp `tenant_id`/`user_id` onto inserts. It **fails closed**: a scoped query with no tenant in context raises `MissingTenantContextError`. `system_scope()` suspends it for pre-auth/cross-tenant work.
+2. **Postgres RLS** (migration `0006`). A per-table policy keyed on `current_setting('app.current_tenant')` is the database backstop for raw SQL, `Session.get()`, and future bugs. The ORM sessions connect as a **non-superuser role** (`kb_app`, `APP_DATABASE_URL`) so RLS actually applies; an `after_begin` listener sets the GUC each transaction. Migrations and the Procrastinate connector keep the superuser role.
+
+**Context propagation.** HTTP uses two pure-ASGI layers with separated responsibilities: an `AuthenticationMiddleware` runs a chain of `Authenticator`s (bearer token today; API keys/OAuth later) that establish *who* is calling and produce a mechanism-agnostic `Identity` (`tenant_id`/`user_id`), and a downstream `TenantContextMiddleware` binds that `Identity` into the contextvars — it neither decodes tokens nor knows how identity was proven. New credential types are added as authenticators without touching tenant binding. Background jobs have no request, so every payload carries `tenant_id`/`user_id` and a shared `@tenant_task` wrapper re-establishes context (and fails loud if absent).
+
+**Auth.** Registration creates a tenant + its user atomically. Login resolves the tenant by `domain`, verifies the (Argon2id) password, and returns a short-lived **access JWT** (`tid`/`sub`, ~15 min) plus a **rotating refresh token** (stored hashed in Postgres; reuse revokes the family). All auth crypto sits behind ports (`IPasswordHasher`, `ITokenService`) in `infrastructure/auth/`.
+
+**Caching.** Valkey is the cache; tenant-scoped keys must be built with `tenant_cache_key` (`tenant:{tenant_id}:…`), which fails closed without a tenant — cross-tenant cache bleed is structurally impossible.
+
 ## Backend Structure
 
 ```text
@@ -148,6 +163,10 @@ grep -r "import langchain" apps/api/src/
 ## API
 
 - `GET /health`
+- `POST /auth/register` — create a tenant + its user; returns access + refresh tokens
+- `POST /auth/login` — resolve tenant by `domain`, verify credentials; returns tokens
+- `POST /auth/refresh` — rotate the refresh token; returns new tokens
+- `POST /auth/logout` — revoke the refresh-token family
 - `GET /documents`
 - `GET /documents/{asset_id}` — single asset + latest job (status polling)
 - `GET /documents/{asset_id}/events` — persisted worker-log trail for the asset
@@ -162,7 +181,11 @@ grep -r "import langchain" apps/api/src/
 
 ## Data Model
 
-- `KnowledgeBase`: default container, with nullable `owner_id` for later auth.
+- `Tenant`: the isolation boundary — globally-unique `domain`, `status` (active/suspended/deleted).
+- `User`: a tenant's user — `(tenant_id, email)` unique, one-per-tenant via `UNIQUE(tenant_id)`, `status` (active/suspended/deleted/invited), Argon2id `password_hash`.
+- `RefreshToken`: durable, revocable refresh-token record (hash + `family_id`); rotation-based revocation.
+- Every domain table below also carries `tenant_id` + `user_id` (`TenantScoped`).
+- `KnowledgeBase`: default container, with nullable `owner_id` (legacy, superseded by `tenant_id`/`user_id`).
 - `KnowledgeAsset`: immutable source version with `lineage_id`, `version`, status (now including `queued`), failure step, metadata, and supersession state. Tracks the **pipeline stage**.
 - `IngestionJob`: the unit of work and its **retry accounting** (status, attempts, `max_attempts`, `last_error`, timings) for one asset. Domain-owned and queue-engine-agnostic; distinct from Procrastinate's internal tables.
 - `IngestionJobEvent`: append-only **worker log** — one row per pipeline transition/terminal state (event name, level, message, `data`, timestamp), keyed by asset (and job when known). The durable, queryable counterpart to stdout logs; powers the `/jobs` dashboard.

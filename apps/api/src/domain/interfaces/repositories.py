@@ -6,6 +6,43 @@ from uuid import UUID
 from src.domain.entities import Chunk, Embedding, KnowledgeAsset, KnowledgeBase
 from src.domain.entities.ingestion_job import IngestionJob
 from src.domain.entities.job_event import JobEvent
+from src.domain.entities.refresh_token import RefreshToken
+from src.domain.entities.tenant import Tenant
+from src.domain.entities.user import User
+
+
+class ITenantRepository(Protocol):
+    def get_by_domain(self, domain: str) -> Tenant | None:
+        ...
+
+    def create(self, tenant: Tenant) -> Tenant:
+        ...
+
+
+class IUserRepository(Protocol):
+    def get(self, user_id: UUID) -> User | None:
+        ...
+
+    def get_by_tenant_and_email(self, tenant_id: UUID, email: str) -> User | None:
+        ...
+
+    def create(self, user: User) -> User:
+        ...
+
+
+class IRefreshTokenRepository(Protocol):
+    def create(self, token: RefreshToken) -> RefreshToken:
+        ...
+
+    def get_by_hash(self, token_hash: str) -> RefreshToken | None:
+        ...
+
+    def revoke(self, token_id: UUID) -> None:
+        ...
+
+    def revoke_family(self, family_id: UUID) -> None:
+        """Revoke every token in a family — used on logout and on refresh-reuse detection."""
+        ...
 
 
 class IKnowledgeBaseRepository(Protocol):

@@ -39,7 +39,8 @@ class IngestionJobRepository:
         return job_to_domain(model)
 
     def get(self, job_id: UUID) -> IngestionJob | None:
-        model = self.db.get(IngestionJobModel, job_id)
+        # select().where(pk), not Session.get(): Session.get() bypasses the tenant filter.
+        model = self.db.scalar(select(IngestionJobModel).where(IngestionJobModel.id == job_id))
         return job_to_domain(model) if model else None
 
     def latest_for_asset(self, asset_id: UUID) -> IngestionJob | None:
@@ -52,7 +53,9 @@ class IngestionJobRepository:
         return job_to_domain(model) if model else None
 
     def list_recent(self, limit: int = 50) -> list[IngestionJob]:
-        # Newest jobs across all assets — powers the /jobs monitoring dashboard.
+        # Newest jobs for the current tenant — powers the /jobs dashboard. The tenant
+        # auto-filter scopes this select (IngestionJobModel is TenantScoped), so it no
+        # longer spans all tenants.
         models = self.db.scalars(
             select(IngestionJobModel).order_by(desc(IngestionJobModel.created_at)).limit(limit)
         ).all()
@@ -103,7 +106,8 @@ class IngestionJobRepository:
         return job_to_domain(model)
 
     def _require(self, job_id: UUID) -> IngestionJobModel:
-        model = self.db.get(IngestionJobModel, job_id)
+        # select().where(pk), not Session.get(): keep the tenant filter in force.
+        model = self.db.scalar(select(IngestionJobModel).where(IngestionJobModel.id == job_id))
         if model is None:
             raise ValueError(f"IngestionJob not found: {job_id}")
         return model

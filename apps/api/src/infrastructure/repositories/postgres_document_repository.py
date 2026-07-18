@@ -26,11 +26,14 @@ class KnowledgeAssetRepository:
         return [asset_to_domain(row) for row in rows]
 
     def get(self, asset_id: UUID) -> KnowledgeAsset | None:
-        row = self.db.get(KnowledgeAssetModel, asset_id)
+        # select().where(pk) rather than Session.get(): Session.get() can serve from the
+        # identity map and bypasses the tenant auto-filter, so a cross-tenant id would leak.
+        row = self.db.scalar(select(KnowledgeAssetModel).where(KnowledgeAssetModel.id == asset_id))
         return asset_to_domain(row) if row else None
 
     def get_model(self, asset_id: UUID) -> KnowledgeAssetModel | None:
-        return self.db.get(KnowledgeAssetModel, asset_id)
+        # Same reason as get(): stay on select() so the tenant filter applies.
+        return self.db.scalar(select(KnowledgeAssetModel).where(KnowledgeAssetModel.id == asset_id))
 
     def latest_for_filename(self, knowledge_base_id: UUID, filename: str) -> KnowledgeAsset | None:
         row = self.db.scalar(

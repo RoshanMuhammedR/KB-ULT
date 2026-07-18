@@ -5,9 +5,20 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from src.core.config import get_settings
+from src.infrastructure.database.tenancy import register_tenant_guards
 
-engine = create_engine(get_settings().database_url, pool_pre_ping=True)
+# ORM sessions connect as the non-superuser app role when configured, so Postgres RLS
+# applies (see app_database_url). Falls back to the superuser URL when unset.
+_settings = get_settings()
+engine = create_engine(
+    _settings.app_database_url or _settings.database_url, pool_pre_ping=True
+)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
+# Attach the tenant auto-filter + stamping listeners to every session this factory makes
+# (request-scoped and worker-scoped alike). Queries on tenant-scoped tables are filtered
+# by the current tenant and fail closed if none is set; see database/tenancy.py.
+register_tenant_guards(SessionLocal)
 
 
 def get_db() -> Generator[Session, None, None]:

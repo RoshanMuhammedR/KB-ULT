@@ -6,6 +6,7 @@ from uuid import UUID, uuid4
 import structlog
 
 from src.core.exceptions import IngestionError
+from src.core.tenant_context import current_tenant_id, current_user_id
 from src.domain.entities import (
     AssetStatus,
     IngestionJob,
@@ -137,7 +138,7 @@ class IngestionService:
         # the records are committed so a worker can never pick up an asset that isn't
         # persisted yet.
         job = self.job_repo.create(IngestionJob(asset_id=asset.id))
-        self.job_queue.enqueue_ingestion(asset.id)
+        self._enqueue(asset.id)
         self._record(asset, "queued", "Ingestion queued", job_id=job.id)
         logger.info("ingestion_enqueued", knowledge_asset_id=str(asset.id), filename=safe_filename)
         return asset
@@ -182,7 +183,7 @@ class IngestionService:
         )
 
         job = self.job_repo.create(IngestionJob(asset_id=asset.id))
-        self.job_queue.enqueue_ingestion(asset.id)
+        self._enqueue(asset.id)
         self._record(asset, "queued", f"Queued from URL: {source_uri}", job_id=job.id)
         logger.info("ingestion_url_enqueued", knowledge_asset_id=str(asset.id), source_uri=source_uri)
         return asset
@@ -206,10 +207,17 @@ class IngestionService:
         asset.status = AssetStatus.QUEUED
         asset.error_message = None
         self.asset_repo.update_from_domain(asset)
-        self.job_queue.enqueue_ingestion(asset_id)
+        self._enqueue(asset_id)
         self._record(asset, "retry", "Retry re-enqueued", job_id=job.id if job else None)
         logger.info("ingestion_retry_enqueued", knowledge_asset_id=str(asset_id))
         return asset
+
+    def _enqueue(self, asset_id: UUID) -> None:
+        # Enqueue carries the current tenant/user so the worker can rebuild context.
+        # Runs inside a tenant-scoped request, so the contextvars are set.
+        self.job_queue.enqueue_ingestion(
+            asset_id, tenant_id=current_tenant_id(), user_id=current_user_id()
+        )
 
     # ------------------------------------------------------------------- worker path
 

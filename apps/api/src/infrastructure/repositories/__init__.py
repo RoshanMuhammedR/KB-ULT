@@ -1,3 +1,8 @@
+from src.infrastructure.repositories.postgres_auth_repository import (
+    RefreshTokenRepository,
+    TenantRepository,
+    UserRepository,
+)
 from src.infrastructure.repositories.postgres_chunk_repository import ChunkRepository, EmbeddingRepository
 from src.infrastructure.repositories.postgres_document_repository import KnowledgeAssetRepository
 from src.infrastructure.repositories.postgres_ingestion_job_event_repository import (
@@ -13,4 +18,7 @@ __all__ = [
     "IngestionJobRepository",
     "KnowledgeAssetRepository",
     "KnowledgeBaseRepository",
+    "RefreshTokenRepository",
+    "TenantRepository",
+    "UserRepository",
 ]

@@ -12,10 +12,12 @@ class IJobQueue(Protocol):
     different queue engine (Celery/Redis, ...) should only replace that adapter.
     """
 
-    def enqueue_ingestion(self, asset_id: UUID) -> None:
+    def enqueue_ingestion(self, asset_id: UUID, tenant_id: UUID, user_id: UUID) -> None:
         """Schedule the ingestion pipeline for an already-persisted asset.
 
-        Only the asset id travels through the queue — never the file bytes. The
-        worker re-reads the source from object storage using the asset's
+        Only ids travel through the queue — never the file bytes. `tenant_id`/`user_id`
+        are carried explicitly so the worker can re-establish tenant context before
+        touching any tenant-scoped table (a job with no tenant is refused, never run
+        unscoped). The worker re-reads the source from object storage using the asset's
         storage_key (see IFileStorage.download).
         """

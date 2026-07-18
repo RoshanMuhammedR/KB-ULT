@@ -7,6 +7,7 @@ from uuid import UUID, uuid4
 sys.modules.setdefault("structlog", SimpleNamespace(get_logger=lambda *_: Mock()))
 
 from src.application.ingestion.service import IngestionService
+from src.core.tenant_context import reset_tenant_context, set_tenant_context
 from src.domain.entities import (
     AssetStatus,
     Chunk,
@@ -23,9 +24,11 @@ class FakeJobQueue:
 
     def __init__(self) -> None:
         self.enqueued: list[UUID] = []
+        self.tenant_ids: list[UUID] = []
 
-    def enqueue_ingestion(self, asset_id: UUID) -> None:
+    def enqueue_ingestion(self, asset_id: UUID, tenant_id: UUID, user_id: UUID) -> None:
         self.enqueued.append(asset_id)
+        self.tenant_ids.append(tenant_id)
 
 
 def _build_service(**overrides):
@@ -94,7 +97,16 @@ class EnqueueIngestionTest(TestCase):
     def test_uploads_and_enqueues_without_running_pipeline(self) -> None:
         service, deps = _build_service()
 
-        asset = service.enqueue_ingestion(b"pdf", "../ My File.pdf ", "application/pdf", user_id="user-1")
+        # Enqueue reads the current tenant/user (set by the HTTP middleware in prod) to
+        # carry into the job payload, so a tenant context must be present.
+        tenant_id, user_id = uuid4(), uuid4()
+        tokens = set_tenant_context(tenant_id, user_id)
+        try:
+            asset = service.enqueue_ingestion(
+                b"pdf", "../ My File.pdf ", "application/pdf", user_id="user-1"
+            )
+        finally:
+            reset_tenant_context(tokens)
 
         # The request path only stores + queues; it must NOT acquire/parse.
         self.assertEqual(asset.status, AssetStatus.QUEUED)
@@ -107,6 +119,8 @@ class EnqueueIngestionTest(TestCase):
         deps["job_repo"].create.assert_called_once()
         deps["job_event_repo"].append.assert_called()  # "queued" worker-log line
         self.assertEqual(deps["job_queue"].enqueued, [asset.id])
+        # The current tenant is threaded into the job payload.
+        self.assertEqual(deps["job_queue"].tenant_ids, [tenant_id])
 
 
 class ProcessIngestionTest(TestCase):
