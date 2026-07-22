@@ -175,4 +175,8 @@ def build_auth_service(db: Session, settings: Settings) -> AuthService:
         token_service=build_token_service(settings),
         unit_of_work=db,
         refresh_ttl_seconds=settings.refresh_token_ttl_seconds,
+        cache=build_cache(settings),
+        handoff_ttl_seconds=settings.handoff_code_ttl_seconds,
+        enforce_login_origin=settings.enforce_login_origin,
+        login_origin_bypass_hosts=settings.login_origin_bypass_hosts,
     )

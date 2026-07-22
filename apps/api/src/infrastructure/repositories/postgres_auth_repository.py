@@ -30,6 +30,10 @@ class TenantRepository:
     def __init__(self, db: Session) -> None:
         self.db = db
 
+    def get(self, tenant_id: UUID) -> Tenant | None:
+        model = self.db.get(TenantModel, tenant_id)
+        return tenant_to_domain(model) if model else None
+
     def get_by_domain(self, domain: str) -> Tenant | None:
         model = self.db.scalar(select(TenantModel).where(TenantModel.domain == domain))
         return tenant_to_domain(model) if model else None

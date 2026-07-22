@@ -12,6 +12,9 @@ from src.domain.entities.user import User
 
 
 class ITenantRepository(Protocol):
+    def get(self, tenant_id: UUID) -> Tenant | None:
+        ...
+
     def get_by_domain(self, domain: str) -> Tenant | None:
         ...
 

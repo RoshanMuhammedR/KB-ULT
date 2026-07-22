@@ -45,6 +45,9 @@ app.add_middleware(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
+    # Plus any origin matching the regex (default: mapped `.test` tenant domains + localhost
+    # on any port), so the two-app domain-handoff flow works without editing the exact list.
+    allow_origin_regex=settings.cors_allowed_origin_regex or None,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

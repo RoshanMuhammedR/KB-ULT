@@ -1,0 +1,342 @@
+/* Saga — shared design system (Tailwind v4).
+ *
+ * The single source of truth for the Saga visual language across the marketing site and the
+ * product app. Derived from docs/DESIGN.md: a near-black obsidian canvas carved out by light —
+ * chalk 400-weight type, 1px graphite hairlines, white pill primaries, no shadows. Fonts are
+ * injected per-app via next/font as --font-sans / --font-mono and mapped onto the tokens below.
+ */
+
+@theme {
+  /* Colors */
+  --color-obsidian: #101010;
+  --color-carbon: #080808;
+  --color-chalk: #f3f3f3;
+  --color-smoke: #9c9c9c;
+  --color-ash: #c1c1c1;
+  --color-graphite: #212121;
+  --color-iron: #474747;
+  --color-signal-white: #ffffff;
+  --color-compass-gold: #6f6759;
+  --color-card-slate: #3b3d45;
+
+  /* Semantic status (used only for dots/labels — never as fills behind text) */
+  --color-pulse-green: #98ff38;
+  --color-signal-amber: #d8a24a;
+  --color-signal-red: #e5484d;
+
+  /* Elevated surface used sparingly for pill/badge backgrounds */
+  --color-slate-900: #1a1a1a;
+
+  /* Typography — families (next/font sets --font-sans / --font-mono per app) */
+  --font-aeonik: var(--font-sans), ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", Roboto, sans-serif;
+  --font-input: var(--font-mono), ui-monospace, "IBM Plex Mono", "JetBrains Mono", "Space Mono",
+    monospace;
+
+  /* Typography — scale (size / line-height / tracking pairs) */
+  --text-caption: 13px;
+  --text-caption--line-height: 1.5;
+  --text-body: 16px;
+  --text-body--line-height: 1.5;
+  --text-heading-xs: 18px;
+  --text-heading-xs--line-height: 1.31;
+  --text-subheading: 21px;
+  --text-subheading--line-height: 1.2;
+  --text-heading-sm: 23px;
+  --text-heading-sm--line-height: 1.15;
+  --text-heading: 34px;
+  --text-heading--line-height: 1.05;
+  --text-heading--letter-spacing: -0.02em;
+  --text-heading-lg: 44px;
+  --text-heading-lg--line-height: 1.05;
+  --text-heading-lg--letter-spacing: -0.02em;
+  --text-display: 63px;
+  --text-display--line-height: 1.03;
+  --text-display--letter-spacing: -0.03em;
+
+  /* Weights — 400 is signature; 700 only where genuinely needed */
+  --font-weight-regular: 400;
+  --font-weight-bold: 700;
+
+  /* Spacing (4px base) */
+  --spacing: 4px;
+
+  /* Border radius */
+  --radius-tag: 4px;
+  --radius-card: 8px;
+  --radius-full: 9999px;
+
+  /* Layout */
+  --page-max-width: 1200px;
+}
+
+@layer base {
+  * {
+    border-color: var(--color-graphite);
+  }
+
+  html {
+    color-scheme: dark;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    background-color: var(--color-obsidian);
+    color: var(--color-chalk);
+    font-family: var(--font-aeonik);
+    font-weight: var(--font-weight-regular);
+    font-size: var(--text-body);
+    line-height: 1.5;
+  }
+
+  ::selection {
+    background: var(--color-chalk);
+    color: var(--color-obsidian);
+  }
+
+  /* Consistent, visible focus for keyboard users across both apps */
+  :focus-visible {
+    outline: 2px solid var(--color-chalk);
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+
+  /* Thin, obsidian-toned scrollbars so panels don't get chrome-heavy */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-iron) transparent;
+  }
+}
+
+@layer components {
+  /* Content column — never break the 1200px grid */
+  .saga-container {
+    width: 100%;
+    max-width: var(--page-max-width);
+    margin-inline: auto;
+    padding-inline: 24px;
+  }
+
+  /* The hairline rule that IS the page structure */
+  .saga-divider {
+    border: 0;
+    border-top: 1px solid var(--color-graphite);
+    width: 100%;
+    margin: 0;
+  }
+
+  /* Typography helpers */
+  .saga-display {
+    font-size: var(--text-display);
+    line-height: var(--text-display--line-height);
+    letter-spacing: var(--text-display--letter-spacing);
+    font-weight: var(--font-weight-regular);
+  }
+  .saga-heading {
+    font-size: var(--text-heading);
+    line-height: var(--text-heading--line-height);
+    letter-spacing: var(--text-heading--letter-spacing);
+    font-weight: var(--font-weight-regular);
+  }
+  .saga-subheading {
+    font-size: var(--text-subheading);
+    line-height: var(--text-subheading--line-height);
+    font-weight: var(--font-weight-regular);
+    color: var(--color-smoke);
+  }
+  /* Utilitarian mono meta — labels, status text, section tags */
+  .saga-meta {
+    font-family: var(--font-input);
+    font-size: var(--text-caption);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--color-smoke);
+  }
+
+  /* Buttons -------------------------------------------------------------- */
+  .saga-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    font-family: var(--font-aeonik);
+    font-size: 14px;
+    font-weight: var(--font-weight-regular);
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease,
+      opacity 0.15s ease;
+    user-select: none;
+  }
+  .saga-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
+  /* Primary — the single white pill */
+  .saga-btn--primary {
+    background: var(--color-signal-white);
+    color: var(--color-obsidian);
+    border: 1px solid var(--color-signal-white);
+    border-radius: var(--radius-full);
+    padding: 12px 24px;
+  }
+  .saga-btn--primary:hover:not(:disabled) {
+    background: var(--color-ash);
+    border-color: var(--color-ash);
+  }
+
+  /* Secondary — ghost outline (8px, not a pill) */
+  .saga-btn--ghost {
+    background: transparent;
+    color: var(--color-chalk);
+    border: 1px solid var(--color-iron);
+    border-radius: var(--radius-card);
+    padding: 11px 20px;
+  }
+  .saga-btn--ghost:hover:not(:disabled) {
+    border-color: var(--color-chalk);
+  }
+
+  .saga-btn--sm {
+    padding: 8px 16px;
+    font-size: 13px;
+  }
+  .saga-btn--block {
+    width: 100%;
+  }
+
+  /* Cards ---------------------------------------------------------------- */
+  .saga-card {
+    background: transparent;
+    border: 1px solid var(--color-graphite);
+    border-radius: var(--radius-card);
+    padding: 32px;
+  }
+
+  /* Fields --------------------------------------------------------------- */
+  .saga-field {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .saga-label {
+    font-family: var(--font-input);
+    font-size: var(--text-caption);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--color-smoke);
+  }
+  .saga-input {
+    width: 100%;
+    background: var(--color-carbon);
+    border: 1px solid var(--color-graphite);
+    border-radius: var(--radius-card);
+    color: var(--color-chalk);
+    font-family: var(--font-aeonik);
+    font-size: var(--text-body);
+    padding: 12px 14px;
+    transition: border-color 0.15s ease;
+  }
+  .saga-input::placeholder {
+    color: var(--color-iron);
+  }
+  .saga-input:hover {
+    border-color: var(--color-iron);
+  }
+  .saga-input:focus {
+    outline: none;
+    border-color: var(--color-chalk);
+  }
+  .saga-field__hint {
+    font-size: var(--text-caption);
+    color: var(--color-smoke);
+  }
+  .saga-field__error {
+    font-size: var(--text-caption);
+    color: var(--color-signal-red);
+  }
+
+  /* Status pill + dot ---------------------------------------------------- */
+  .saga-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--color-slate-900);
+    border: 1px solid var(--color-graphite);
+    border-radius: var(--radius-tag);
+    padding: 6px 12px;
+    font-family: var(--font-input);
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--color-smoke);
+  }
+  .saga-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: var(--radius-full);
+    background: var(--color-smoke);
+    flex: none;
+  }
+  .saga-dot--live {
+    background: var(--color-pulse-green);
+  }
+  .saga-dot--warn {
+    background: var(--color-signal-amber);
+  }
+  .saga-dot--error {
+    background: var(--color-signal-red);
+  }
+  .saga-dot--pulse {
+    animation: saga-pulse 1.6s ease-in-out infinite;
+  }
+
+  /* Wordmark ------------------------------------------------------------- */
+  .saga-logo {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--font-aeonik);
+  }
+  .saga-logo__mark {
+    width: 7px;
+    height: 7px;
+    border-radius: var(--radius-full);
+    background: var(--color-compass-gold);
+    flex: none;
+  }
+  .saga-logo__word {
+    font-size: var(--text-heading-xs);
+    font-weight: var(--font-weight-regular);
+    letter-spacing: 0.01em;
+    color: var(--color-chalk);
+  }
+
+  /* Nav links ------------------------------------------------------------ */
+  .saga-navlink {
+    font-family: var(--font-aeonik);
+    font-size: 14px;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    color: var(--color-smoke);
+    transition: color 0.15s ease;
+  }
+  .saga-navlink:hover,
+  .saga-navlink[data-active="true"] {
+    color: var(--color-chalk);
+  }
+}
+
+@keyframes saga-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}

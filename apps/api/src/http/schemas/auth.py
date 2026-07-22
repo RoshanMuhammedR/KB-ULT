@@ -30,3 +30,21 @@ class TokenResponse(BaseModel):
     refresh_token: str
     token_type: str = "bearer"
     expires_in: int
+
+
+class HandoffIssueResponse(BaseModel):
+    # A single-use, short-lived code the tenant domain exchanges for a fresh session.
+    code: str
+    expires_in: int
+
+
+class HandoffExchangeRequest(BaseModel):
+    code: str = Field(min_length=1, max_length=512)
+
+
+class MeResponse(BaseModel):
+    user_id: str
+    email: str
+    tenant_id: str
+    domain: str
+    name: str

@@ -26,6 +26,7 @@ from src.domain.entities.refresh_token import RefreshToken
 from src.domain.entities.tenant import Tenant, TenantStatus
 from src.domain.entities.user import User, UserStatus
 from src.domain.interfaces.auth import IPasswordHasher, ITokenService, IUnitOfWork
+from src.domain.interfaces.cache import ICache
 from src.domain.interfaces.repositories import (
     IRefreshTokenRepository,
     ITenantRepository,
@@ -35,6 +36,8 @@ from src.domain.interfaces.repositories import (
 logger = structlog.get_logger(__name__)
 
 _MIN_PASSWORD_LEN = 8
+# Cross-domain handoff codes live in the (system-namespaced) cache under this prefix.
+_HANDOFF_KEY_PREFIX = "system:auth:handoff:"
 
 
 @dataclass(slots=True)
@@ -43,6 +46,17 @@ class AuthTokens:
     refresh_token: str
     expires_in: int
     token_type: str = "bearer"
+
+
+@dataclass(slots=True)
+class UserProfile:
+    """The current identity, resolved for the `/auth/me` account area."""
+
+    user_id: UUID
+    email: str
+    tenant_id: UUID
+    domain: str
+    name: str
 
 
 def _normalize_domain(domain: str) -> str:
@@ -69,6 +83,10 @@ class AuthService:
         token_service: ITokenService,
         unit_of_work: IUnitOfWork,
         refresh_ttl_seconds: int,
+        cache: ICache,
+        handoff_ttl_seconds: int = 60,
+        enforce_login_origin: bool = False,
+        login_origin_bypass_hosts: frozenset[str] = frozenset({"localhost", "127.0.0.1"}),
     ) -> None:
         self.tenant_repo = tenant_repo
         self.user_repo = user_repo
@@ -77,6 +95,10 @@ class AuthService:
         self.token_service = token_service
         self.uow = unit_of_work
         self.refresh_ttl_seconds = refresh_ttl_seconds
+        self.cache = cache
+        self.handoff_ttl_seconds = handoff_ttl_seconds
+        self.enforce_login_origin = enforce_login_origin
+        self.login_origin_bypass_hosts = login_origin_bypass_hosts
 
     # --- Registration ------------------------------------------------------------
 
@@ -115,16 +137,23 @@ class AuthService:
 
     # --- Login -------------------------------------------------------------------
 
-    def login(self, domain: str, email: str, password: str) -> AuthTokens:
+    def login(
+        self, domain: str, email: str, password: str, origin_host: str | None = None
+    ) -> AuthTokens:
         """Resolve tenant by domain, verify the user, issue tokens.
 
         Anti-enumeration: every failure path returns the same generic
         `InvalidCredentialsError`; the specific reason is only logged server-side.
+
+        `origin_host` is the hostname of the request's browser Origin (the product app is
+        served from the tenant domain). When origin enforcement is on, it must match the
+        tenant domain — so a login for `acme.test` only succeeds from `acme.test`.
         """
         domain = _normalize_domain(domain)
         email = _normalize_email(email)
 
         with system_scope():
+            self._check_login_origin(domain, origin_host)
             tenant = self.tenant_repo.get_by_domain(domain)
             if tenant is None:
                 self._deny("tenant_not_found", domain=domain)
@@ -190,7 +219,71 @@ class AuthService:
                 self.refresh_repo.revoke_family(record.family_id)
             self.uow.commit()
 
+    # --- Profile -----------------------------------------------------------------
+
+    def me(self, user_id: UUID, tenant_id: UUID) -> UserProfile:
+        """Resolve the current identity into a display profile for the account area.
+
+        Tenants/users are read pre-filter (they are the root of tenancy) under system_scope;
+        the ids come from the caller's already-verified access token.
+        """
+        with system_scope():
+            user = self.user_repo.get(user_id)
+            tenant = self.tenant_repo.get(tenant_id)
+            if user is None or tenant is None:
+                raise TokenError("Identity no longer exists")
+            return UserProfile(
+                user_id=user.id,
+                email=user.email,
+                tenant_id=tenant.id,
+                domain=tenant.domain,
+                name=tenant.name,
+            )
+
+    # --- Cross-domain handoff ----------------------------------------------------
+
+    def issue_handoff(self, user_id: UUID) -> tuple[str, int]:
+        """Mint a short-lived, single-use code that a *different* origin can exchange for a
+        fresh session. Used to carry a just-registered user from the marketing site to their
+        tenant domain without putting tokens in the URL. Returns (code, ttl_seconds)."""
+        code = secrets.token_urlsafe(32)
+        self.cache.set(
+            _HANDOFF_KEY_PREFIX + code, str(user_id), ttl_seconds=self.handoff_ttl_seconds
+        )
+        return code, self.handoff_ttl_seconds
+
+    def exchange_handoff(self, code: str) -> AuthTokens:
+        """Redeem a handoff code for a new token pair (single-use: the code is deleted on
+        read). Raises TokenError if the code is unknown/expired/already used."""
+        key = _HANDOFF_KEY_PREFIX + code
+        raw_user_id = self.cache.get(key)
+        if raw_user_id is None:
+            raise TokenError("Invalid or expired handoff code")
+        self.cache.delete(key)  # single-use
+        with system_scope():
+            try:
+                user = self.user_repo.get(UUID(raw_user_id))
+                if user is None or user.status is not UserStatus.ACTIVE:
+                    raise TokenError("User is no longer active")
+                tokens = self._issue(user)
+                self.uow.commit()
+                return tokens
+            except Exception:
+                self.uow.rollback()
+                raise
+
     # --- Helpers -----------------------------------------------------------------
+
+    def _check_login_origin(self, domain: str, origin_host: str | None) -> None:
+        # Only enforced for real browser logins (Origin present, not a dev-bypass host).
+        # Server-to-server / test clients send no Origin and are unaffected.
+        if not self.enforce_login_origin or origin_host is None:
+            return
+        origin_host = origin_host.strip().lower()
+        if origin_host in self.login_origin_bypass_hosts:
+            return
+        if origin_host != domain:
+            self._deny("origin_mismatch", domain=domain, origin_host=origin_host)
 
     def _issue(self, user: User, family_id: UUID | None = None) -> AuthTokens:
         access_token, expires_in = self.token_service.issue_access_token(user.id, user.tenant_id)

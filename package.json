@@ -4,7 +4,10 @@
   "packageManager": "pnpm@9.15.0",
   "scripts": {
     "setup": "pnpm install && ([ -f .env ] || cp .env.example .env) && pnpm --filter @kb/api run setup",
-    "dev": "set -a; [ ! -f .env ] || . ./.env; set +a; turbo run dev --filter=@kb/api --filter=@kb/web",
+    "dev": "set -a; [ ! -f .env ] || . ./.env; set +a; turbo run dev --filter=@kb/api --filter=@kb/web --filter=@kb/website",
+    "dev:product": "set -a; [ ! -f .env ] || . ./.env; set +a; turbo run dev --filter=@kb/api --filter=@kb/web",
+    "domains:map": "sh scripts/dev-domains.sh",
+    "domains:unmap": "sh scripts/dev-domains.sh --remove",
     "build": "turbo run build",
     "lint": "turbo run lint",
     "test": "turbo run test",
