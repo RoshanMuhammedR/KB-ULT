@@ -4,8 +4,10 @@ Backend-first RAG MVP for uploading PDFs, ingesting them into PostgreSQL/pgvecto
 
 ## Run Locally
 
-Start PostgreSQL with pgvector locally and make sure `.env` points at it through
-`DATABASE_URL` or the default localhost settings.
+Needs Node 20+, pnpm 9, **Python 3.11+**, and PostgreSQL with the **pgvector** extension.
+Start PostgreSQL locally and make sure `.env` points at it through `DATABASE_URL` or the
+default localhost settings. See [docs/setup.md](docs/setup.md) for per-OS install steps
+(including building pgvector on Windows, which has no official binary).
 
 ```bash
 cp .env.example .env
@@ -13,11 +15,16 @@ cp .env.example .env
 # edit .env and set FILEBASE_* values
 pnpm run setup
 pnpm run db:migrate
+pnpm run db:queue-schema
 pnpm run db:seed
 pnpm run dev
+pnpm run worker   # second terminal: consumes ingestion jobs
 ```
 
 Open the web app at http://localhost:3000 and the API health check at http://localhost:8000/health.
+
+All scripts run on Windows, macOS and Linux — the shell-specific bits live in
+`scripts/run.mjs`, so no `sh`, `cp` or `.venv/bin/activate` is assumed.
 
 ## Commands
 
@@ -41,7 +48,7 @@ pnpm run docker:db:seed
 pnpm run docker:db:sql
 ```
 
-The Docker scripts call `infra/compose.sh`, which uses `docker compose` when
+The Docker scripts call `scripts/compose.mjs`, which uses `docker compose` when
 the plugin exists and falls back to `docker-compose` on machines with the
 legacy binary.
 

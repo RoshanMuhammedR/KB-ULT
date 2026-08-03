@@ -2,9 +2,9 @@
   "name": "@kb/website",
   "private": true,
   "scripts": {
-    "dev": "next dev -H 0.0.0.0 -p ${WEBSITE_PORT:-3001}",
+    "dev": "node ../../scripts/run.mjs exec --cwd apps/website next dev -H 0.0.0.0 -p @{WEBSITE_PORT:3001}",
     "build": "next build",
-    "start": "next start -H 0.0.0.0 -p ${WEBSITE_PORT:-3001}",
+    "start": "node ../../scripts/run.mjs exec --cwd apps/website next start -H 0.0.0.0 -p @{WEBSITE_PORT:3001}",
     "lint": "next build",
     "test": "echo \"website package has no test step\""
   },
