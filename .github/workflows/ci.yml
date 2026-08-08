@@ -24,8 +24,11 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile=false
-      # `lint` is `next build` in both Next apps, so this typechecks and builds in one pass.
-      - run: pnpm run build
+      # Only the two Next apps: the root `build` script fans out to every workspace,
+      # including @kb/api, whose build needs the Python virtualenv this job has no reason to
+      # create (the `api` job below covers it). Calling turbo directly also skips
+      # scripts/run.mjs, which expects a .env that CI does not have.
+      - run: pnpm exec turbo run build --filter=@kb/web --filter=@kb/website
         env:
           NEXT_PUBLIC_API_URL: /api
           NEXT_PUBLIC_PRODUCT_URL: /app
