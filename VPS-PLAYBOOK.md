@@ -47,7 +47,7 @@ Every project needs a unique host port. Ports collide silently and painfully —
 |---|---|---|
 | 3000 | sniplink | sniplink.dedyn.io |
 | 3001 | *free* | |
-| 3002 | *free* | |
+| 3002 | saga | saga.dev |
 | 3003 | *free* | |
 
 Before starting, confirm your chosen port is actually free:
@@ -185,11 +185,18 @@ deploy/.env.example
 .gitattributes
 ```
 
-### Step 8 — Create the server directory and `.env`
+### Step 8 — Create the server directory
 
 ```bash
 ssh -p 20086 deploy@37.187.159.43
 sudo mkdir -p /opt/<project> && sudo chown deploy:deploy /opt/<project>
+```
+
+Two approaches to the `.env` inside it — pick one and know why.
+
+**(a) Hand-written on the server.** Simplest. Generate secrets *on the box* so they never exist in a shell history, a chat log, or a repo:
+
+```bash
 cd /opt/<project>
 cat > .env <<'EOF'
 APP_PORT=<PORT>
@@ -205,7 +212,9 @@ sed -i "s|REPLACE|$(openssl rand -hex 32)|" .env
 chmod 600 .env
 ```
 
-**Generate the password on the server.** It should never exist in your shell history, a chat log, or a repo.
+The catch: that file is then the *only* copy, with no history and no review. Fine for one operator; awkward the moment there are two.
+
+**(b) Rendered from GitHub at deploy time.** GitHub becomes the single source of truth, rotation is a UI change rather than an SSH session, and the server's `.env` is a disposable artifact. This is what saga does — see §4.6.
 
 ### Step 9 — GitHub secrets
 
@@ -224,7 +233,7 @@ And one **variable**:
 |---|---|
 | `VPS_PORT` | `20086` |
 
-No application secret goes to GitHub — those live only in `/opt/<project>/.env`.
+With approach (a) no application secret goes to GitHub. With approach (b) they all do — as **secrets** for credentials and **variables** for everything else, so config stays readable and only real credentials are opaque.
 
 <details>
 <summary>Setting them from a script (if <code>gh</code> is not installed)</summary>
@@ -543,6 +552,52 @@ deploy/*.sh        text eol=lf
 .github/workflows/*.yml text eol=lf
 ```
 
+### 4.6 Rendering `.env` from GitHub at deploy time
+
+Approach (b) from §3 Step 8. Commit a template with `${PLACEHOLDER}`s and no values:
+
+```bash
+# deploy/.env.tmpl
+APP_PORT=${APP_PORT}
+POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+JWT_SECRET=${JWT_SECRET}
+```
+
+Then render it in CI and pipe it over SSH, after the rsync and before `deploy.sh`:
+
+```yaml
+- name: Render .env on the server
+  env:
+    APP_PORT: ${{ vars.APP_PORT }}                    # non-secret -> variable
+    POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}  # credential -> secret
+    JWT_SECRET: ${{ secrets.JWT_SECRET }}
+  run: |
+    set -eu
+    # Fail loudly rather than render an empty credential: an empty JWT_SECRET silently
+    # signs tokens with "", and an empty POSTGRES_PASSWORD locks the app out of its own DB.
+    for required in APP_PORT POSTGRES_PASSWORD JWT_SECRET; do
+      eval "value=\${$required:-}"
+      [ -n "$value" ] || { echo "::error::missing $required"; exit 1; }
+    done
+    envsubst < deploy/.env.tmpl > /tmp/rendered.env
+    ssh -p "$VPS_PORT" -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
+      'umask 077 && cat > /opt/<project>/.env.new && mv /opt/<project>/.env.new /opt/<project>/.env' \
+      < /tmp/rendered.env
+    rm -f /tmp/rendered.env
+```
+
+Five things that make this safe rather than merely clever:
+
+- **Pipe over stdin, never as an argument.** Anything on an `ssh` command line is visible in `ps` on the server for the life of the call.
+- **`umask 077` + write-then-`mv`.** The file is never briefly world-readable, and a dropped connection cannot leave a half-written `.env`.
+- **Validate before rendering.** `envsubst` happily substitutes an unset variable with an empty string, which is how a deploy silently ends up with a blank signing key.
+- **Never `cat` the rendered file in a step.** Actions masks *registered* secrets, but not the new one somebody adds next month.
+- **Add `--exclude '.env'` to the rsync anyway.** Belt and braces: it stops a mis-ordered workflow from clobbering the file with nothing.
+
+**`IMAGE_TAG` needs care under this model.** It is deploy *state*, not configuration — but CI regenerates `.env` on every rollout, which would erase the rollback target. Keep the truth in a separate `.image-tag` file that CI never touches and `deploy.sh` owns, and have `deploy.sh` `export IMAGE_TAG`: an exported variable beats the `.env` file in compose interpolation, so the two cannot disagree mid-deploy. Rendering the line into `.env` as well is still worth doing, purely so `docker compose ps` shows the right image to a human in that directory.
+
+**Migrating an existing hand-written `.env` to this model:** copy the *existing* `POSTGRES_PASSWORD` into GitHub rather than generating a fresh one. Postgres reads that variable only when it initialises its data directory, so a new value does not change the database — it just locks the app out. If you do need to rotate it, `ALTER USER` inside the running container first, then update the secret.
+
 ---
 
 ## 5. Pitfalls that have already cost time
@@ -569,7 +624,9 @@ Leave out dependencies your app degrades gracefully without (a cache that fails 
 
 **`X-Forwarded-For` is attacker-controlled unless you overwrite it.** If your code reads the *left-most* entry and your proxy *appends*, a client can send its own header and pick its own rate-limit key. Overwrite at the edge, or use nginx's `real_ip` module as in §4.4.
 
-**Postgres reads `POSTGRES_PASSWORD` only when it creates the data directory.** Changing it in `.env` later does nothing, and the app then fails to authenticate. Use `ALTER USER` in psql, or destroy the volume — and the data with it.
+**Postgres reads `POSTGRES_PASSWORD` only when it creates the data directory.** Changing it in `.env` later does nothing, and the app then fails to authenticate. Use `ALTER USER` in psql, or destroy the volume — and the data with it. This bites hardest when moving to CI-rendered secrets (§4.6): generating a "fresh" password there breaks a database that is working perfectly.
+
+**A health gate on one service is not a health gate.** Saga's first deploy went green while Caddy — the only publicly reachable container — was crash-looping on a bad config, because the gate only watched the API. Gate on the published port as the outside world sees it, and reject anything stuck `Restarting`.
 
 **Memory: cap it.** `-XX:MaxRAMPercentage` and similar size against the *host's* 4 GB, not the container, so one JVM will starve Postgres. Set `mem_limit`.
 

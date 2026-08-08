@@ -12,17 +12,19 @@ SERVICE="${HEALTH_SERVICE:-api}"
 
 NEW_TAG="${1:-}"
 [ -n "$NEW_TAG" ] || { echo "usage: $(basename "$0") <image-tag>" >&2; exit 2; }
-[ -f .env ] || { echo "error: no .env in $STACK_DIR" >&2; exit 2; }
+[ -f .env ] || { echo "error: no .env in $STACK_DIR (the deploy workflow renders it)" >&2; exit 2; }
 
-PREV_TAG="$(sed -n -E 's/^IMAGE_TAG=(.*)$/\1/p' .env | tail -1)"
+# IMAGE_TAG is deploy STATE, not configuration, so it lives here rather than in .env — which
+# CI regenerates from GitHub secrets on every rollout and would otherwise erase the rollback
+# target. Exported into the environment, where compose interpolation takes precedence over
+# any value in .env.
+TAG_FILE=.image-tag
+PREV_TAG="$(cat "$TAG_FILE" 2>/dev/null || echo latest)"
 PREV_TAG="${PREV_TAG:-latest}"
 
 set_tag() {
-	if grep -qE '^IMAGE_TAG=' .env; then
-		sed -i -E "s|^IMAGE_TAG=.*|IMAGE_TAG=$1|" .env
-	else
-		printf 'IMAGE_TAG=%s\n' "$1" >>.env
-	fi
+	export IMAGE_TAG="$1"
+	printf '%s\n' "$1" >"$TAG_FILE"
 }
 
 wait_healthy() {

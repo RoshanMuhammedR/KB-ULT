@@ -90,12 +90,74 @@ jobs:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_PORT: ${{ vars.VPS_PORT || '22' }}
-        # --exclude '.env' is load-bearing: it is what stops CI overwriting the server's
-        # real secrets with nothing.
+        # .env is rendered in the next step, and .image-tag is deploy state owned by the
+        # server — neither may be clobbered by the sync.
         run: |
-          rsync -az --delete --exclude '.env' --exclude 'backups/' \
+          rsync -az --delete --exclude '.env' --exclude '.image-tag' --exclude 'backups/' \
             -e "ssh -p $VPS_PORT -o StrictHostKeyChecking=yes" \
             deploy/ "$VPS_USER@$VPS_HOST:/opt/saga/"
+
+      - name: Render .env on the server
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ vars.VPS_PORT || '22' }}
+          # Non-secret configuration: variables, so it stays readable and reviewable.
+          IMAGE_TAG: ${{ needs.prepare.outputs.tag }}
+          APP_PORT: ${{ vars.APP_PORT }}
+          APP_BASE_URL: ${{ vars.APP_BASE_URL }}
+          GHCR_OWNER: ${{ needs.prepare.outputs.owner }}
+          POSTGRES_DB: ${{ vars.POSTGRES_DB }}
+          POSTGRES_USER: ${{ vars.POSTGRES_USER }}
+          ACCESS_TOKEN_TTL_SECONDS: ${{ vars.ACCESS_TOKEN_TTL_SECONDS || '900' }}
+          REFRESH_TOKEN_TTL_SECONDS: ${{ vars.REFRESH_TOKEN_TTL_SECONDS || '2592000' }}
+          AICREDITS_BASE_URL: ${{ vars.AICREDITS_BASE_URL || 'https://api.aicredits.in/v1' }}
+          AICREDITS_CHAT_MODEL: ${{ vars.AICREDITS_CHAT_MODEL || 'openai/gpt-4o-mini' }}
+          AICREDITS_EMBEDDING_MODEL: ${{ vars.AICREDITS_EMBEDDING_MODEL || 'text-embedding-3-small' }}
+          FILEBASE_BUCKET_NAME: ${{ vars.FILEBASE_BUCKET_NAME }}
+          FILEBASE_ENDPOINT: ${{ vars.FILEBASE_ENDPOINT || 'https://s3.filebase.io' }}
+          # Real credentials.
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          AICREDITS_API_KEY: ${{ secrets.AICREDITS_API_KEY }}
+          FILEBASE_ACCESS_KEY: ${{ secrets.FILEBASE_ACCESS_KEY }}
+          FILEBASE_SECRET_KEY: ${{ secrets.FILEBASE_SECRET_KEY }}
+        # Never `cat` the rendered file: Actions masks registered secrets in logs, but the
+        # habit of not printing them is what keeps that true when someone adds a new one.
+        run: |
+          set -eu
+
+          # Fail loudly rather than render an empty credential. An empty JWT_SECRET would
+          # silently sign tokens with "", and an empty POSTGRES_PASSWORD locks the app out
+          # of its own database.
+          missing=""
+          for required in APP_PORT APP_BASE_URL POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD JWT_SECRET; do
+            eval "value=\${$required:-}"
+            [ -n "$value" ] || missing="$missing $required"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::missing required secret/variable:$missing"
+            echo "Set them under Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+
+          # The third-party keys are allowed to be empty — signup and login work without
+          # them; only ingestion and chat need them. Warn so it is not a silent surprise.
+          for optional in AICREDITS_API_KEY FILEBASE_ACCESS_KEY FILEBASE_SECRET_KEY; do
+            eval "value=\${$optional:-}"
+            [ -n "$value" ] || echo "::warning::$optional is empty — ingestion/chat will fail until it is set"
+          done
+
+          envsubst < deploy/.env.tmpl > /tmp/rendered.env
+          test -s /tmp/rendered.env
+
+          # Written to a temp file and moved into place, so a dropped connection can never
+          # leave a half-written .env behind.
+          ssh -p "$VPS_PORT" -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
+            'umask 077 && cat > /opt/saga/.env.new && mv /opt/saga/.env.new /opt/saga/.env' \
+            < /tmp/rendered.env
+          rm -f /tmp/rendered.env
+          echo "rendered $(wc -l < deploy/.env.tmpl) lines of config to /opt/saga/.env"
 
       - name: Run deploy script
         env:
