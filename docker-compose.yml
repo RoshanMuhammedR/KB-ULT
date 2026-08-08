@@ -70,6 +70,10 @@ services:
       APP_DATABASE_URL: postgresql+psycopg://kb_app:${APP_DB_PASSWORD:-kb_app_password}@db:5432/kb_new
       CACHE_URL: redis://cache:6379/0
     command: procrastinate --app=src.infrastructure.queue.app.app worker
+    # Same image as the api, but no HTTP server — so the inherited HEALTHCHECK would fail
+    # forever. Disable it rather than let the worker report a false "unhealthy".
+    healthcheck:
+      disable: true
     volumes:
       - ./apps/api:/app
     depends_on:

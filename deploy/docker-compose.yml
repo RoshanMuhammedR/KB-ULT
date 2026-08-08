@@ -82,6 +82,11 @@ services:
       api:
         condition: service_healthy
     command: ["procrastinate", "--app=src.infrastructure.queue.app.app", "worker"]
+    # The image's HEALTHCHECK probes the HTTP /health endpoint, which only the api serves.
+    # Inherited here it can never pass, so the worker would sit permanently "unhealthy"
+    # while working perfectly — noise that trains you to ignore the health column.
+    healthcheck:
+      disable: true
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       JWT_SECRET: ${JWT_SECRET}
