@@ -15,7 +15,8 @@ services:
       timeout: 5s
       retries: 10
 
-  # Valkey (Redis-protocol compatible) — the caching layer. Tenant-scoped keys are
+  # Valkey (Redis-protocol compatible). Nothing reads it today — the ICache port and its
+  # adapter are kept for the next feature that needs one, and tenant-scoped keys are
   # namespaced `tenant:{tenant_id}:...` to prevent cross-tenant cache bleed.
   cache:
     image: valkey/valkey:8-alpine
@@ -41,6 +42,11 @@ services:
       # migrations/queue internals.
       APP_DATABASE_URL: postgresql+psycopg://kb_app:${APP_DB_PASSWORD:-kb_app_password}@db:5432/kb_new
       CACHE_URL: redis://cache:6379/0
+      # The entrypoint migrates before starting; only this service may, so the worker below
+      # never races it.
+      RUN_MIGRATIONS: "1"
+    # Source is bind-mounted, so keep --reload here (the image's default CMD does not).
+    command: uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
     ports:
       - "${API_PORT:-8000}:8000"
     volumes:
@@ -67,28 +73,37 @@ services:
     volumes:
       - ./apps/api:/app
     depends_on:
+      # Waits for the api's healthcheck, which means migrations have already finished.
+      api:
+        condition: service_healthy
       db:
         condition: service_healthy
       cache:
         condition: service_healthy
 
+  # The two Next apps build their PRODUCTION images here (same Dockerfiles CI ships), so
+  # `pnpm run docker:dev` is a faithful local rehearsal of the deployed stack rather than a
+  # second, differently-behaving dev setup. For hot reload, use `pnpm run dev` instead.
   web:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
-    env_file:
-      - .env
-    environment:
-      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+        NEXT_PUBLIC_WEBSITE_URL: ${NEXT_PUBLIC_WEBSITE_URL:-http://localhost:3001}
     ports:
       - "${WEB_PORT:-3000}:3000"
-    volumes:
-      - ./apps/web:/repo/apps/web
-      - ./packages:/repo/packages
-      - /repo/node_modules
-      - /repo/apps/web/node_modules
     depends_on:
       - api
+
+  website:
+    build:
+      context: .
+      dockerfile: apps/website/Dockerfile
+      args:
+        NEXT_PUBLIC_PRODUCT_URL: ${NEXT_PUBLIC_PRODUCT_URL:-http://localhost:3000/app}
+    ports:
+      - "${WEBSITE_PORT:-3001}:3000"
 
 volumes:
   kb_postgres_data:

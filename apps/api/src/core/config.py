@@ -31,11 +31,9 @@ class Settings(BaseSettings):
     filebase_secret_key: str = ""
     filebase_bucket_name: str = "kb-rag-new"
     filebase_endpoint: str = "https://s3.filebase.io"
-    cors_allowed_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
-    # Regex fallback for CORS: any origin matching this is allowed in addition to the exact
-    # list above. Defaults to any mapped `.test` host (the local domain-handoff flow) or
-    # localhost on any port, so new tenant domains work without editing the exact list.
-    cors_allowed_origin_regex: str = r"^http://([a-z0-9-]+\.)*(test|localhost)(:\d+)?$"
+    # In production the browser talks to the API same-origin (Caddy routes /api/* to it), so
+    # this only matters in local dev where the Next apps run on their own ports.
+    cors_allowed_origins: str = "http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001"
 
     # --- Auth / tenancy ---
     # HS256 signing secret for access tokens. MUST be overridden in every real
@@ -48,33 +46,14 @@ class Settings(BaseSettings):
     access_token_ttl_seconds: int = 15 * 60
     refresh_token_ttl_seconds: int = 30 * 24 * 60 * 60
 
-    # Rollout flag: while true, requests without a resolvable tenant fall back to the
-    # seeded default tenant instead of 401, and the ORM tenant-filter stays lenient.
-    # Flipped off in the final cleanup phase once auth is enforced everywhere.
-    tenancy_default_fallback: bool = True
-
-    # When true, a browser login is only accepted if its Origin host matches the tenant's
-    # domain — so a login for `acme.test` only succeeds when served from `acme.test`. Origin
-    # hosts in `login_origin_dev_bypass` (plain-localhost dev) and requests with no Origin
-    # header (server-to-server / tests) skip the check.
-    enforce_login_origin: bool = True
-    login_origin_dev_bypass: str = "localhost,127.0.0.1"
-
-    # TTL of the single-use cross-domain handoff code minted after register (§ handoff flow).
-    handoff_code_ttl_seconds: int = 60
-
     # --- Cache (Valkey) ---
+    # No code path uses the cache today (it backed the removed cross-origin handoff). The
+    # port and adapter are kept for the next thing that needs one.
     cache_url: str = "redis://localhost:6379/0"
 
     @property
     def cors_origins(self) -> list[str]:
         return [origin.strip() for origin in self.cors_allowed_origins.split(",") if origin.strip()]
-
-    @property
-    def login_origin_bypass_hosts(self) -> frozenset[str]:
-        return frozenset(
-            h.strip().lower() for h in self.login_origin_dev_bypass.split(",") if h.strip()
-        )
 
 
 @lru_cache

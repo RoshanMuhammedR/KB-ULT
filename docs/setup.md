@@ -55,7 +55,6 @@ pnpm run setup             # installs JS deps, creates .env, builds apps/api/.ve
 pnpm run db:migrate        # app tables incl. tenants/users/RLS (alembic)
 pnpm run db:queue-schema   # Procrastinate queue tables (one-time, idempotent)
 pnpm run db:app-role       # non-superuser role for RLS (only needed if using APP_DATABASE_URL)
-pnpm run db:seed
 pnpm run dev               # api + web + website (does NOT start the worker)
 pnpm run worker            # in a second terminal: consumes ingestion jobs
 ```
@@ -71,14 +70,17 @@ $env:PYTHON='C:\Python312\python.exe'; pnpm run setup   # Windows PowerShell
 `psql` is looked up on `PATH`, and on Windows also under
 `C:\Program Files\PostgreSQL\<version>\bin`, so the `db:*` scripts work without editing `PATH`.
 
-**Multi-tenancy & auth.** The API is multi-tenant. Clients authenticate via
-`POST /auth/register` (creates a tenant + its user) and `POST /auth/login` (resolves the
-tenant by `domain`), then send `Authorization: Bearer <access_token>`. Row isolation is
-enforced by an ORM tenant-filter and, when `APP_DATABASE_URL` points at the non-superuser
-`kb_app` role, by Postgres RLS as well. Set `TENANCY_DEFAULT_FALLBACK=true` (default) to let
-requests without a token fall back to a seeded default tenant during rollout; set it `false`
-once clients authenticate. A **Valkey** cache is required by `docker-compose` (`cache`
-service); locally it degrades gracefully if absent (`CACHE_URL`).
+**Multi-tenancy & auth.** The API is multi-tenant, and accounts are ordinary **email +
+password**. `POST /auth/register` creates a workspace (tenant) and its owner user in one
+atomic step and returns a signed-in session; `POST /auth/login` takes an email and a password
+— `users.email` is globally unique, so the tenant is resolved from the user. Every other
+request sends `Authorization: Bearer <access_token>`. There is no fallback identity: a
+request without a valid token gets a `401`.
+
+Row isolation is enforced by an ORM tenant-filter and, when `APP_DATABASE_URL` points at the
+non-superuser `kb_app` role, by Postgres RLS as well. A **Valkey** cache runs in
+`docker-compose`, but no code path uses it today — the port and adapter are kept for the next
+feature that needs one.
 
 Ingestion is asynchronous: `POST /documents/upload` stores the file, enqueues a
 job, and returns `202` with a `queued` asset. The **worker** (`pnpm run worker`)
@@ -92,29 +94,25 @@ already be available at the configured `DATABASE_URL`; the default points to
 
 Open:
 
-- Web: http://localhost:3000
+- Product app: http://localhost:3000/app — sign up at `/app/register`
 - Website (marketing): http://localhost:3001
 - API health: http://localhost:8000/health
+
+The product app is served under the `/app` base path even in dev, so it matches production,
+where Caddy routes `/app/*` to it and `/*` to the marketing site on a single port.
 
 Useful commands:
 
 ```bash
 pnpm run db:migrate
-pnpm run db:seed
 pnpm run db:sql
-pnpm run db:reset          # drops the public schema, then re-runs migrate/queue/app-role/seed
+pnpm run db:reset          # drops the public schema, then re-runs migrate/queue/app-role
 pnpm run build
 pnpm run lint
 ```
 
-Optional: map `*.test` domains to `127.0.0.1` for the two-app domain-handoff flow. This edits
-the hosts file, so it needs `sudo` (macOS/Linux — handled automatically) or an **elevated**
-terminal on Windows:
-
-```bash
-pnpm run domains:map
-pnpm run domains:unmap
-```
+There is no seed step: each workspace's default knowledge base is created lazily on first
+use, so a fresh database only needs migrating.
 
 Docker is available only through explicit commands:
 
@@ -123,9 +121,10 @@ pnpm run docker:build
 pnpm run docker:dev
 pnpm run docker:db:migrate
 pnpm run docker:db:queue-schema
-pnpm run docker:db:seed
 pnpm run docker:db:sql
 ```
+
+For deploying to a server, see [deployment.md](deployment.md).
 
 The Docker scripts use `scripts/compose.mjs`, which prefers `docker compose` and
 falls back to `docker-compose`.

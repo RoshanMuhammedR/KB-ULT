@@ -16,13 +16,20 @@ class UserStatus(StrEnum):
 
 @dataclass(slots=True)
 class User:
-    """A tenant's user. Exactly one per tenant today; email is unique within the tenant."""
+    """A tenant's user. `email` is unique **globally**, not per tenant: it is the sole
+    credential subject, so a login resolves the user first and the tenant from them.
+
+    `email_verified_at` is unused today (registration activates immediately) and exists so
+    a verification flow can be added later without touching the schema.
+    """
 
     tenant_id: UUID
     email: str
     password_hash: str
+    name: str = ""
     id: UUID = field(default_factory=uuid4)
     status: UserStatus = UserStatus.ACTIVE
+    email_verified_at: datetime | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
     deleted_at: datetime | None = None

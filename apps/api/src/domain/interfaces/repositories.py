@@ -15,9 +15,6 @@ class ITenantRepository(Protocol):
     def get(self, tenant_id: UUID) -> Tenant | None:
         ...
 
-    def get_by_domain(self, domain: str) -> Tenant | None:
-        ...
-
     def create(self, tenant: Tenant) -> Tenant:
         ...
 
@@ -26,7 +23,8 @@ class IUserRepository(Protocol):
     def get(self, user_id: UUID) -> User | None:
         ...
 
-    def get_by_tenant_and_email(self, tenant_id: UUID, email: str) -> User | None:
+    def get_by_email(self, email: str) -> User | None:
+        """Resolve a login's subject. Email is globally unique, so this needs no tenant."""
         ...
 
     def create(self, user: User) -> User:

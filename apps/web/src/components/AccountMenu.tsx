@@ -18,8 +18,8 @@ export function AccountMenu() {
   }, []);
 
   const email = session?.email ?? "";
-  const domain = session?.domain ?? "";
-  const name = session?.name || domain;
+  const workspace = session?.workspaceName ?? "";
+  const name = session?.name || workspace;
   const initial = (name[0] ?? email[0] ?? "?").toUpperCase();
 
   return (
@@ -31,15 +31,14 @@ export function AccountMenu() {
         aria-expanded={open}
       >
         <span className="acct__avatar">{initial}</span>
-        <span className="acct__domain">{domain || "workspace"}</span>
+        <span className="acct__domain">{workspace || "workspace"}</span>
         <ChevronDown size={14} />
       </button>
       {open ? (
         <div className="acct__menu" role="menu">
           <div className="acct__head">
-            <span className="acct__name">{name || "Your workspace"}</span>
+            <span className="acct__name">{workspace || "Your workspace"}</span>
             {email ? <span className="acct__sub">{email}</span> : null}
-            {domain ? <span className="acct__sub">{domain}</span> : null}
           </div>
           <button className="acct__signout" role="menuitem" onClick={() => void logout()}>
             <LogOut size={15} strokeWidth={1.5} />

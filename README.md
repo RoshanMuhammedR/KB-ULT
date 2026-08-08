@@ -16,12 +16,15 @@ cp .env.example .env
 pnpm run setup
 pnpm run db:migrate
 pnpm run db:queue-schema
-pnpm run db:seed
 pnpm run dev
 pnpm run worker   # second terminal: consumes ingestion jobs
 ```
 
-Open the web app at http://localhost:3000 and the API health check at http://localhost:8000/health.
+Sign up at http://localhost:3000/app/register (the product app is served under `/app`), browse
+the marketing site at http://localhost:3001, and check the API at http://localhost:8000/health.
+
+Accounts are ordinary email + password. Registration creates a workspace and its owner user in
+one step and signs you straight in.
 
 All scripts run on Windows, macOS and Linux — the shell-specific bits live in
 `scripts/run.mjs`, so no `sh`, `cp` or `.venv/bin/activate` is assumed.
@@ -32,7 +35,7 @@ All scripts run on Windows, macOS and Linux — the shell-specific bits live in
 pnpm run setup      # install JS deps, copy .env if missing, install API Python deps
 pnpm run dev        # run local API + web; expects local PostgreSQL/pgvector
 pnpm run db:migrate # run Alembic migrations against configured DATABASE_URL
-pnpm run db:seed    # create the default KnowledgeBase
+pnpm run db:reset   # drop and rebuild the schema from scratch
 pnpm run db:sql     # open local psql using .env database settings
 pnpm run lint       # run workspace lint tasks
 pnpm run test       # run workspace tests
@@ -44,9 +47,11 @@ Docker is opt-in:
 pnpm run docker:build
 pnpm run docker:dev
 pnpm run docker:db:migrate
-pnpm run docker:db:seed
 pnpm run docker:db:sql
 ```
+
+Deploying to a server is documented in [docs/deployment.md](docs/deployment.md): a push to
+`main` builds images to GHCR and rolls them onto the VPS behind a health gate.
 
 The Docker scripts call `scripts/compose.mjs`, which uses `docker compose` when
 the plugin exists and falls back to `docker-compose` on machines with the

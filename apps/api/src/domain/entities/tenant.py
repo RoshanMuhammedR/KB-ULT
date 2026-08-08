@@ -14,10 +14,14 @@ class TenantStatus(StrEnum):
 
 @dataclass(slots=True)
 class Tenant:
-    """The top-level isolation boundary, identified by a globally-unique `domain` slug."""
+    """The top-level isolation boundary — a workspace.
 
-    domain: str
-    name: str = ""
+    It has no externally-addressable identifier: a tenant is reached only *through* one of
+    its users, whose globally-unique email is what a login presents. `name` is a display
+    label and is deliberately not unique.
+    """
+
+    name: str
     id: UUID = field(default_factory=uuid4)
     status: TenantStatus = TenantStatus.ACTIVE
     created_at: datetime | None = None

@@ -1,8 +1,8 @@
-import Link from "next/link";
 import { FileText, Youtube, Quote, ShieldCheck, Activity, Sparkles } from "lucide-react";
 import { Divider, StatusDot, buttonClass } from "@kb/ui";
 import { SiteNav } from "@/components/SiteNav";
 import { SiteFooter } from "@/components/SiteFooter";
+import { LOGIN_URL, REGISTER_URL } from "@/lib/config";
 
 const STEPS = [
   {
@@ -64,13 +64,13 @@ export default function LandingPage() {
               your questions with citations you can open and check.
             </p>
             <div className="hero__actions">
-              <Link className={buttonClass({ variant: "primary" })} href="/register">
+              <a className={buttonClass({ variant: "primary" })} href={REGISTER_URL}>
                 Get started
                 <Sparkles size={16} strokeWidth={1.5} />
-              </Link>
-              <Link className={buttonClass({ variant: "ghost" })} href="/login">
+              </a>
+              <a className={buttonClass({ variant: "ghost" })} href={LOGIN_URL}>
                 Log in
-              </Link>
+              </a>
             </div>
           </div>
         </section>
@@ -118,10 +118,10 @@ export default function LandingPage() {
           <div className="saga-container cta__inner">
             <h2 className="saga-heading cta__title">Start your workspace.</h2>
             <p className="cta__sub">Create a workspace, add a source, and ask your first question.</p>
-            <Link className={buttonClass({ variant: "primary" })} href="/register">
+            <a className={buttonClass({ variant: "primary" })} href={REGISTER_URL}>
               Get started
               <Sparkles size={16} strokeWidth={1.5} />
-            </Link>
+            </a>
           </div>
         </section>
       </main>

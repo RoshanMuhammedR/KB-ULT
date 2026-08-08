@@ -25,15 +25,23 @@ from __future__ import annotations
 import json
 from typing import Protocol
 
-from sqlalchemy import select
-
 from src.core.exceptions import AuthError
 from src.core.identity import Identity
-from src.core.tenant_context import system_scope
 from src.domain.interfaces.auth import ITokenService
 
-# Prefixes that never require authentication: auth (pre-tenant), health, and the API docs.
-_EXEMPT_PREFIXES = ("/auth", "/health", "/docs", "/redoc", "/openapi.json")
+# Paths that never require authentication: the credential-issuing endpoints (which run
+# pre-identity by definition), health, and the API docs. Note this is deliberately NOT the
+# whole `/auth` tree — `/auth/me` is authenticated like any other route.
+_EXEMPT_PREFIXES = (
+    "/auth/login",
+    "/auth/register",
+    "/auth/refresh",
+    "/auth/logout",
+    "/health",
+    "/docs",
+    "/redoc",
+    "/openapi.json",
+)
 
 # ASGI scope key the resolved identity is published under for the tenant-context layer.
 SCOPE_IDENTITY_KEY = "kb.identity"
@@ -62,45 +70,6 @@ class BearerTokenAuthenticator:
             return None
         claims = self.token_service.decode_access_token(token)  # raises AuthError
         return Identity(tenant_id=claims.tenant_id, user_id=claims.user_id)
-
-
-class DefaultTenantAuthenticator:
-    """Rollout-only fallback: attributes credential-less requests to the seeded default
-    tenant so the pre-auth web client keeps working. Wired in only while
-    ``tenancy_default_fallback`` is on; dropping it makes missing credentials a hard 401.
-
-    It never raises, so it can only be the *last* link in the chain — a present-but-invalid
-    bearer token has already raised out of ``BearerTokenAuthenticator`` before we get here.
-    """
-
-    def __init__(self) -> None:
-        self._identity: Identity | None = None
-
-    def authenticate(self, scope) -> Identity | None:
-        if self._identity is not None:
-            return self._identity
-        # tenants/users are not tenant-scoped and there is no context yet, so read the
-        # seeded default under system_scope. Resolved once and cached.
-        from src.infrastructure.database.models import TenantModel, UserModel
-        from src.infrastructure.database.session import SessionLocal
-
-        with system_scope():
-            db = SessionLocal()
-            try:
-                tenant = db.scalar(
-                    select(TenantModel).where(TenantModel.domain == "default")
-                ) or db.scalar(select(TenantModel).order_by(TenantModel.created_at).limit(1))
-                if tenant is None:
-                    return None
-                user = db.scalar(
-                    select(UserModel).where(UserModel.tenant_id == tenant.id).limit(1)
-                )
-                if user is None:
-                    return None
-                self._identity = Identity(tenant_id=tenant.id, user_id=user.id)
-                return self._identity
-            finally:
-                db.close()
 
 
 class AuthenticationMiddleware:

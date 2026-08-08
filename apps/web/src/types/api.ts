@@ -89,29 +89,34 @@ export type TokenResponse = {
 };
 
 export type LoginRequest = {
-  domain: string;
   email: string;
   password: string;
+};
+
+export type RegisterRequest = {
+  email: string;
+  password: string;
+  name?: string;
 };
 
 // The current identity, resolved from /auth/me for the account area.
 export type MeResponse = {
   user_id: string;
   email: string;
-  tenant_id: string;
-  domain: string;
   name: string;
+  tenant_id: string;
+  workspace_name: string;
 };
 
 // What we persist client-side (in a host-scoped cookie). The access JWT only carries
-// tid/sub, so email/domain/name come from /auth/me. `remember` drives cookie lifetime:
+// tid/sub, so email/name/workspace come from /auth/me. `remember` drives cookie lifetime:
 // a persistent cookie when true, a session cookie (cleared on browser close) when false.
 export type Session = {
   accessToken: string;
   refreshToken: string;
   email: string;
-  domain: string;
   name: string;
+  workspaceName: string;
   expiresAt: number; // epoch ms
   remember: boolean;
 };

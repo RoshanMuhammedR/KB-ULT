@@ -1,6 +1,9 @@
 import type { ReactNode } from "react";
-import Link from "next/link";
 import { Logo, StatusDot } from "@kb/ui";
+
+// The marketing site is a separate app. In production it is `/` on this same origin (Caddy
+// routes /app/* here and /* there); in dev it runs on its own port.
+const WEBSITE_URL = process.env.NEXT_PUBLIC_WEBSITE_URL ?? "/";
 
 /** Two-pane auth layout: an editorial aside on the left, the form panel on the right. */
 export function AuthShell({
@@ -15,9 +18,10 @@ export function AuthShell({
   return (
     <div className="auth">
       <aside className="auth__aside">
-        <Link href="/" aria-label="Saga home">
+        {/* A plain anchor, not next/link: this leaves the basePath'd app entirely. */}
+        <a href={WEBSITE_URL} aria-label="Saga home">
           <Logo />
-        </Link>
+        </a>
         <div>
           <h2 className="auth__aside-title">{asideTitle}</h2>
           <p className="auth__aside-sub">{asideSub}</p>

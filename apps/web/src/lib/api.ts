@@ -5,11 +5,14 @@ import type {
   KnowledgeAsset,
   LoginRequest,
   MeResponse,
+  RegisterRequest,
   TokenResponse
 } from "@/types/api";
 import { clearSession, getAccessToken, getRefreshToken, getSession, saveSession } from "@/lib/auth";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+// Same-origin in production (Caddy routes /api/* to FastAPI); an absolute URL in dev, where
+// the API runs on its own port.
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "/api";
 
 class ApiError extends Error {
   status: number;
@@ -49,9 +52,13 @@ async function tryRefresh(): Promise<boolean> {
   return true;
 }
 
+// A hard redirect, so it must carry the basePath itself — unlike next/navigation's router,
+// window.location knows nothing about it.
+const LOGIN_PATH = "/app/login";
+
 function redirectToLogin(): void {
-  if (typeof window !== "undefined" && !window.location.pathname.startsWith("/login")) {
-    window.location.assign("/login");
+  if (typeof window !== "undefined" && window.location.pathname !== LOGIN_PATH) {
+    window.location.assign(LOGIN_PATH);
   }
 }
 
@@ -92,9 +99,9 @@ function jsonBody(data: unknown): RequestInit {
 export function login(data: LoginRequest): Promise<TokenResponse> {
   return request<TokenResponse>("/auth/login", jsonBody(data), { auth: false });
 }
-// Redeem a single-use cross-domain handoff code (issued on the marketing site) for a session.
-export function exchangeHandoff(code: string): Promise<TokenResponse> {
-  return request<TokenResponse>("/auth/handoff/exchange", jsonBody({ code }), { auth: false });
+// Create a workspace and its owner user; the response is an already-signed-in session.
+export function register(data: RegisterRequest): Promise<TokenResponse> {
+  return request<TokenResponse>("/auth/register", jsonBody(data), { auth: false });
 }
 // The current identity, for the account area. Uses the bearer token + silent refresh.
 export function getMe(): Promise<MeResponse> {

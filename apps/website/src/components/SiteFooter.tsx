@@ -1,5 +1,5 @@
-import Link from "next/link";
 import { Logo } from "@kb/ui";
+import { LOGIN_URL, REGISTER_URL } from "@/lib/config";
 
 export function SiteFooter() {
   return (
@@ -7,12 +7,12 @@ export function SiteFooter() {
       <div className="saga-container site-footer__inner">
         <Logo />
         <div className="site-footer__links">
-          <Link className="saga-navlink" href="/register">
+          <a className="saga-navlink" href={REGISTER_URL}>
             Get started
-          </Link>
-          <Link className="saga-navlink" href="/login">
+          </a>
+          <a className="saga-navlink" href={LOGIN_URL}>
             Log in
-          </Link>
+          </a>
           <a className="saga-navlink" href="mailto:hello@saga.dev">
             hello@saga.dev
           </a>

@@ -7,7 +7,7 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from src.core.exceptions import AuthError, DomainAlreadyExistsError
+from src.core.exceptions import EmailAlreadyExistsError
 from src.domain.entities.refresh_token import RefreshToken
 from src.domain.entities.tenant import Tenant
 from src.domain.entities.user import User
@@ -34,19 +34,12 @@ class TenantRepository:
         model = self.db.get(TenantModel, tenant_id)
         return tenant_to_domain(model) if model else None
 
-    def get_by_domain(self, domain: str) -> Tenant | None:
-        model = self.db.scalar(select(TenantModel).where(TenantModel.domain == domain))
-        return tenant_to_domain(model) if model else None
-
     def create(self, tenant: Tenant) -> Tenant:
-        model = TenantModel(
-            id=tenant.id, name=tenant.name, domain=tenant.domain, status=str(tenant.status)
-        )
+        # Nothing about a tenant is unique, so this cannot conflict — the uniqueness that can
+        # fail registration lives on `users.email` below.
+        model = TenantModel(id=tenant.id, name=tenant.name, status=str(tenant.status))
         self.db.add(model)
-        try:
-            self.db.flush()
-        except IntegrityError as exc:  # the global-unique `domain` constraint
-            raise DomainAlreadyExistsError(f"Domain '{tenant.domain}' is taken") from exc
+        self.db.flush()
         self.db.refresh(model)
         return tenant_to_domain(model)
 
@@ -59,10 +52,9 @@ class UserRepository:
         model = self.db.get(UserModel, user_id)
         return user_to_domain(model) if model else None
 
-    def get_by_tenant_and_email(self, tenant_id: UUID, email: str) -> User | None:
-        model = self.db.scalar(
-            select(UserModel).where(UserModel.tenant_id == tenant_id, UserModel.email == email)
-        )
+    def get_by_email(self, email: str) -> User | None:
+        # Email is globally unique, so this is the whole of login's subject resolution.
+        model = self.db.scalar(select(UserModel).where(UserModel.email == email))
         return user_to_domain(model) if model else None
 
     def create(self, user: User) -> User:
@@ -71,13 +63,15 @@ class UserRepository:
             tenant_id=user.tenant_id,
             email=user.email,
             password_hash=user.password_hash,
+            name=user.name,
             status=str(user.status),
+            email_verified_at=user.email_verified_at,
         )
         self.db.add(model)
         try:
             self.db.flush()
-        except IntegrityError as exc:  # one-per-tenant or (tenant, email) uniqueness
-            raise AuthError("User already exists for this tenant") from exc
+        except IntegrityError as exc:  # the global-unique `uq_users_email` constraint
+            raise EmailAlreadyExistsError("That email is already registered") from exc
         self.db.refresh(model)
         return user_to_domain(model)
 

@@ -24,7 +24,7 @@ from src.domain.entities import SourceType
 from src.domain.interfaces import IFileStorage, IJobQueue
 from src.domain.interfaces.auth import ITokenService
 from src.domain.interfaces.cache import ICache
-from src.http.middleware import BearerTokenAuthenticator, DefaultTenantAuthenticator
+from src.http.middleware import BearerTokenAuthenticator
 from src.infrastructure.ai_providers import AICreditsEmbeddingProvider, AICreditsLLMProvider
 from src.infrastructure.auth import Argon2PasswordHasher, JwtTokenService
 from src.infrastructure.cache import ValkeyCache
@@ -156,12 +156,9 @@ def build_token_service(settings: Settings) -> ITokenService:
 
 def build_authenticators(settings: Settings) -> list:
     # The credential-recognition chain the AuthenticationMiddleware runs in order. Bearer
-    # tokens first; the default-tenant fallback (rollout only) last, so a present-but-invalid
-    # token 401s instead of silently falling back to the default tenant.
-    authenticators: list = [BearerTokenAuthenticator(build_token_service(settings))]
-    if settings.tenancy_default_fallback:
-        authenticators.append(DefaultTenantAuthenticator())
-    return authenticators
+    # tokens are the only mechanism today; API keys or OAuth would be appended here without
+    # the tenant layer changing. No credential means a 401 — there is no fallback identity.
+    return [BearerTokenAuthenticator(build_token_service(settings))]
 
 
 def build_auth_service(db: Session, settings: Settings) -> AuthService:
@@ -175,8 +172,4 @@ def build_auth_service(db: Session, settings: Settings) -> AuthService:
         token_service=build_token_service(settings),
         unit_of_work=db,
         refresh_ttl_seconds=settings.refresh_token_ttl_seconds,
-        cache=build_cache(settings),
-        handoff_ttl_seconds=settings.handoff_code_ttl_seconds,
-        enforce_login_origin=settings.enforce_login_origin,
-        login_origin_bypass_hosts=settings.login_origin_bypass_hosts,
     )

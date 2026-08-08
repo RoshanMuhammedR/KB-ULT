@@ -12,17 +12,17 @@ from src.infrastructure.database.tenancy import TenantScoped
 
 
 class TenantModel(Base):
-    """A tenant — the top-level isolation boundary. Identified by a globally-unique
-    `domain` slug (see the auth/tenancy plan). Not itself `TenantScoped`: it is the
-    root of the tenant chain and is read pre-auth (during login) under `system_scope`.
+    """A tenant — the top-level isolation boundary, i.e. a workspace. It carries no
+    externally-addressable identifier: a tenant is reached only through one of its users.
+    Not itself `TenantScoped`: it is the root of the tenant chain and is read pre-auth
+    (during login) under `system_scope`.
     """
 
     __tablename__ = "tenants"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # A display label only — deliberately not unique.
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    # Globally unique across all tenants — how a login request resolves its tenant.
-    domain: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
     # active | suspended | deleted (stored as a string, like the existing AssetStatus).
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="active")
     created_at = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
@@ -31,17 +31,18 @@ class TenantModel(Base):
 
 
 class UserModel(Base):
-    """A tenant's user. Exactly one per tenant today, enforced by `uq_users_one_per_tenant`
-    (a UNIQUE on `tenant_id`) — dropping that constraint later enables multiple users with
-    no domain-table migration. Email is unique **within** a tenant, not globally.
+    """A tenant's user, and the subject of every credential.
+
+    `email` is unique **globally** (`uq_users_email`), which is what lets a login present an
+    email alone and resolve both the user and their tenant. Registration creates exactly one
+    owner per tenant, but nothing in the schema forbids more — adding teammates later needs
+    no migration on the domain tables.
+
     Not `TenantScoped`: read pre-auth (login) under `system_scope`.
     """
 
     __tablename__ = "users"
-    __table_args__ = (
-        UniqueConstraint("tenant_id", name="uq_users_one_per_tenant"),
-        UniqueConstraint("tenant_id", "email", name="uq_users_tenant_email"),
-    )
+    __table_args__ = (UniqueConstraint("email", name="uq_users_email"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(
@@ -50,8 +51,12 @@ class UserModel(Base):
     # Stored lowercased; compared case-insensitively at the app layer (no citext).
     email: Mapped[str] = mapped_column(String(320), nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     # active | suspended | deleted | invited.
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="active")
+    # Unused today (registration activates immediately); present so an email-verification
+    # flow can be added without a schema change.
+    email_verified_at = mapped_column(DateTime(timezone=True), nullable=True)
     created_at = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
     deleted_at = mapped_column(DateTime(timezone=True), nullable=True)

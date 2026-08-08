@@ -3,7 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { Session, TokenResponse } from "@/types/api";
-import { clearSession, currentDomain, getSession, saveSession } from "@/lib/auth";
+import { clearSession, getSession, saveSession } from "@/lib/auth";
 import * as api from "@/lib/api";
 
 type Status = "loading" | "authed" | "anon";
@@ -11,15 +11,14 @@ type Status = "loading" | "authed" | "anon";
 type AuthValue = {
   session: Session | null;
   status: Status;
-  /** Domain is derived from the host; `domainOverride` is only for plain-localhost dev. */
-  login: (
+  login: (email: string, password: string, remember: boolean) => Promise<void>;
+  /** Create a workspace and sign straight into it. */
+  register: (
     email: string,
     password: string,
-    remember: boolean,
-    domainOverride?: string
+    name: string | undefined,
+    remember: boolean
   ) => Promise<void>;
-  /** Redeem a cross-domain handoff code (the /bootstrap page). */
-  completeHandoff: (code: string, remember: boolean) => Promise<void>;
   logout: () => Promise<void>;
 };
 
@@ -40,7 +39,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       api
         .getMe()
         .then((me) => {
-          const next: Session = { ...s, email: me.email, domain: me.domain, name: me.name };
+          const next: Session = {
+            ...s,
+            email: me.email,
+            name: me.name,
+            workspaceName: me.workspace_name
+          };
           saveSession(next);
           setSession(next);
         })
@@ -54,8 +58,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       accessToken: tokens.access_token,
       refreshToken: tokens.refresh_token,
       email: "",
-      domain: currentDomain(),
       name: "",
+      workspaceName: "",
       expiresAt: Date.now() + tokens.expires_in * 1000,
       remember
     };
@@ -63,7 +67,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     let full = base;
     try {
       const me = await api.getMe();
-      full = { ...base, email: me.email, domain: me.domain, name: me.name };
+      full = { ...base, email: me.email, name: me.name, workspaceName: me.workspace_name };
       saveSession(full);
     } catch {
       // Keep the base session even if profile hydration fails — tokens are still valid.
@@ -73,17 +77,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const login = useCallback(
-    async (email: string, password: string, remember: boolean, domainOverride?: string) => {
-      const domain = (domainOverride?.trim() || currentDomain()).toLowerCase();
-      const tokens = await api.login({ domain, email, password });
+    async (email: string, password: string, remember: boolean) => {
+      const tokens = await api.login({ email: email.trim().toLowerCase(), password });
       await establish(tokens, remember);
     },
     [establish]
   );
 
-  const completeHandoff = useCallback(
-    async (code: string, remember: boolean) => {
-      const tokens = await api.exchangeHandoff(code);
+  const register = useCallback(
+    async (email: string, password: string, name: string | undefined, remember: boolean) => {
+      const tokens = await api.register({ email: email.trim().toLowerCase(), password, name });
       await establish(tokens, remember);
     },
     [establish]
@@ -98,8 +101,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [router]);
 
   const value = useMemo(
-    () => ({ session, status, login, completeHandoff, logout }),
-    [session, status, login, completeHandoff, logout]
+    () => ({ session, status, login, register, logout }),
+    [session, status, login, register, logout]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Logo, buttonClass } from "@kb/ui";
+import { LOGIN_URL, REGISTER_URL } from "@/lib/config";
 
 /** Transparent top bar floating over the obsidian canvas, closed by a 1px graphite rule. */
 export function SiteNav() {
@@ -17,13 +18,14 @@ export function SiteNav() {
             Features
           </Link>
         </nav>
+        {/* Plain anchors: auth lives in the product app, which is a separate Next app. */}
         <div className="site-nav__actions">
-          <Link className={buttonClass({ variant: "ghost", size: "sm" })} href="/login">
+          <a className={buttonClass({ variant: "ghost", size: "sm" })} href={LOGIN_URL}>
             Log in
-          </Link>
-          <Link className={buttonClass({ variant: "primary", size: "sm" })} href="/register">
+          </a>
+          <a className={buttonClass({ variant: "primary", size: "sm" })} href={REGISTER_URL}>
             Get started
-          </Link>
+          </a>
         </div>
       </div>
     </header>

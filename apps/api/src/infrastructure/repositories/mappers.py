@@ -26,7 +26,6 @@ def tenant_to_domain(model: TenantModel) -> Tenant:
     return Tenant(
         id=model.id,
         name=model.name,
-        domain=model.domain,
         status=TenantStatus(model.status),
         created_at=model.created_at,
         updated_at=model.updated_at,
@@ -40,7 +39,9 @@ def user_to_domain(model: UserModel) -> User:
         tenant_id=model.tenant_id,
         email=model.email,
         password_hash=model.password_hash,
+        name=model.name,
         status=UserStatus(model.status),
+        email_verified_at=model.email_verified_at,
         created_at=model.created_at,
         updated_at=model.updated_at,
         deleted_at=model.deleted_at,

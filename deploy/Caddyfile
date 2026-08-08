@@ -1,0 +1,31 @@
+# One port, three apps. AIC's shared proxy terminates TLS upstream and forwards plain HTTP
+# here, so this Caddy binds :80 and issues no certificates of its own.
+:80 {
+	log {
+		output stdout
+		format console
+	}
+
+	# The real client IP arrives in X-Forwarded-For from AIC's proxy on the private subnet.
+	# Trusting only that range stops a client from choosing its own value.
+	servers {
+		trusted_proxies static 10.10.10.0/24
+	}
+
+	# API. handle_path STRIPS the matched prefix, so /api/auth/login reaches FastAPI as
+	# /auth/login and the backend needs no knowledge of the mount point.
+	handle_path /api/* {
+		reverse_proxy api:8000
+	}
+
+	# Product app. Next is configured with basePath: "/app", so it expects to SEE the
+	# prefix — plain `handle`, not `handle_path`.
+	handle /app* {
+		reverse_proxy web:3000
+	}
+
+	# Everything else is the marketing site.
+	handle {
+		reverse_proxy website:3000
+	}
+}

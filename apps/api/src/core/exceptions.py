@@ -32,8 +32,8 @@ class AuthError(KBError):
     """Base for authentication/registration failures."""
 
 
-class DomainAlreadyExistsError(AuthError):
-    """Registration hit the global-unique `tenants.domain` constraint."""
+class EmailAlreadyExistsError(AuthError):
+    """Registration hit the global-unique `users.email` constraint."""
 
 
 class InvalidCredentialsError(AuthError):

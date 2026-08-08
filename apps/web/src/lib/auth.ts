@@ -1,7 +1,7 @@
 // Client-side session storage — a host-scoped cookie (readable by JS; the API auth is still
 // bearer, so we read the token out to set the Authorization header). A cookie (not
-// localStorage) lets "remember me" choose between a persistent cookie and a session cookie,
-// and is what the cross-domain /bootstrap handoff sets on the tenant domain.
+// localStorage) is what lets "remember me" choose between a persistent cookie and a session
+// cookie that dies with the browser.
 import type { Session } from "@/types/api";
 
 const KEY = "saga.session";
@@ -49,12 +49,4 @@ export function getAccessToken(): string | null {
 
 export function getRefreshToken(): string | null {
   return getSession()?.refreshToken ?? null;
-}
-
-// The tenant this app instance belongs to is its own hostname (e.g. acme.test). On plain
-// localhost there is no tenant domain — callers treat an empty string as "ask the user".
-export function currentDomain(): string {
-  if (typeof window === "undefined") return "";
-  const host = window.location.hostname;
-  return host === "localhost" || host === "127.0.0.1" ? "" : host;
 }

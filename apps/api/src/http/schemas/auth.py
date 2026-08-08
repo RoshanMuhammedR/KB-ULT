@@ -4,15 +4,13 @@ from pydantic import BaseModel, Field
 
 
 class RegisterRequest(BaseModel):
-    # `domain` is the tenant's globally-unique slug; it also identifies the tenant at login.
-    domain: str = Field(min_length=1, max_length=255)
+    # Email is the account's globally-unique identifier; `name` only labels the workspace.
     email: str = Field(min_length=3, max_length=320)
     password: str = Field(min_length=8, max_length=1024)
     name: str | None = Field(default=None, max_length=255)
 
 
 class LoginRequest(BaseModel):
-    domain: str = Field(min_length=1, max_length=255)
     email: str = Field(min_length=3, max_length=320)
     password: str = Field(min_length=1, max_length=1024)
 
@@ -32,19 +30,9 @@ class TokenResponse(BaseModel):
     expires_in: int
 
 
-class HandoffIssueResponse(BaseModel):
-    # A single-use, short-lived code the tenant domain exchanges for a fresh session.
-    code: str
-    expires_in: int
-
-
-class HandoffExchangeRequest(BaseModel):
-    code: str = Field(min_length=1, max_length=512)
-
-
 class MeResponse(BaseModel):
     user_id: str
     email: str
-    tenant_id: str
-    domain: str
     name: str
+    tenant_id: str
+    workspace_name: str

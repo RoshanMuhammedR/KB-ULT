@@ -4,8 +4,11 @@ const nextConfig: NextConfig = {
   reactStrictMode: true,
   // @kb/ui ships raw TSX, so Next must transpile it.
   transpilePackages: ["@kb/ui"],
-  // Allow the mapped dev domains (see scripts/dev-domains.mjs) as dev origins.
-  allowedDevOrigins: ["localhost", "127.0.0.1", "saga.test", "acme.test", "admin.test"]
+  // The product app is served under /app so it can share one origin (and one published
+  // port) with the marketing site — Caddy routes /app/* here and /* to the website.
+  basePath: "/app",
+  // Self-contained server bundle for the production image (see apps/web/Dockerfile).
+  output: "standalone"
 };
 
 export default nextConfig;

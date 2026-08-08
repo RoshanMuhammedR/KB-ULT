@@ -12,18 +12,18 @@ The worker keeps a **persisted event log**: each pipeline transition/terminal st
 
 ## Multi-Tenancy & Auth
 
-The system is **multi-tenant with row-level isolation**. A **tenant** is the isolation boundary, identified by a globally-unique `domain` slug; each tenant has (today) exactly one **user**, enforced by a `UNIQUE(tenant_id)` constraint that can be dropped later with no domain-table migration. Every domain table stores `tenant_id` **and** `user_id`.
+The system is **multi-tenant with row-level isolation**. A **tenant** is the isolation boundary — a workspace. It has no externally-addressable identifier: a tenant is reached only *through* one of its **users**, whose `email` is unique globally. Registration creates one owner user per tenant, but nothing in the schema forbids more, so adding teammates later needs no domain-table migration. Every domain table stores `tenant_id` **and** `user_id`.
 
 Isolation is enforced in **two layers**, both driven from one source of truth — the current tenant, held in a `contextvars` variable (`core/tenant_context.py`):
 
 1. **ORM auto-filter** (the Prisma-extension equivalent, `infrastructure/database/tenancy.py`). A `TenantScoped` mixin marks tenant-owned models; session listeners then (a) append a `with_loader_criteria` tenant filter to every SELECT/UPDATE/DELETE touching a scoped entity, and (b) stamp `tenant_id`/`user_id` onto inserts. It **fails closed**: a scoped query with no tenant in context raises `MissingTenantContextError`. `system_scope()` suspends it for pre-auth/cross-tenant work.
-2. **Postgres RLS** (migration `0006`). A per-table policy keyed on `current_setting('app.current_tenant')` is the database backstop for raw SQL, `Session.get()`, and future bugs. The ORM sessions connect as a **non-superuser role** (`kb_app`, `APP_DATABASE_URL`) so RLS actually applies; an `after_begin` listener sets the GUC each transaction. Migrations and the Procrastinate connector keep the superuser role.
+2. **Postgres RLS** (migration `0001`). A per-table policy keyed on `current_setting('app.current_tenant')` is the database backstop for raw SQL, `Session.get()`, and future bugs. The ORM sessions connect as a **non-superuser role** (`kb_app`, `APP_DATABASE_URL`) so RLS actually applies; an `after_begin` listener sets the GUC each transaction. Migrations and the Procrastinate connector keep the superuser role.
 
 **Context propagation.** HTTP uses two pure-ASGI layers with separated responsibilities: an `AuthenticationMiddleware` runs a chain of `Authenticator`s (bearer token today; API keys/OAuth later) that establish *who* is calling and produce a mechanism-agnostic `Identity` (`tenant_id`/`user_id`), and a downstream `TenantContextMiddleware` binds that `Identity` into the contextvars — it neither decodes tokens nor knows how identity was proven. New credential types are added as authenticators without touching tenant binding. Background jobs have no request, so every payload carries `tenant_id`/`user_id` and a shared `@tenant_task` wrapper re-establishes context (and fails loud if absent).
 
-**Auth.** Registration creates a tenant + its user atomically. Login resolves the tenant by `domain`, verifies the (Argon2id) password, and returns a short-lived **access JWT** (`tid`/`sub`, ~15 min) plus a **rotating refresh token** (stored hashed in Postgres; reuse revokes the family). All auth crypto sits behind ports (`IPasswordHasher`, `ITokenService`) in `infrastructure/auth/`.
+**Auth.** Ordinary **email + password**. Registration creates a tenant + its owner user atomically. Login looks the user up by email (globally unique, so no tenant selector is needed), verifies the (Argon2id) password, and returns a short-lived **access JWT** (`tid`/`sub`, ~15 min) plus a **rotating refresh token** (stored hashed in Postgres; reuse revokes the family). Every failure path returns one generic 401 — the specific reason is logged server-side only, so the endpoint cannot be used to enumerate accounts. There is no fallback identity: a request without a valid credential is a 401. All auth crypto sits behind ports (`IPasswordHasher`, `ITokenService`) in `infrastructure/auth/`.
 
-**Caching.** Valkey is the cache; tenant-scoped keys must be built with `tenant_cache_key` (`tenant:{tenant_id}:…`), which fails closed without a tenant — cross-tenant cache bleed is structurally impossible.
+**Caching.** Valkey is the cache; tenant-scoped keys must be built with `tenant_cache_key` (`tenant:{tenant_id}:…`), which fails closed without a tenant — cross-tenant cache bleed is structurally impossible. No code path uses the cache today; the port and adapter are kept for the next feature that needs one.
 
 ## Backend Structure
 
@@ -163,10 +163,11 @@ grep -r "import langchain" apps/api/src/
 ## API
 
 - `GET /health`
-- `POST /auth/register` — create a tenant + its user; returns access + refresh tokens
-- `POST /auth/login` — resolve tenant by `domain`, verify credentials; returns tokens
+- `POST /auth/register` — create a workspace + its owner user (email, password, optional name); returns access + refresh tokens
+- `POST /auth/login` — email + password; returns tokens
 - `POST /auth/refresh` — rotate the refresh token; returns new tokens
 - `POST /auth/logout` — revoke the refresh-token family
+- `GET /auth/me` — the current identity (email, name, workspace) for the account area
 - `GET /documents`
 - `GET /documents/{asset_id}` — single asset + latest job (status polling)
 - `GET /documents/{asset_id}/events` — persisted worker-log trail for the asset
@@ -181,8 +182,8 @@ grep -r "import langchain" apps/api/src/
 
 ## Data Model
 
-- `Tenant`: the isolation boundary — globally-unique `domain`, `status` (active/suspended/deleted).
-- `User`: a tenant's user — `(tenant_id, email)` unique, one-per-tenant via `UNIQUE(tenant_id)`, `status` (active/suspended/deleted/invited), Argon2id `password_hash`.
+- `Tenant`: the isolation boundary (a workspace) — display `name` (not unique), `status` (active/suspended/deleted). Carries no addressable identifier.
+- `User`: a tenant's user and the subject of every credential — globally unique `email` (`uq_users_email`), Argon2id `password_hash`, `name`, `status` (active/suspended/deleted/invited), and a nullable `email_verified_at` reserved for a future verification flow.
 - `RefreshToken`: durable, revocable refresh-token record (hash + `family_id`); rotation-based revocation.
 - Every domain table below also carries `tenant_id` + `user_id` (`TenantScoped`).
 - `KnowledgeBase`: default container, with nullable `owner_id` (legacy, superseded by `tenant_id`/`user_id`).
