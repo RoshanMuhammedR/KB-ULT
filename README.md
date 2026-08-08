@@ -1,5 +1,7 @@
 # AI Knowledge Base PDF MVP
 
+**🔗 Live: [https://saga.dedyn.io](https://saga.dedyn.io)** — [sign up](https://saga.dedyn.io/app/register) · [log in](https://saga.dedyn.io/app/login) · [API health](https://saga.dedyn.io/api/health)
+
 Backend-first RAG MVP for uploading PDFs, ingesting them into PostgreSQL/pgvector, and chatting with citation-backed answers through AICredits.
 
 ## Run Locally
@@ -61,18 +63,22 @@ legacy binary.
 
 Built now:
 
+- Email + password authentication (register, login, rotating refresh tokens)
+- Multi-tenancy enforced by an ORM tenant filter **and** Postgres row-level security
+- Asynchronous ingestion: a Procrastinate queue and a worker with retry accounting
 - PDF upload and Docling Markdown extraction
+- YouTube transcripts as a second source type
 - Filebase S3-compatible object storage for uploaded PDFs
 - Token-aware chunking
 - AICredits/OpenAI-compatible embeddings
 - pgvector storage and retrieval
 - AICredits/OpenAI-compatible chat
 - Citation-backed answers
+- Push-to-deploy CI/CD onto a VPS behind a health gate
 
-Documented only:
+Not built yet:
 
-- Background jobs
-- Authentication and multi-tenancy enforcement
+- Email verification and password reset (`users.email_verified_at` is reserved for it)
+- More than one user per workspace (the schema allows it; nothing creates them)
 - Conversation persistence
-- Additional sources
 - Hybrid search, reranking, semantic chunking, alternate vector stores
