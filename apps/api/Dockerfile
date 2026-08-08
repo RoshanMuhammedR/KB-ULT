@@ -20,10 +20,14 @@ RUN mkdir -p src && touch src/__init__.py \
 
 FROM python:3.12-slim AS runtime
 
+# /app MUST come before site-packages. The builder installs the project itself, which
+# includes a stub `src` package; a console script like `procrastinate` puts its own bin
+# directory on sys.path rather than the cwd, so without /app first that empty stub shadows
+# the real source and the worker dies with ModuleNotFoundError on src.infrastructure.
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH="/install/bin:$PATH" \
-    PYTHONPATH=/install/lib/python3.12/site-packages
+    PYTHONPATH=/app:/install/lib/python3.12/site-packages
 
 # curl is used by the container healthcheck below.
 RUN apt-get update \

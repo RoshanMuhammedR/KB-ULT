@@ -1,15 +1,20 @@
 # One port, three apps. AIC's shared proxy terminates TLS upstream and forwards plain HTTP
 # here, so this Caddy binds :80 and issues no certificates of its own.
-:80 {
-	log {
-		output stdout
-		format console
-	}
 
+# Global options. `servers` is a GLOBAL directive — Caddy rejects the whole config with
+# "unrecognized directive: servers" if it appears inside a site block.
+{
 	# The real client IP arrives in X-Forwarded-For from AIC's proxy on the private subnet.
 	# Trusting only that range stops a client from choosing its own value.
 	servers {
 		trusted_proxies static 10.10.10.0/24
+	}
+}
+
+:80 {
+	log {
+		output stdout
+		format console
 	}
 
 	# API. handle_path STRIPS the matched prefix, so /api/auth/login reaches FastAPI as

@@ -44,20 +44,64 @@ wait_healthy() {
 	return 1
 }
 
+# The api healthcheck alone is not proof the deploy is good: it passes while caddy (the only
+# publicly reachable service) or the worker is crash-looping. So we also drive the real
+# published port and refuse anything stuck restarting.
+verify_stack() {
+	local port restarting code
+	port="$(sed -n -E 's/^APP_PORT=(.*)$/\1/p' .env | tail -1)"
+	port="${port:-80}"
+
+	restarting="$(docker compose ps --format '{{.Service}} {{.Status}}' | grep -i restarting || true)"
+	if [ -n "$restarting" ]; then
+		echo "!!! containers stuck restarting:" >&2
+		printf '%s\n' "$restarting" >&2
+		return 1
+	fi
+
+	# Through caddy, exactly as AIC's proxy will arrive.
+	for path in /api/health /app/login /; do
+		code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -H "Host: ${APP_BASE_URL#https://}" "http://127.0.0.1:${port}${path}" || echo 000)"
+		echo "    ${path} -> ${code}"
+		case "$code" in
+		2* | 3*) ;;
+		*)
+			echo "!!! ${path} returned ${code} through the published port" >&2
+			return 1
+			;;
+		esac
+	done
+	return 0
+}
+
 echo "==> deploying $NEW_TAG (current: $PREV_TAG)"
 set_tag "$NEW_TAG"
 docker compose pull
 docker compose up -d --remove-orphans
 
+# APP_BASE_URL is only needed for the Host header in verify_stack.
+set -a
+# shellcheck disable=SC1091
+. ./.env
+set +a
+
 if wait_healthy; then
-	echo "==> healthy on $NEW_TAG"
-	docker image prune -f >/dev/null || true
-	docker compose ps
-	exit 0
+	echo "==> api healthy — verifying the whole stack through :${APP_PORT}"
+	# Give caddy and the worker a moment to settle before judging them.
+	sleep 5
+	if verify_stack; then
+		echo "==> deploy verified on $NEW_TAG"
+		docker image prune -f >/dev/null || true
+		docker compose ps
+		exit 0
+	fi
+	echo "!!! stack verification failed" >&2
 fi
 
-echo "!!! $SERVICE unhealthy after ${HEALTH_TIMEOUT}s — rolling back to $PREV_TAG" >&2
-docker compose logs --tail=80 "$SERVICE" >&2 || true
+echo "!!! deploy of $NEW_TAG failed — rolling back to $PREV_TAG" >&2
+# Logs from every service, not just the health-gated one: the failure is often in caddy or
+# the worker, which is precisely what the api healthcheck cannot see.
+docker compose logs --tail=40 >&2 || true
 set_tag "$PREV_TAG"
 docker compose up -d --remove-orphans >&2 || true
 exit 1
