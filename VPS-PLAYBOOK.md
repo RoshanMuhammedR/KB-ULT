@@ -646,6 +646,10 @@ docker run --rm --entrypoint sh IMAGE -c \
   'find / -name "*.so*" 2>/dev/null | xargs -r -n1 ldd 2>/dev/null | grep "not found" | sort -u'
 ```
 
+**Torch wants a C++ compiler at inference time.** Immediately behind the OpenCV problem, the same worker failed with `InvalidCxxCompiler: No working C++ compiler found in torch._inductor.config.cpp.cxx: (None, 'g++')`. `torch.compile`'s inductor backend *generates C++ and invokes g++ while serving a request*, so a multi-stage build that correctly leaves compilers out of the runtime stage breaks the moment real work arrives. Set `ENV TORCHDYNAMO_DISABLE=1` — `torch.compile` becomes a no-op and the eager path is fine. Shipping a compiler instead costs ~200 MB and a JIT compile on a 4 GB box for no benefit.
+
+**Both of the above share one shape, and it is the real lesson: a green deploy proves the process starts, not that it works.** Health gates check liveness, and liveness only exercises import-time code. Anything lazy — a model loaded on first use, a compiler invoked on first inference, a bucket written to on first upload — is invisible until a user finds it. Where a feature has a heavy lazy path, run one real transaction through the deployed stack as the last deploy step, or accept that your users are your smoke test.
+
 **`docker compose down` removes volumes if you pass `-v`.** Do not. For a proxied stack, `caddy_data`-style volumes hold certificates and losing them burns issuance rate limits.
 
 **The AIC domain mapping can fail silently.** Always confirm with the "Domain Parked" check in Step 3 rather than assuming the form saved.

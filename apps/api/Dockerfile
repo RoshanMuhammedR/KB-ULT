@@ -46,9 +46,17 @@ FROM python:3.12-slim AS runtime
 # includes a stub `src` package; a console script like `procrastinate` puts its own bin
 # directory on sys.path rather than the cwd, so without /app first that empty stub shadows
 # the real source and the worker dies with ModuleNotFoundError on src.infrastructure.
+#
+# TORCHDYNAMO_DISABLE: docling's models reach torch.compile, whose inductor backend generates
+# C++ and shells out to g++ *at inference time*. The runtime stage has no compiler — that is
+# the entire point of it — so the first PDF fails with "InvalidCxxCompiler: No working C++
+# compiler found in torch._inductor.config.cpp.cxx: (None, 'g++')". Disabling dynamo makes
+# torch.compile a no-op and the eager path runs fine. Shipping a compiler instead would trade
+# ~200 MB and a JIT compile on a 4 GB shared box for nothing this workload needs.
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH="/install/bin:$PATH" \
+    TORCHDYNAMO_DISABLE=1 \
     PYTHONPATH=/app:/install/lib/python3.12/site-packages
 
 # curl is used by the container healthcheck below.
