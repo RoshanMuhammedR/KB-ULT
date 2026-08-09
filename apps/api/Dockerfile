@@ -17,6 +17,28 @@ COPY pyproject.toml ./
 RUN mkdir -p src && touch src/__init__.py \
   && pip install --prefix=/install .
 
+# Swap OpenCV for its headless build.
+#
+# docling -> rapidocr -> opencv-python, and docling_ibm_models' TableFormer does `import cv2`
+# whether or not OCR is enabled. The desktop wheel bundles Qt and links libGL/libxcb/libX11, so
+# in a slim container the import dies with "libxcb.so.1: cannot open shared object file" the
+# first time a PDF reaches table extraction. Installing those system libraries would work but
+# drags in ~205 MB of Mesa drivers to satisfy a library nothing here ever renders with.
+# The headless wheel is the same OpenCV without the GUI backends and has no unresolved
+# system dependencies at all.
+#
+# --no-deps because pip would otherwise pull opencv-python straight back in as rapidocr's
+# dependency. PYTHONPATH is needed for the uninstall: pip finds distributions on sys.path, and
+# --prefix installs are not on it. Consequence: `pip check` reports rapidocr's requirement as
+# unsatisfied. That is cosmetic — both packages import the identical `cv2` module.
+#
+# The import below is the regression guard: this stage shares python:3.12-slim with the runtime
+# and adds only compilers, so if a dependency ever drags the GUI wheel back in, the build fails
+# here instead of a worker failing on the first upload.
+RUN PYTHONPATH=/install/lib/python3.12/site-packages pip uninstall -y opencv-python \
+  && pip install --prefix=/install --no-deps opencv-python-headless \
+  && PYTHONPATH=/install/lib/python3.12/site-packages python -c "import cv2"
+
 
 FROM python:3.12-slim AS runtime
 

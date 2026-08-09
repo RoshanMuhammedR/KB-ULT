@@ -630,6 +630,22 @@ Leave out dependencies your app degrades gracefully without (a cache that fails 
 
 **Memory: cap it.** `-XX:MaxRAMPercentage` and similar size against the *host's* 4 GB, not the container, so one JVM will starve Postgres. Set `mem_limit`.
 
+**A slim Python image will be missing shared libraries no `pip install` mentions.** Saga's worker took every PDF as far as table extraction and then died with `ImportError: libxcb.so.1: cannot open shared object file` — `docling` → `rapidocr` → `opencv-python`, whose desktop wheel bundles Qt and links `libGL`/`libxcb`/`libX11`. Nothing in the dependency tree says so, and it only surfaces at the first upload, long after the build and the health gate are both green. `apt-get install libgl1` fixes it and costs ~205 MB of Mesa drivers for a library that never renders anything; prefer the headless wheel:
+
+```dockerfile
+RUN PYTHONPATH=/install/lib/python3.12/site-packages pip uninstall -y opencv-python \
+  && pip install --prefix=/install --no-deps opencv-python-headless \
+  && PYTHONPATH=/install/lib/python3.12/site-packages python -c "import cv2"
+```
+
+`--no-deps` stops pip restoring the GUI wheel as `rapidocr`'s dependency; `PYTHONPATH` is what lets pip *find* a `--prefix` install to uninstall. The trailing import is the point: it turns a runtime failure into a build failure. Generalise it — for any package whose real work happens deep in a code path, import it at build time.
+
+```bash
+# Find every unresolved shared-library dep in an image before your users do
+docker run --rm --entrypoint sh IMAGE -c \
+  'find / -name "*.so*" 2>/dev/null | xargs -r -n1 ldd 2>/dev/null | grep "not found" | sort -u'
+```
+
 **`docker compose down` removes volumes if you pass `-v`.** Do not. For a proxied stack, `caddy_data`-style volumes hold certificates and losing them burns issuance rate limits.
 
 **The AIC domain mapping can fail silently.** Always confirm with the "Domain Parked" check in Step 3 rather than assuming the form saved.
