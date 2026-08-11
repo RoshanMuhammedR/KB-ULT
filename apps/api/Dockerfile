@@ -4,9 +4,12 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 WORKDIR /app
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PROJECT_ENVIRONMENT=/app/.venv
 COPY pyproject.toml uv.lock ./
-# pyproject.toml pins torch/torchvision to the CPU wheel index and swaps opencv-python for the
-# headless build - re-locking here (no --frozen) resolves against those overrides instead of
-# whatever the committed uv.lock last resolved to.
+# The committed uv.lock predates the [tool.uv.sources]/[[tool.uv.index]] overrides below (pin
+# torch/torchvision to the CPU wheel index, swap opencv-python for the headless build) - `uv
+# sync` alone treats that lock as still fresh since the dependency *specifiers* didn't change,
+# only the resolution source, and happily reuses it. That shipped a CUDA-bundled torch (~18GB
+# image, killed the VPS's disk on pull) instead of the CPU one. Force a real re-resolution.
+RUN uv lock
 RUN uv sync --no-dev --no-install-project
 COPY src src
 COPY alembic alembic
