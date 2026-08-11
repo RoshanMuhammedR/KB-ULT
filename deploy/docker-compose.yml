@@ -1,0 +1,106 @@
+# Production stack for the shared VPS. Postgres/Redis are NOT defined here - both apps
+# (url_short, kb) share one Postgres and one Redis instance, brought up separately from
+# /opt/stack/data/docker-compose.yml. The global Caddy proxy (also a separate stack, in
+# /opt/stack/proxy/) routes to these services by Docker DNS name over the `edge` network - none
+# of them publish a host port.
+name: kb
+
+services:
+
+  api:
+    image: ghcr.io/${GHCR_OWNER}/kb-api:${IMAGE_TAG}
+    restart: on-failure:5
+    labels:
+      sablier.enable: "true"
+      sablier.group: "kb"
+    environment:
+      RUN_MIGRATIONS: "1"
+      DATABASE_URL: postgresql+psycopg://${APP_DB_USER}:${APP_DB_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      APP_DATABASE_URL: postgresql+psycopg://${APP_DB_USER}:${APP_DB_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      CACHE_URL: redis://redis:6379/1
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ALGORITHM: HS256
+      CORS_ALLOWED_ORIGINS: ${APP_BASE_URL}
+      AICREDITS_API_KEY: ${AICREDITS_API_KEY}
+      AICREDITS_BASE_URL: ${AICREDITS_BASE_URL:-https://api.aicredits.in/v1}
+      AICREDITS_CHAT_MODEL: ${AICREDITS_CHAT_MODEL:-openai/gpt-4o-mini}
+      AICREDITS_EMBEDDING_MODEL: ${AICREDITS_EMBEDDING_MODEL:-text-embedding-3-small}
+      FILEBASE_ACCESS_KEY: ${FILEBASE_ACCESS_KEY}
+      FILEBASE_SECRET_KEY: ${FILEBASE_SECRET_KEY}
+      FILEBASE_BUCKET_NAME: ${FILEBASE_BUCKET_NAME}
+      FILEBASE_ENDPOINT: ${FILEBASE_ENDPOINT:-https://s3.filebase.io}
+      DOCLING_DO_TABLE_STRUCTURE: ${DOCLING_DO_TABLE_STRUCTURE:-false}
+      DOCLING_NUM_THREADS: "2"
+    volumes:
+      - models:/models
+    mem_limit: 1024m
+    mem_reservation: 640m
+    cpus: 1.0
+    networks: [edge, data]
+
+  worker:
+    image: ghcr.io/${GHCR_OWNER}/kb-api:${IMAGE_TAG}
+    restart: on-failure:5
+    depends_on:
+      api:
+        condition: service_healthy
+    command: ["procrastinate", "--app=src.infrastructure.queue.app.app", "worker"]
+    labels:
+      sablier.enable: "true"
+      sablier.group: "kb"
+    healthcheck:
+      disable: true
+    environment:
+      DATABASE_URL: postgresql+psycopg://${APP_DB_USER}:${APP_DB_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      APP_DATABASE_URL: postgresql+psycopg://${APP_DB_USER}:${APP_DB_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      CACHE_URL: redis://redis:6379/1
+      JWT_SECRET: ${JWT_SECRET}
+      AICREDITS_API_KEY: ${AICREDITS_API_KEY}
+      AICREDITS_BASE_URL: ${AICREDITS_BASE_URL:-https://api.aicredits.in/v1}
+      AICREDITS_CHAT_MODEL: ${AICREDITS_CHAT_MODEL:-openai/gpt-4o-mini}
+      AICREDITS_EMBEDDING_MODEL: ${AICREDITS_EMBEDDING_MODEL:-text-embedding-3-small}
+      FILEBASE_ACCESS_KEY: ${FILEBASE_ACCESS_KEY}
+      FILEBASE_SECRET_KEY: ${FILEBASE_SECRET_KEY}
+      FILEBASE_BUCKET_NAME: ${FILEBASE_BUCKET_NAME}
+      FILEBASE_ENDPOINT: ${FILEBASE_ENDPOINT:-https://s3.filebase.io}
+      DOCLING_DO_TABLE_STRUCTURE: ${DOCLING_DO_TABLE_STRUCTURE:-false}
+      DOCLING_NUM_THREADS: "2"
+      OMP_NUM_THREADS: "2"
+      MKL_NUM_THREADS: "2"
+    volumes:
+      - models:/models
+    mem_limit: 1024m
+    mem_reservation: 160m
+    cpus: 1.0
+    networks: [data]
+
+  web:
+    image: ghcr.io/${GHCR_OWNER}/kb-web:${IMAGE_TAG}
+    restart: on-failure:5
+    labels:
+      sablier.enable: "true"
+      sablier.group: "kb"
+    mem_limit: 256m
+    mem_reservation: 96m
+    cpus: 0.5
+    networks: [edge]
+
+  website:
+    image: ghcr.io/${GHCR_OWNER}/kb-website:${IMAGE_TAG}
+    restart: on-failure:5
+    labels:
+      sablier.enable: "true"
+      sablier.group: "kb"
+    mem_limit: 256m
+    mem_reservation: 96m
+    cpus: 0.5
+    networks: [edge]
+
+volumes:
+  models:
+
+networks:
+  edge:
+    external: true
+  data:
+    external: true

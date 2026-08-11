@@ -1,0 +1,111 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-kb
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      owner: ${{ steps.tag.outputs.owner }}
+    steps:
+      - id: tag
+        run: |
+          echo "tag=sha-$(echo ${GITHUB_SHA} | cut -c1-7)" >> "$GITHUB_OUTPUT"
+          echo "owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - image: kb-api
+            context: ./apps/api
+            dockerfile: ./apps/api/Dockerfile
+          - image: kb-web
+            context: .
+            dockerfile: ./apps/web/Dockerfile
+          - image: kb-website
+            context: .
+            dockerfile: ./apps/website/Dockerfile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: true
+          build-args: |
+            NEXT_PUBLIC_API_URL=${{ secrets.APP_BASE_URL }}/api
+            NEXT_PUBLIC_PRODUCT_URL=${{ secrets.APP_BASE_URL }}/app
+            NEXT_PUBLIC_WEBSITE_URL=${{ secrets.APP_BASE_URL }}
+          tags: |
+            ghcr.io/${{ needs.prepare.outputs.owner }}/${{ matrix.image }}:${{ needs.prepare.outputs.tag }}
+            ghcr.io/${{ needs.prepare.outputs.owner }}/${{ matrix.image }}:latest
+
+  deploy:
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - name: Render .env and rsync deploy/ to the VPS
+        env:
+          SSHPASS: ${{ secrets.VPS_SSH_PASSWORD }}
+        run: |
+          sudo apt-get update -y && sudo apt-get install -y sshpass rsync
+          mkdir -p ~/.ssh
+          ssh-keyscan -p ${{ secrets.VPS_PORT }} ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+
+          sshpass -e rsync -az --delete -e "ssh -p ${{ secrets.VPS_PORT }} -o StrictHostKeyChecking=no" \
+            --exclude '.env' \
+            deploy/ ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/stack/kb/
+
+          cat > /tmp/kb.env <<EOF
+          GHCR_OWNER=${{ needs.prepare.outputs.owner }}
+          IMAGE_TAG=${{ needs.prepare.outputs.tag }}
+          POSTGRES_DB=kb
+          APP_DB_USER=kb_app
+          APP_DB_PASSWORD=${{ secrets.APP_DB_PASSWORD }}
+          APP_BASE_URL=${{ secrets.APP_BASE_URL }}
+          JWT_SECRET=${{ secrets.JWT_SECRET }}
+          AICREDITS_API_KEY=${{ secrets.AICREDITS_API_KEY }}
+          AICREDITS_BASE_URL=https://api.aicredits.in/v1
+          AICREDITS_CHAT_MODEL=openai/gpt-4o-mini
+          AICREDITS_EMBEDDING_MODEL=text-embedding-3-small
+          FILEBASE_ACCESS_KEY=${{ secrets.FILEBASE_ACCESS_KEY }}
+          FILEBASE_SECRET_KEY=${{ secrets.FILEBASE_SECRET_KEY }}
+          FILEBASE_BUCKET_NAME=${{ secrets.FILEBASE_BUCKET_NAME }}
+          FILEBASE_ENDPOINT=https://s3.filebase.io
+          DOCLING_DO_TABLE_STRUCTURE=false
+          EOF
+
+          sshpass -e scp -P ${{ secrets.VPS_PORT }} -o StrictHostKeyChecking=no \
+            /tmp/kb.env ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/stack/kb/.env
+          rm -f /tmp/kb.env
+
+      - name: Run the shared deploy script on the VPS
+        env:
+          SSHPASS: ${{ secrets.VPS_SSH_PASSWORD }}
+        run: |
+          sshpass -e ssh -p ${{ secrets.VPS_PORT }} -o StrictHostKeyChecking=no \
+            ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} \
+            "bash /opt/stack/scripts/deploy.sh kb ${{ needs.prepare.outputs.tag }} ${{ github.sha }}"

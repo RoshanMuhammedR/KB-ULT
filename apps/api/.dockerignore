@@ -1,0 +1,11 @@
+.venv
+.turbo
+kb_api.egg-info
+tests
+__pycache__
+**/__pycache__
+*.pyc
+.git
+.gitignore
+*.md
+.claude

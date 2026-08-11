@@ -36,3 +36,22 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 include = ["src*"]
 exclude = ["alembic*", "scripts*"]
+
+# docling pulls in torch/torchvision transitively. Left to the default PyPI resolution, torch
+# on Linux bundles the full CUDA runtime (~6GB of wheels: cuda-toolkit, nvidia-cudnn, nvidia-nccl,
+# triton...) that this CPU-only deployment never uses. Pin both to the PyTorch CPU wheel index
+# instead - same version, a fraction of the download/image size.
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu" }]
+torchvision = [{ index = "pytorch-cpu" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv]
+# docling also pulls in opencv-python (the GUI build, with X11/Qt shared libs) transitively.
+# This runs headless in a container - swap in opencv-python-headless, which provides the same
+# `cv2` import with none of the GUI dependencies.
+override-dependencies = ["opencv-python-headless"]
