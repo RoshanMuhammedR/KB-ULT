@@ -719,10 +719,28 @@ Useful one-liners:
 # What is actually listening across all projects
 ssh -p 20086 deploy@37.187.159.43 "ss -lntp"
 
-# Disk pressure (images accumulate)
-ssh -p 20086 deploy@37.187.159.43 "docker system df && df -h /"
-docker image prune -a -f
+# Disk pressure — find out WHAT is full before deleting anything
+ssh -p 20086 deploy@37.187.159.43 "docker system df -v | head -40 && df -h /"
+
+# The two usual culprits, in order:
+#   1. superseded image tags   2. unrotated container logs
+docker images 'ghcr.io/*/saga-*' --format '{{.Repository}}:{{.Tag}}\t{{.Size}}\t{{.CreatedAt}}'
+du -sh /var/lib/docker/containers/*/*-json.log | sort -h | tail
+
+# Always safe: build cache and stopped containers.
+docker builder prune -af
+docker container prune -f
+
+# NOT `docker image prune -a -f`. That deletes every image without a running container —
+# including the PREVIOUS tag, which is exactly what deploy.sh rolls back onto. You would be
+# reclaiming disk by throwing away your only rollback. deploy.sh now prunes superseded
+# saga-* tags itself after a verified deploy, keeping the current tag, the rollback target
+# and `latest`; `cat /opt/saga/.image-tag` shows the live one.
 ```
+
+Both causes are fixed at the source now — `deploy.sh` sweeps old tags, and every service in
+`deploy/docker-compose.yml` caps its log at 10 MB × 3 — so this should stop recurring. If the
+disk fills again, the interesting question is which of those two regressed.
 
 ---
 

@@ -12,6 +12,8 @@ already-opened `Session` (request-scoped in HTTP, worker-scoped in the worker) p
 
 from __future__ import annotations
 
+from threading import Lock
+
 from sqlalchemy.orm import Session
 
 from src.application.auth import AuthService
@@ -74,12 +76,37 @@ def build_job_queue() -> IJobQueue:
     return ProcrastinateJobQueue()
 
 
+# One PDF parser per process, like `_cache` above.
+#
+# `build_ingestion_service` is called fresh on every worker job AND on every request that
+# touches the upload endpoints, and it used to construct a new DoclingPDFAdapter each time.
+# Docling caches its initialized pipelines per *instance*, so a new adapter per job meant
+# re-loading the layout (and TableFormer) weights into torch before every single parse — a
+# fixed multi-second tax that had nothing to do with the document.
+#
+# Locked because FastAPI runs sync dependencies in a threadpool, so two concurrent uploads
+# can reach this at once; without the lock they could each build a converter and one would be
+# discarded after paying the full load cost. The adapter itself is lazy (see DoclingPDFAdapter),
+# so this stays cheap on the request path and only really builds in the worker.
+_pdf_parser: DoclingPDFAdapter | None = None
+_pdf_parser_lock = Lock()
+
+
+def _build_pdf_parser() -> DoclingPDFAdapter:
+    global _pdf_parser
+    if _pdf_parser is None:
+        with _pdf_parser_lock:
+            if _pdf_parser is None:
+                _pdf_parser = DoclingPDFAdapter()
+    return _pdf_parser
+
+
 def _build_source_handler_registry(file_storage: IFileStorage) -> SourceHandlerRegistry:
     # One handler per supported SourceType. Handlers own acquisition (download from
     # storage) too, so each gets the file storage it needs. Adding website/YouTube is
     # a new `registry.register(SourceType.X, XHandler(...))` line here — nothing else.
     registry = SourceHandlerRegistry()
-    registry.register(SourceType.PDF, PdfSourceHandler(DoclingPDFAdapter(), file_storage))
+    registry.register(SourceType.PDF, PdfSourceHandler(_build_pdf_parser(), file_storage))
     # YouTube fetches its own content (transcript API + oEmbed), so it needs no storage.
     registry.register(SourceType.YOUTUBE, YouTubeSourceHandler())
     return registry

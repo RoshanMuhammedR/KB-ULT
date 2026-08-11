@@ -51,6 +51,7 @@ services:
       - "${API_PORT:-8000}:8000"
     volumes:
       - ./apps/api:/app
+      - models:/models
     depends_on:
       db:
         condition: service_healthy
@@ -76,6 +77,9 @@ services:
       disable: true
     volumes:
       - ./apps/api:/app
+      # Docling's model weights ($HF_HOME=/models in the image). Without this they live in
+      # the container layer and get re-downloaded every time the container is recreated.
+      - models:/models
     depends_on:
       # Waits for the api's healthcheck, which means migrations have already finished.
       api:
@@ -112,3 +116,4 @@ services:
 volumes:
   kb_postgres_data:
   kb_valkey_data:
+  models:

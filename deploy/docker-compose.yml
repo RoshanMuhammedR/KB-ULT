@@ -4,13 +4,25 @@
 # ONE port. So exactly one service publishes a port — caddy — and it routes by path to the
 # three app containers. Everything else stays on the internal network, unreachable from
 # outside the stack.
+#
+# Two things every service here inherits via `x-logging`:
+# Docker's default json-file driver has NO size cap, so each container's log grows until the
+# disk is full — and caddy logs every request while the api is probed by a healthcheck. The
+# 10m x 3 cap bounds the whole stack at roughly 180 MB.
 name: saga
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
 
 services:
 
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       api:
         condition: service_healthy
@@ -26,11 +38,15 @@ services:
       # All interfaces: AIC's proxy arrives over the private network, not loopback. Safe
       # because the VPS has no public IPv4 of its own. Container listens on 80 — no TLS here.
       - "${APP_PORT}:80"
+    # Was unlimited — the one container with no cap at all, and the one most exposed to
+    # traffic. Caddy is a reverse proxy with no app state; 128m is ample.
+    mem_limit: 128m
     networks: [internal]
 
   postgres:
     image: pgvector/pgvector:pg16
     restart: unless-stopped
+    logging: *default-logging
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
@@ -44,13 +60,15 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
-    mem_limit: 768m
+    # MEASURED: 71 MiB steady state. 512m is ample and leaves room for the neighbours below.
+    mem_limit: 512m
     networks: [internal]
     # No published ports — never expose a database to the host.
 
   api:
     image: ghcr.io/${GHCR_OWNER}/saga-api:${IMAGE_TAG}
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       postgres:
         condition: service_healthy
@@ -71,12 +89,22 @@ services:
       FILEBASE_SECRET_KEY: ${FILEBASE_SECRET_KEY}
       FILEBASE_BUCKET_NAME: ${FILEBASE_BUCKET_NAME}
       FILEBASE_ENDPOINT: ${FILEBASE_ENDPOINT:-https://s3.filebase.io}
+    volumes:
+      # Shared with the worker so the weights exist exactly once and survive redeploys.
+      - models:/models
+    # MEASURED ON THE BOX: 726 MiB steady state (docker stats), because langchain_openai
+    # imports transformers, which imports torch — and the chat path genuinely needs
+    # langchain_openai, so torch is resident here no matter what. (The upload endpoints no
+    # longer load docling's MODEL WEIGHTS on top of that — DoclingPDFAdapter is lazy now.)
+    # Do not lower this without re-measuring: anything under ~900m is an OOM kill waiting to
+    # happen. Getting the api under 512m means dropping langchain_openai for plain httpx.
     mem_limit: 1g
     networks: [internal]
 
   worker:
     image: ghcr.io/${GHCR_OWNER}/saga-api:${IMAGE_TAG}
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       # Waits for the api's healthcheck, which means migrations have already run.
       api:
@@ -98,26 +126,58 @@ services:
       FILEBASE_SECRET_KEY: ${FILEBASE_SECRET_KEY}
       FILEBASE_BUCKET_NAME: ${FILEBASE_BUCKET_NAME}
       FILEBASE_ENDPOINT: ${FILEBASE_ENDPOINT:-https://s3.filebase.io}
+      # Table structure runs a second torch model (TableFormer) over every detected table and
+      # dominated ingestion time on 2 vCPU. Off by default; set to "true" to trade latency
+      # back for structured tables (it runs in FAST mode now, so it is much cheaper).
+      DOCLING_DO_TABLE_STRUCTURE: ${DOCLING_DO_TABLE_STRUCTURE:-false}
+      DOCLING_NUM_THREADS: ${DOCLING_NUM_THREADS:-2}
+      DOCLING_TIMEOUT_SECONDS: ${DOCLING_TIMEOUT_SECONDS:-180}
+      # Backstop for the thread cap above: torch.set_num_threads() does not govern every BLAS
+      # backend's spin behaviour, and an oversubscribed OpenMP pool on 2 vCPU costs
+      # throughput rather than gaining it.
+      OMP_NUM_THREADS: "2"
+      MKL_NUM_THREADS: "2"
+    volumes:
+      # Model weights, shared with the api. Without this they live in the container's
+      # writable layer: re-downloaded from HuggingFace after every deploy, and stored twice.
+      - models:/models
     # Docling parsing is the memory-hungry part of this stack; cap it or it crowds out Postgres.
-    mem_limit: 1500m
+    # MEASURED: cgroup memory.peak was 123 MiB against the old 1500m cap, with oom_kill=0 —
+    # the worker was never the memory problem it was assumed to be. 1200m leaves generous
+    # headroom for a large parse while no longer reserving 1.5 GB of a shared 4 GB box.
+    mem_limit: 1200m
     networks: [internal]
 
   web:
     image: ghcr.io/${GHCR_OWNER}/saga-web:${IMAGE_TAG}
     restart: unless-stopped
-    mem_limit: 512m
+    logging: *default-logging
+    # MEASURED: 53 MiB. Next.js standalone servers are small; 256m is generous.
+    mem_limit: 256m
     networks: [internal]
 
   website:
     image: ghcr.io/${GHCR_OWNER}/saga-website:${IMAGE_TAG}
     restart: unless-stopped
-    mem_limit: 512m
+    logging: *default-logging
+    mem_limit: 256m
     networks: [internal]
 
+# Limits sum to 3376m (512 + 1024 + 1200 + 256 + 256 + 128) against 4096m of RAM. They
+# previously summed to 4292m — MORE than the box has — with caddy uncapped on top, so the
+# kernel would OOM-kill something before any cap was reached and the caps documented an
+# intent they could never enforce.
+#
+# IMPORTANT: this VPS is NOT dedicated to saga. It also runs the whole sniplink stack
+# (ui/api/postgres/redis, ~370 MiB, currently with NO limits of its own) plus an unrelated
+# java process (~310 MiB) and the docker/containerd daemons. So saga's ceiling has to leave
+# roughly 900 MiB for the neighbours, not just for the kernel. Every number above is measured
+# from `docker stats` / cgroup memory.peak on the live box — re-measure before lowering any.
 volumes:
   pgdata:
   caddy_data:
   caddy_config:
+  models:
 
 networks:
   internal:

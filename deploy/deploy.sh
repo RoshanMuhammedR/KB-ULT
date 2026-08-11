@@ -46,6 +46,33 @@ wait_healthy() {
 	return 1
 }
 
+# Reclaim disk from superseded image tags.
+#
+# This used to be a bare `docker image prune -f`, which removes DANGLING images only —
+# untagged layers. CI pushes every build as a fully-tagged sha-XXXXXXX, so nothing here was
+# ever dangling and each rollout left another multi-gigabyte saga-api image behind forever.
+# On a 40 GB disk that is a handful of deploys before the box is full.
+#
+# Deliberately NOT `prune -a`: rollback below restores PREV_TAG by re-running compose against
+# it, which needs that image still present locally. So keep the tag just deployed, the
+# rollback target, and `latest`; drop everything older.
+prune_old_tags() {
+	local keep_new="$1" keep_prev="$2" refs ref tag
+	refs="$(docker images --format '{{.Repository}}:{{.Tag}}' | grep -E '/saga-(api|web|website):' || true)"
+	[ -n "$refs" ] || return 0
+	while IFS= read -r ref; do
+		tag="${ref##*:}"
+		case "$tag" in
+		"$keep_new" | "$keep_prev" | latest | "<none>") continue ;;
+		esac
+		echo "    removing superseded image $ref"
+		# Fails harmlessly if a container still references it — that is the safety net.
+		docker rmi "$ref" >/dev/null 2>&1 || true
+	done <<<"$refs"
+	# Untagged leftovers from the pull, plus build cache.
+	docker image prune -f >/dev/null 2>&1 || true
+}
+
 # The api healthcheck alone is not proof the deploy is good: it passes while caddy (the only
 # publicly reachable service) or the worker is crash-looping. So we also drive the real
 # published port and refuse anything stuck restarting.
@@ -93,7 +120,7 @@ if wait_healthy; then
 	sleep 5
 	if verify_stack; then
 		echo "==> deploy verified on $NEW_TAG"
-		docker image prune -f >/dev/null || true
+		prune_old_tags "$NEW_TAG" "$PREV_TAG"
 		docker compose ps
 		exit 0
 	fi

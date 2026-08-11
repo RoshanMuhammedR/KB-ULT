@@ -116,6 +116,13 @@ jobs:
           AICREDITS_EMBEDDING_MODEL: ${{ vars.AICREDITS_EMBEDDING_MODEL || 'text-embedding-3-small' }}
           FILEBASE_BUCKET_NAME: ${{ vars.FILEBASE_BUCKET_NAME }}
           FILEBASE_ENDPOINT: ${{ vars.FILEBASE_ENDPOINT || 'https://s3.filebase.io' }}
+          # PDF parsing cost knobs. Table structure runs a second torch model over every
+          # detected table and is the most expensive stage on a 2-vCPU box; set the
+          # DOCLING_DO_TABLE_STRUCTURE variable to "true" to trade latency for structured
+          # tables. Empty here is fine — compose supplies the same defaults.
+          DOCLING_DO_TABLE_STRUCTURE: ${{ vars.DOCLING_DO_TABLE_STRUCTURE || 'false' }}
+          DOCLING_NUM_THREADS: ${{ vars.DOCLING_NUM_THREADS || '2' }}
+          DOCLING_TIMEOUT_SECONDS: ${{ vars.DOCLING_TIMEOUT_SECONDS || '180' }}
           # Real credentials.
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
