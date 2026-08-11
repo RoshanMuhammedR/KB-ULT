@@ -19,7 +19,6 @@ RUN addgroup -S app && adduser -S app -G app
 WORKDIR /app
 COPY --from=build /repo/apps/website/.next/standalone ./
 COPY --from=build /repo/apps/website/.next/static ./apps/website/.next/static
-COPY --from=build /repo/apps/website/public ./apps/website/public
 RUN chown -R app:app /app
 USER app
 ENV PORT=3000 HOSTNAME=0.0.0.0
