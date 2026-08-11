@@ -42,8 +42,8 @@ exclude = ["alembic*", "scripts*"]
 # triton...) that this CPU-only deployment never uses. Pin both to the PyTorch CPU wheel index
 # instead - same version, a fraction of the download/image size.
 [tool.uv.sources]
-torch = [{ index = "pytorch-cpu" }]
-torchvision = [{ index = "pytorch-cpu" }]
+torch = { index = "pytorch-cpu" }
+torchvision = { index = "pytorch-cpu" }
 
 [[tool.uv.index]]
 name = "pytorch-cpu"

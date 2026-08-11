@@ -9,7 +9,7 @@ COPY pyproject.toml uv.lock ./
 # sync` alone treats that lock as still fresh since the dependency *specifiers* didn't change,
 # only the resolution source, and happily reuses it. That shipped a CUDA-bundled torch (~18GB
 # image, killed the VPS's disk on pull) instead of the CPU one. Force a real re-resolution.
-RUN uv lock
+RUN uv lock --upgrade-package torch --upgrade-package torchvision
 RUN uv sync --no-dev --no-install-project
 COPY src src
 COPY alembic alembic
