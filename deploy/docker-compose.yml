@@ -9,6 +9,7 @@ services:
 
   api:
     image: ghcr.io/${GHCR_OWNER}/kb-api:${IMAGE_TAG}
+    container_name: kb-api
     restart: on-failure:5
     labels:
       sablier.enable: "true"
@@ -40,6 +41,7 @@ services:
 
   worker:
     image: ghcr.io/${GHCR_OWNER}/kb-api:${IMAGE_TAG}
+    container_name: kb-worker
     restart: on-failure:5
     depends_on:
       api:
@@ -76,6 +78,7 @@ services:
 
   web:
     image: ghcr.io/${GHCR_OWNER}/kb-web:${IMAGE_TAG}
+    container_name: kb-web
     restart: on-failure:5
     labels:
       sablier.enable: "true"
@@ -87,6 +90,7 @@ services:
 
   website:
     image: ghcr.io/${GHCR_OWNER}/kb-website:${IMAGE_TAG}
+    container_name: kb-website
     restart: on-failure:5
     labels:
       sablier.enable: "true"
