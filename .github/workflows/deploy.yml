@@ -53,10 +53,12 @@ jobs:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
           push: true
-          build-args: |
-            NEXT_PUBLIC_API_URL=${{ secrets.APP_BASE_URL }}/api
-            NEXT_PUBLIC_PRODUCT_URL=${{ secrets.APP_BASE_URL }}/app
-            NEXT_PUBLIC_WEBSITE_URL=${{ secrets.APP_BASE_URL }}
+          # No NEXT_PUBLIC_* build-args here on purpose: apps/web and apps/website both
+          # default to relative paths (`/api`, `/app`, `/`) when these are unset, which is
+          # correct behind Caddy's single-origin routing and survives switching between the
+          # bare IP and either real domain without a rebuild. Baking in an absolute
+          # APP_BASE_URL here previously sent users to the bare-IP host on every
+          # login/get-started click regardless of which domain they arrived on.
           tags: |
             ghcr.io/${{ needs.prepare.outputs.owner }}/${{ matrix.image }}:${{ needs.prepare.outputs.tag }}
             ghcr.io/${{ needs.prepare.outputs.owner }}/${{ matrix.image }}:latest
@@ -86,6 +88,7 @@ jobs:
           APP_DB_USER=kb_app
           APP_DB_PASSWORD=${{ secrets.APP_DB_PASSWORD }}
           APP_BASE_URL=${{ secrets.APP_BASE_URL }}
+          CORS_ALLOWED_ORIGINS=http://37.187.140.45:8082,http://saga.dedyn.io,https://saga.dedyn.io
           JWT_SECRET=${{ secrets.JWT_SECRET }}
           AICREDITS_API_KEY=${{ secrets.AICREDITS_API_KEY }}
           AICREDITS_BASE_URL=https://api.aicredits.in/v1
