@@ -5,7 +5,6 @@ requires-python = ">=3.11"
 dependencies = [
   "alembic>=1.13.3",
   "boto3>=1.35.90",
-  "docling>=2.110.0",
   "fastapi>=0.115.6",
   "httpx>=0.27",
   "langchain-community>=0.3.14",
@@ -17,6 +16,7 @@ dependencies = [
   "pwdlib[argon2]>=0.2.1",
   "pydantic-settings>=2.7.1",
   "pyjwt>=2.9.0",
+  "pymupdf4llm>=0.0.17",
   "python-multipart>=0.0.20",
   "sqlalchemy>=2.0.36",
   "structlog>=24.4.0",
@@ -36,22 +36,3 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 include = ["src*"]
 exclude = ["alembic*", "scripts*"]
-
-# docling pulls in torch/torchvision transitively. Left to the default PyPI resolution, torch
-# on Linux bundles the full CUDA runtime (~6GB of wheels: cuda-toolkit, nvidia-cudnn, nvidia-nccl,
-# triton...) that this CPU-only deployment never uses. Pin both to the PyTorch CPU wheel index
-# instead - same version, a fraction of the download/image size.
-[tool.uv.sources]
-torch = { index = "pytorch-cpu" }
-torchvision = { index = "pytorch-cpu" }
-
-[[tool.uv.index]]
-name = "pytorch-cpu"
-url = "https://download.pytorch.org/whl/cpu"
-explicit = true
-
-[tool.uv]
-# docling also pulls in opencv-python (the GUI build, with X11/Qt shared libs) transitively.
-# This runs headless in a container - swap in opencv-python-headless, which provides the same
-# `cv2` import with none of the GUI dependencies.
-override-dependencies = ["opencv-python-headless"]

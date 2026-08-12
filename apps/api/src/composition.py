@@ -12,8 +12,6 @@ already-opened `Session` (request-scoped in HTTP, worker-scoped in the worker) p
 
 from __future__ import annotations
 
-from threading import Lock
-
 from sqlalchemy.orm import Session
 
 from src.application.auth import AuthService
@@ -30,7 +28,7 @@ from src.http.middleware import BearerTokenAuthenticator
 from src.infrastructure.ai_providers import AICreditsEmbeddingProvider, AICreditsLLMProvider
 from src.infrastructure.auth import Argon2PasswordHasher, JwtTokenService
 from src.infrastructure.cache import ValkeyCache
-from src.infrastructure.document_parsing import DoclingPDFAdapter
+from src.infrastructure.document_parsing import PyMuPDF4LLMAdapter
 from src.infrastructure.langchain_adapters.chat_model import OpenAICompatibleChatAdapter
 from src.infrastructure.langchain_adapters.embeddings import OpenAICompatibleEmbeddingsAdapter
 from src.infrastructure.langchain_adapters.text_splitter import RecursiveSplitterAdapter
@@ -76,29 +74,11 @@ def build_job_queue() -> IJobQueue:
     return ProcrastinateJobQueue()
 
 
-# One PDF parser per process, like `_cache` above.
-#
-# `build_ingestion_service` is called fresh on every worker job AND on every request that
-# touches the upload endpoints, and it used to construct a new DoclingPDFAdapter each time.
-# Docling caches its initialized pipelines per *instance*, so a new adapter per job meant
-# re-loading the layout (and TableFormer) weights into torch before every single parse — a
-# fixed multi-second tax that had nothing to do with the document.
-#
-# Locked because FastAPI runs sync dependencies in a threadpool, so two concurrent uploads
-# can reach this at once; without the lock they could each build a converter and one would be
-# discarded after paying the full load cost. The adapter itself is lazy (see DoclingPDFAdapter),
-# so this stays cheap on the request path and only really builds in the worker.
-_pdf_parser: DoclingPDFAdapter | None = None
-_pdf_parser_lock = Lock()
-
-
-def _build_pdf_parser() -> DoclingPDFAdapter:
-    global _pdf_parser
-    if _pdf_parser is None:
-        with _pdf_parser_lock:
-            if _pdf_parser is None:
-                _pdf_parser = DoclingPDFAdapter()
-    return _pdf_parser
+def _build_pdf_parser() -> PyMuPDF4LLMAdapter:
+    # No singleton/lock needed here (unlike the old Docling adapter): PyMuPDF4LLMAdapter has
+    # no model weights or expensive per-instance state to cache, so a fresh instance per call
+    # is just as cheap.
+    return PyMuPDF4LLMAdapter()
 
 
 def _build_source_handler_registry(file_storage: IFileStorage) -> SourceHandlerRegistry:

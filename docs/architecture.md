@@ -1,6 +1,6 @@
 # Architecture
 
-This MVP is a backend-first AI Knowledge Base for uploading PDFs to Filebase object storage, converting them to Docling Markdown-backed `KnowledgeAsset` domain objects, chunking, embedding, storing vectors in PostgreSQL/pgvector, and chatting with citation-backed answers.
+This MVP is a backend-first AI Knowledge Base for uploading PDFs to Filebase object storage, converting them to PyMuPDF4LLM Markdown-backed `KnowledgeAsset` domain objects, chunking, embedding, storing vectors in PostgreSQL/pgvector, and chatting with citation-backed answers.
 
 Ingestion is **asynchronous**. The upload request only stores the file and enqueues a job; a separate **worker** runs the acquire → parse → chunk → embed pipeline. The queue is Postgres-backed (Procrastinate), so no extra infrastructure is required, and it sits behind the `IJobQueue` port so the engine stays swappable.
 
@@ -55,7 +55,7 @@ apps/api/src/
 │   ├── queue/           # Procrastinate app, task, and IJobQueue adapter
 │   ├── vector_store/    # pgvector adapter
 │   ├── storage/         # Filebase S3-compatible adapter (upload/download)
-│   ├── document_parsing/ # Docling-backed parser adapters
+│   ├── document_parsing/ # PyMuPDF4LLM-backed parser adapters
 │   ├── langchain_adapters/
 │   └── ai_providers/    # AICredits providers
 └── core/                # config, logging, exceptions, constants
@@ -104,7 +104,7 @@ sequenceDiagram
   IngestionService->>JobRepo: mark_running (attempt++)
   IngestionService->>Registry: get(SourceType.PDF)
   IngestionService->>Handler: acquire(asset) [download from storage]
-  IngestionService->>Handler: parse(asset, raw) [Docling -> markdown + segments]
+  IngestionService->>Handler: parse(asset, raw) [PyMuPDF4LLM -> markdown + segments]
   IngestionService->>Chunker: chunk(asset) [segments -> chunks w/ locator]
   IngestionService->>Embedder: embed_texts(chunks)
   IngestionService->>VectorStore: upsert_embeddings(...)

@@ -30,12 +30,13 @@ services:
       FILEBASE_SECRET_KEY: ${FILEBASE_SECRET_KEY}
       FILEBASE_BUCKET_NAME: ${FILEBASE_BUCKET_NAME}
       FILEBASE_ENDPOINT: ${FILEBASE_ENDPOINT:-https://s3.filebase.io}
-      DOCLING_DO_TABLE_STRUCTURE: ${DOCLING_DO_TABLE_STRUCTURE:-false}
-      DOCLING_NUM_THREADS: "2"
-    volumes:
-      - models:/models
-    mem_limit: 1024m
-    mem_reservation: 640m
+    # PDF parsing moved from Docling (torch, ~18GB image with the CUDA bundle it kept
+    # resolving) to PyMuPDF4LLM (pure Python, no model weights) - no /models volume needed
+    # anymore, and these limits are a conservative guess pending a real measurement on the
+    # next deploy. Re-measure with `docker stats` and tighten once there's real data, the same
+    # way the old torch-based numbers were derived.
+    mem_limit: 512m
+    mem_reservation: 192m
     cpus: 1.0
     networks: [edge, data]
 
@@ -65,14 +66,10 @@ services:
       FILEBASE_SECRET_KEY: ${FILEBASE_SECRET_KEY}
       FILEBASE_BUCKET_NAME: ${FILEBASE_BUCKET_NAME}
       FILEBASE_ENDPOINT: ${FILEBASE_ENDPOINT:-https://s3.filebase.io}
-      DOCLING_DO_TABLE_STRUCTURE: ${DOCLING_DO_TABLE_STRUCTURE:-false}
-      DOCLING_NUM_THREADS: "2"
-      OMP_NUM_THREADS: "2"
-      MKL_NUM_THREADS: "2"
-    volumes:
-      - models:/models
-    mem_limit: 1024m
-    mem_reservation: 160m
+    # Same reasoning as the api service above - PyMuPDF4LLM needs no thread-count tuning or
+    # model-weight volume the way Docling/torch did.
+    mem_limit: 512m
+    mem_reservation: 96m
     cpus: 1.0
     networks: [data]
 
@@ -99,9 +96,6 @@ services:
     mem_reservation: 96m
     cpus: 0.5
     networks: [edge]
-
-volumes:
-  models:
 
 networks:
   edge:

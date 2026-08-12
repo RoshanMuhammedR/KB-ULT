@@ -66,7 +66,7 @@ Built now:
 - Email + password authentication (register, login, rotating refresh tokens)
 - Multi-tenancy enforced by an ORM tenant filter **and** Postgres row-level security
 - Asynchronous ingestion: a Procrastinate queue and a worker with retry accounting
-- PDF upload and Docling Markdown extraction
+- PDF upload and PyMuPDF4LLM Markdown extraction
 - YouTube transcripts as a second source type
 - Filebase S3-compatible object storage for uploaded PDFs
 - Token-aware chunking

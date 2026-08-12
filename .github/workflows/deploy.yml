@@ -95,7 +95,6 @@ jobs:
           FILEBASE_SECRET_KEY=${{ secrets.FILEBASE_SECRET_KEY }}
           FILEBASE_BUCKET_NAME=${{ secrets.FILEBASE_BUCKET_NAME }}
           FILEBASE_ENDPOINT=https://s3.filebase.io
-          DOCLING_DO_TABLE_STRUCTURE=false
           EOF
 
           sshpass -e scp -P ${{ secrets.VPS_PORT }} -o StrictHostKeyChecking=no \

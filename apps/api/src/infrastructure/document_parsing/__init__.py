@@ -1,3 +1,3 @@
-from src.infrastructure.document_parsing.docling_pdf import DoclingPDFAdapter
+from src.infrastructure.document_parsing.pymupdf_pdf import PyMuPDF4LLMAdapter
 
-__all__ = ["DoclingPDFAdapter"]
+__all__ = ["PyMuPDF4LLMAdapter"]

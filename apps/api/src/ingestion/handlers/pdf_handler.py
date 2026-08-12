@@ -3,7 +3,7 @@ from __future__ import annotations
 from src.core.text import sanitize_text_for_storage
 from src.domain.entities import AssetStatus, KnowledgeAsset, RawContent
 from src.domain.interfaces import IFileStorage
-from src.infrastructure.document_parsing import DoclingPDFAdapter
+from src.infrastructure.document_parsing import PyMuPDF4LLMAdapter
 
 
 class PdfSourceHandler:
@@ -14,13 +14,13 @@ class PdfSourceHandler:
     is fetched here at process time (this is also what makes a failed extraction
     retryable without a re-upload).
 
-    `parse` runs Docling and emits the source-neutral **segment** structure
+    `parse` runs the PDF loader and emits the source-neutral **segment** structure
     (`metadata["segments"]`, each with a typed `locator`) that the chunker consumes.
     For PDF the locator is the page number; a future YouTube handler would emit a
     timestamp locator with no change to chunking, embedding, or chat.
     """
 
-    def __init__(self, loader: DoclingPDFAdapter, file_storage: IFileStorage) -> None:
+    def __init__(self, loader: PyMuPDF4LLMAdapter, file_storage: IFileStorage) -> None:
         self.loader = loader
         self.file_storage = file_storage
 
@@ -29,11 +29,11 @@ class PdfSourceHandler:
         return RawContent(data=data, mime="application/pdf")
 
     def parse(self, asset: KnowledgeAsset, raw: RawContent) -> KnowledgeAsset:
-        # Docling wants bytes; acquire always hands us bytes for PDF.
+        # The loader wants bytes; acquire always hands us bytes for PDF.
         file_data = raw.data if isinstance(raw.data, bytes) else raw.data.encode("utf-8")
         parsed = self.loader.load(file_data, asset.filename)
 
-        # Turn Docling's page list into generic segments: {text, locator{type,value}}.
+        # Turn the loader's page list into generic segments: {text, locator{type,value}}.
         segments = []
         text_parts = []
         for page in parsed["pages"]:
@@ -65,6 +65,6 @@ class PdfSourceHandler:
                 "format": "markdown",
                 "content_type": raw.mime or asset.metadata.get("content_type"),
                 "segments": segments,
-                "docling": parsed["metadata"],
+                "parser": parsed["metadata"],
             },
         )

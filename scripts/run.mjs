@@ -191,12 +191,7 @@ const commands = {
     }
     const python = venvBin("python") || fail("virtualenv is missing a python executable");
     for (const args of [
-      // pip is capped below 26 on purpose. docling pulls in omegaconf, which pins
-      // antlr4-python3-runtime==4.9.*, and that release ships only an sdist whose build
-      // produces a wheel named `unknown-0.0.0`. pip 26 rejects that mismatch outright
-      // ("Wheel has unexpected file name"), so the whole install fails. Lift the cap once
-      // omegaconf allows an antlr4 release that publishes a wheel.
-      ["-m", "pip", "install", "--upgrade", "pip<26"],
+      ["-m", "pip", "install", "--upgrade", "pip"],
       ["-m", "pip", "install", "-e", "."],
     ]) {
       const result = spawnSync(python, args, { stdio: "inherit", cwd: API_DIR });

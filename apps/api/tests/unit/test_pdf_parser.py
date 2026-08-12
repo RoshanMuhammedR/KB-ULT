@@ -36,7 +36,7 @@ class PdfSourceHandlerTest(TestCase):
             load=lambda file_data, filename: {
                 "markdown": "# Heading\n\n| A | B |",
                 "title": "Parsed Title",
-                # Docling still returns pages; the handler turns them into segments.
+                # The loader returns pages; the handler turns them into segments.
                 "pages": [{"page_number": 3, "text": "# Heading\x00"}],
                 "metadata": {"status": "success", "errors": 0, "page_count": 1},
             }
@@ -57,4 +57,4 @@ class PdfSourceHandlerTest(TestCase):
             parsed.metadata["segments"],
             [{"text": "# Heading", "locator": {"type": "page", "value": 3}}],
         )
-        self.assertEqual(parsed.metadata["docling"]["status"], "success")
+        self.assertEqual(parsed.metadata["parser"]["status"], "success")

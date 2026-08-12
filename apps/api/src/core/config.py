@@ -27,26 +27,6 @@ class Settings(BaseSettings):
     retrieval_score_threshold: float = 0.25
     retrieval_min_context_chunks: int = 2
 
-    # --- Docling (PDF parsing) ---
-    # Tuned for the 2-vCPU/4 GB VPS. Docling's own defaults assume a much larger machine:
-    # do_table_structure=True with mode=ACCURATE, num_threads=4, device="auto", no timeout.
-    #
-    # Table structure runs a SECOND torch model (TableFormer) across every detected table
-    # region, on top of the per-page layout model. ACCURATE is docling's slowest mode and it
-    # dominated ingestion time here, so it is off by default and FAST when re-enabled.
-    # Trade-off: with it off, tables are extracted as flowed text rather than structured
-    # markdown, which weakens citations on table-heavy PDFs. Flip this back on if that
-    # matters more than latency for your corpus — FAST mode makes it far cheaper than before.
-    docling_do_table_structure: bool = False
-    # Docling defaults to 4 inference threads; this box has 2 vCPU, and oversubscribing an
-    # OpenMP pool costs throughput rather than gaining it.
-    docling_num_threads: int = 2
-    # Docling enforces no timeout by default. The worker has concurrency 1, so one
-    # pathological PDF would otherwise occupy it indefinitely — three times over, since the
-    # queue retries with max_attempts=3. On timeout docling returns partial results with
-    # PARTIAL_SUCCESS instead of hanging.
-    docling_timeout_seconds: float = 180.0
-
     filebase_access_key: str = ""
     filebase_secret_key: str = ""
     filebase_bucket_name: str = "kb-rag-new"
