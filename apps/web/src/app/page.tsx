@@ -51,16 +51,27 @@ function Workspace() {
     setAssets((current) => [asset, ...current.filter((item) => item.id !== asset.id)]);
   }
 
-  async function refreshAssets() {
+  async function refreshAssets(): Promise<KnowledgeAsset[]> {
     try {
-      setAssets(await listAssets());
+      const list = await listAssets();
+      setAssets(list);
+      return list;
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to load sources");
+      return [];
     }
   }
 
   useEffect(() => {
-    void refreshAssets();
+    // Resume polling for anything still mid-pipeline from a previous page load - otherwise
+    // a reload (or opening the page fresh) while a document is processing loses tracking of
+    // it entirely, and its card just sits frozen on its last-known stage forever even once
+    // the backend actually finishes.
+    void refreshAssets().then((list) => {
+      for (const asset of list) {
+        if (isProcessing(asset.status)) void pollUntilDone(asset.id);
+      }
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -69,12 +80,18 @@ function Workspace() {
     messagesRef.current?.scrollTo({ top: messagesRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, asking]);
 
-  // Ingestion runs in the worker; poll the asset until it reaches a terminal state.
+  // Ingestion runs in the worker; poll the asset until it reaches a terminal state. Rides
+  // out transient poll failures (a Sablier wake-up response, a brief network blip) instead
+  // of giving up on the first one - otherwise the card freezes on its last-known stage
+  // forever with no indication anything went wrong, even once the backend actually finishes.
+  const MAX_CONSECUTIVE_POLL_FAILURES = 5;
   async function pollUntilDone(assetId: string) {
+    let consecutiveFailures = 0;
     while (true) {
       await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
       try {
         const latest = await getAsset(assetId);
+        consecutiveFailures = 0;
         upsertAsset(latest);
         if (isTerminal(latest.status)) {
           if (latest.status === "ready")
@@ -82,7 +99,11 @@ function Workspace() {
           return;
         }
       } catch {
-        return;
+        consecutiveFailures += 1;
+        if (consecutiveFailures >= MAX_CONSECUTIVE_POLL_FAILURES) {
+          toast.error("Lost track of this upload's progress - refresh the page to check its status.");
+          return;
+        }
       }
     }
   }

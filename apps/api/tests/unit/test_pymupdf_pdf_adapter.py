@@ -42,3 +42,15 @@ class PyMuPDF4LLMAdapterTest(TestCase):
         parsed = adapter.load(pdf_bytes, "untitled.pdf")
 
         self.assertIsNone(parsed["title"])
+
+    def test_placeholder_metadata_title_falls_back_to_none(self) -> None:
+        # PDF-generating tools commonly leave a literal "(anonymous)"/"Untitled" as the
+        # metadata title when the author never set a real one - trusting it verbatim would
+        # show that instead of the caller's filename fallback, which is strictly worse.
+        for placeholder in ["(anonymous)", "Untitled", "  untitled document  "]:
+            pdf_bytes = self._sample_pdf_bytes(["Body text"], title=placeholder)
+            adapter = PyMuPDF4LLMAdapter()
+
+            parsed = adapter.load(pdf_bytes, "sample.pdf")
+
+            self.assertIsNone(parsed["title"], msg=f"placeholder title not rejected: {placeholder!r}")

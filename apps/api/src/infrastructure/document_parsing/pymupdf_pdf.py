@@ -4,6 +4,11 @@ from typing import Any
 
 from src.core.text import sanitize_text_for_storage
 
+# PDF-generating tools commonly leave one of these as the literal metadata title when the
+# author never set a real one - trusting them verbatim produces a display name that's worse
+# than just falling back to the filename (the caller's fallback for a None title).
+_PLACEHOLDER_TITLES = {"anonymous", "untitled", "untitled document", "no title", "document", "new document"}
+
 
 class PyMuPDF4LLMAdapter:
     """PDF -> markdown extraction via PyMuPDF4LLM (pure Python, no local ML models).
@@ -57,6 +62,10 @@ class PyMuPDF4LLMAdapter:
 
     def _extract_title(self, document: Any, filename: str) -> str | None:
         title = (document.metadata or {}).get("title")
-        if title:
-            return sanitize_text_for_storage(str(title))
-        return None
+        if not title:
+            return None
+        cleaned = sanitize_text_for_storage(str(title)).strip()
+        normalized = cleaned.strip("()[] ").lower()
+        if not cleaned or normalized in _PLACEHOLDER_TITLES:
+            return None
+        return cleaned
