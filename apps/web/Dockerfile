@@ -6,12 +6,12 @@ FROM base AS build
 WORKDIR /repo
 COPY . .
 RUN pnpm install --frozen-lockfile
-ARG NEXT_PUBLIC_API_URL
-ARG NEXT_PUBLIC_PRODUCT_URL
-ARG NEXT_PUBLIC_WEBSITE_URL
-ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL} \
-    NEXT_PUBLIC_PRODUCT_URL=${NEXT_PUBLIC_PRODUCT_URL} \
-    NEXT_PUBLIC_WEBSITE_URL=${NEXT_PUBLIC_WEBSITE_URL}
+# No NEXT_PUBLIC_* ARG/ENV here on purpose: apps/web falls back to relative paths (/api, /,
+# and its own basePath /app) when these are genuinely absent from the build environment. An
+# ARG with no default, even when never passed via --build-arg, still makes the subsequent ENV
+# line set the var to an EMPTY STRING rather than leaving it unset - and `"" ?? "/app"` does
+# NOT fall back (only null/undefined do), so declaring these at all silently breaks the
+# fallback. Removing them entirely is what actually lets the fallback logic work.
 RUN pnpm exec turbo run build --filter=@kb/web
 
 FROM node:22-alpine

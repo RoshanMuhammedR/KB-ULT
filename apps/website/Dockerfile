@@ -6,12 +6,7 @@ FROM base AS build
 WORKDIR /repo
 COPY . .
 RUN pnpm install --frozen-lockfile
-ARG NEXT_PUBLIC_API_URL
-ARG NEXT_PUBLIC_PRODUCT_URL
-ARG NEXT_PUBLIC_WEBSITE_URL
-ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL} \
-    NEXT_PUBLIC_PRODUCT_URL=${NEXT_PUBLIC_PRODUCT_URL} \
-    NEXT_PUBLIC_WEBSITE_URL=${NEXT_PUBLIC_WEBSITE_URL}
+# See apps/web/Dockerfile for why these are deliberately absent, not just unset via CI.
 RUN pnpm exec turbo run build --filter=@kb/website
 
 FROM node:22-alpine
