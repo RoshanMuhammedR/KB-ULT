@@ -25,8 +25,16 @@ from src.domain.interfaces import IFileStorage, IJobQueue
 from src.domain.interfaces.auth import ITokenService
 from src.domain.interfaces.cache import ICache
 from src.http.middleware import BearerTokenAuthenticator
-from src.infrastructure.ai_providers import AICreditsEmbeddingProvider, AICreditsLLMProvider
-from src.infrastructure.auth import Argon2PasswordHasher, JwtTokenService
+from src.infrastructure.ai_providers import (
+    AICreditsEmbeddingProvider,
+    AICreditsLLMProvider,
+    VoxtralTranscriptionProvider,
+)
+from src.infrastructure.auth import (
+    Argon2PasswordHasher,
+    GoogleIdTokenVerifier,
+    JwtTokenService,
+)
 from src.infrastructure.cache import ValkeyCache
 from src.infrastructure.document_parsing import PyMuPDF4LLMAdapter
 from src.infrastructure.langchain_adapters.chat_model import OpenAICompatibleChatAdapter
@@ -34,6 +42,7 @@ from src.infrastructure.langchain_adapters.embeddings import OpenAICompatibleEmb
 from src.infrastructure.langchain_adapters.text_splitter import RecursiveSplitterAdapter
 from src.infrastructure.repositories import (
     ChunkRepository,
+    ConversationRepository,
     IngestionJobEventRepository,
     IngestionJobRepository,
     KnowledgeAssetRepository,
@@ -44,7 +53,13 @@ from src.infrastructure.repositories import (
 )
 from src.infrastructure.storage import FilebaseAdapter
 from src.infrastructure.vector_store.pgvector import PgVectorStore
-from src.ingestion.handlers import PdfSourceHandler, YouTubeSourceHandler
+from src.ingestion.handlers import (
+    AudioSourceHandler,
+    MarkdownSourceHandler,
+    PdfSourceHandler,
+    PptxSourceHandler,
+    YouTubeSourceHandler,
+)
 from src.ingestion.registry import SourceHandlerRegistry
 from src.processing.chunking import RecursiveKnowledgeAssetChunker
 from src.retrieval.retriever import Retriever
@@ -81,14 +96,30 @@ def _build_pdf_parser() -> PyMuPDF4LLMAdapter:
     return PyMuPDF4LLMAdapter()
 
 
-def _build_source_handler_registry(file_storage: IFileStorage) -> SourceHandlerRegistry:
+def _build_transcription_provider(settings: Settings) -> VoxtralTranscriptionProvider:
+    return VoxtralTranscriptionProvider(
+        api_key=settings.aicredits_api_key,
+        base_url=settings.aicredits_base_url,
+        model=settings.aicredits_transcription_model,
+    )
+
+
+def _build_source_handler_registry(
+    file_storage: IFileStorage, settings: Settings
+) -> SourceHandlerRegistry:
     # One handler per supported SourceType. Handlers own acquisition (download from
-    # storage) too, so each gets the file storage it needs. Adding website/YouTube is
+    # storage) too, so each gets the file storage it needs. Adding a website source is
     # a new `registry.register(SourceType.X, XHandler(...))` line here — nothing else.
     registry = SourceHandlerRegistry()
     registry.register(SourceType.PDF, PdfSourceHandler(_build_pdf_parser(), file_storage))
     # YouTube fetches its own content (transcript API + oEmbed), so it needs no storage.
     registry.register(SourceType.YOUTUBE, YouTubeSourceHandler())
+    registry.register(SourceType.MARKDOWN, MarkdownSourceHandler(file_storage))
+    registry.register(SourceType.PPTX, PptxSourceHandler(file_storage))
+    registry.register(
+        SourceType.AUDIO,
+        AudioSourceHandler(file_storage, _build_transcription_provider(settings)),
+    )
     return registry
 
 
@@ -116,7 +147,7 @@ def build_ingestion_service(db: Session, settings: Settings) -> IngestionService
         chunk_repo=ChunkRepository(db),
         job_repo=IngestionJobRepository(db),
         job_event_repo=IngestionJobEventRepository(db),
-        source_handler_registry=_build_source_handler_registry(file_storage),
+        source_handler_registry=_build_source_handler_registry(file_storage, settings),
         chunker=RecursiveKnowledgeAssetChunker(
             RecursiveSplitterAdapter(settings.chunk_size_tokens, settings.chunk_overlap_tokens)
         ),
@@ -144,6 +175,7 @@ def build_chat_service(db: Session, settings: Settings) -> ChatService:
         top_k=settings.retrieval_top_k,
         threshold=settings.retrieval_score_threshold,
         min_context_chunks=settings.retrieval_min_context_chunks,
+        conversation_repo=ConversationRepository(db),
     )
 
 
@@ -168,6 +200,18 @@ def build_authenticators(settings: Settings) -> list:
     return [BearerTokenAuthenticator(build_token_service(settings))]
 
 
+# One verifier process-wide so the Google JWKS cache inside it is actually reused; a
+# per-request instance would refetch Google's keys on every sign-in.
+_google_verifier: GoogleIdTokenVerifier | None = None
+
+
+def build_google_verifier(settings: Settings) -> GoogleIdTokenVerifier:
+    global _google_verifier
+    if _google_verifier is None or _google_verifier.client_id != settings.google_client_id:
+        _google_verifier = GoogleIdTokenVerifier(settings.google_client_id)
+    return _google_verifier
+
+
 def build_auth_service(db: Session, settings: Settings) -> AuthService:
     # The request/worker Session doubles as the IUnitOfWork so registration's tenant+user
     # inserts commit atomically.
@@ -179,4 +223,5 @@ def build_auth_service(db: Session, settings: Settings) -> AuthService:
         token_service=build_token_service(settings),
         unit_of_work=db,
         refresh_ttl_seconds=settings.refresh_token_ttl_seconds,
+        google_verifier=build_google_verifier(settings),
     )

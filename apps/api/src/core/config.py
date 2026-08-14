@@ -19,7 +19,14 @@ class Settings(BaseSettings):
     aicredits_base_url: str = "https://api.aicredits.in/v1"
     aicredits_chat_model: str = "openai/gpt-4o-mini"
     aicredits_embedding_model: str = "text-embedding-3-small"
+    # Hosted speech-to-text for audio sources. Nothing runs locally — no ML runtime, no
+    # weights in the image — so this is just another model id on the same gateway.
+    aicredits_transcription_model: str = "mistralai/voxtral-small-24b-2507"
     embedding_dimensions: int = 1536
+
+    # Audio is transcribed by a paid hosted model, so it gets a size cap the other source
+    # types don't need. Enforced at upload with a plain-language 400.
+    max_audio_upload_bytes: int = 100 * 1024 * 1024
 
     chunk_size_tokens: int = 800
     chunk_overlap_tokens: int = 120
@@ -45,6 +52,11 @@ class Settings(BaseSettings):
     # long-lived and revocable in Postgres.
     access_token_ttl_seconds: int = 15 * 60
     refresh_token_ttl_seconds: int = 30 * 24 * 60 * 60
+
+    # Google sign-in. Only the (public) client id is needed — the browser-side ID-token flow
+    # involves no client secret. Empty disables the feature: POST /auth/google returns 503
+    # and the apps render no Google button, so local dev works without Google credentials.
+    google_client_id: str = ""
 
     # --- Cache (Valkey) ---
     # No code path uses the cache today (it backed the removed cross-origin handoff). The

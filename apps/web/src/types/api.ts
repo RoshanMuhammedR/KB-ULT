@@ -1,3 +1,7 @@
+import type { Locator, SourceStatus, SourceType } from "@kb/shared";
+
+export type { Locator, SourceStatus, SourceType };
+
 // Latest ingestion job for an asset. Present on single-asset reads (GET
 // /documents/{id}); null in the list view.
 export type IngestionJob = {
@@ -14,14 +18,18 @@ export type KnowledgeAsset = {
   version: number;
   filename: string;
   title: string | null;
-  source_type: string;
+  source_type: SourceType;
   storage_key: string;
   download_url: string | null;
-  // Pipeline stage: queued | extracting | chunking | embedding | ready | failed.
-  status: string;
+  // Audio only: the readable transcript.md written beside the original at ingest time.
+  transcript_url: string | null;
+  // Pipeline stage: pending | queued | extracting | chunking | embedding | ready | failed.
+  status: SourceStatus;
   failed_step: string | null;
   error_message: string | null;
   metadata: Record<string, unknown>;
+  // How many indexed passages this source contributes — i.e. how much of it is usable.
+  passage_count: number;
   job: IngestionJob | null;
   superseded_at: string | null;
   created_at: string | null;
@@ -31,19 +39,12 @@ export type KnowledgeAsset = {
 // Statuses that mean ingestion has stopped — used to end polling.
 export const TERMINAL_STATUSES = ["ready", "failed"] as const;
 
-// Source-neutral citation position. For PDF: { type: "page", value: 3 }. A future
-// YouTube source would use { type: "timestamp", value: 125 }, rendered accordingly.
-export type Locator = {
-  type: string;
-  value: number | string | null;
-};
-
 export type Citation = {
   asset_id: string;
   chunk_id: string;
   filename: string;
-  source_type: string;
-  locator: Locator | null;
+  source_type: SourceType;
+  locator: Locator;
   chunk_index: number;
   score: number;
   excerpt: string;
@@ -55,22 +56,8 @@ export type ChatResponse = {
   citations: Citation[];
 };
 
-// One ingestion job in the /jobs dashboard.
-export type JobSummary = {
-  id: string;
-  asset_id: string;
-  filename: string;
-  status: string;
-  attempts: number;
-  max_attempts: number;
-  last_error: string | null;
-  scheduled_at: string | null;
-  started_at: string | null;
-  finished_at: string | null;
-  created_at: string | null;
-};
-
-// One line of the persisted worker log for an asset.
+// One line of the persisted worker log for an asset, shown as the plain-language
+// activity timeline on source detail.
 export type JobEvent = {
   id: string;
   event: string;
@@ -78,6 +65,54 @@ export type JobEvent = {
   message: string | null;
   data: Record<string, unknown>;
   ts: string | null;
+};
+
+// ---- Conversations -------------------------------------------------------
+export type MessageRole = "user" | "assistant";
+
+export type Message = {
+  id: string;
+  role: MessageRole;
+  content: string;
+  citations: Citation[];
+  insufficient_context: boolean;
+  created_at: string | null;
+};
+
+// List view — enough to recognise a thread without loading it.
+export type ConversationSummary = {
+  id: string;
+  title: string;
+  message_count: number;
+  preview: string;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+export type Conversation = {
+  id: string;
+  title: string;
+  messages: Message[];
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+// One indexed passage — the unit of retrieval and of citation. The viewer shows the cited
+// one with its neighbours either side.
+export type Passage = {
+  chunk_index: number;
+  text: string;
+  locator: Locator;
+};
+
+// An answer that cited a given source, for the "answers that cited this" panel.
+export type AssetCitation = {
+  conversation_id: string;
+  conversation_title: string;
+  locator: Locator;
+  chunk_index: number | null;
+  score: number | null;
+  excerpt: string | null;
 };
 
 // ---- Auth ----------------------------------------------------------------
@@ -96,27 +131,25 @@ export type LoginRequest = {
 export type RegisterRequest = {
   email: string;
   password: string;
-  name?: string;
 };
 
-// The current identity, resolved from /auth/me for the account area.
+// The current identity, resolved from /auth/me for the account area. The server also
+// returns a tenant label, which the UI deliberately never shows.
 export type MeResponse = {
   user_id: string;
   email: string;
   name: string;
   tenant_id: string;
-  workspace_name: string;
 };
 
 // What we persist client-side (in a host-scoped cookie). The access JWT only carries
-// tid/sub, so email/name/workspace come from /auth/me. `remember` drives cookie lifetime:
-// a persistent cookie when true, a session cookie (cleared on browser close) when false.
+// tid/sub, so email/name come from /auth/me. `remember` drives cookie lifetime: a
+// persistent cookie when true, a session cookie (cleared on browser close) when false.
 export type Session = {
   accessToken: string;
   refreshToken: string;
   email: string;
   name: string;
-  workspaceName: string;
   expiresAt: number; // epoch ms
   remember: boolean;
 };

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID, uuid4
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session, joinedload
 
 from src.core.text import sanitize_json_for_storage, sanitize_text_for_storage
@@ -32,6 +32,17 @@ class ChunkRepository:
         for model in models:
             self.db.refresh(model)
         return [chunk_to_domain(model) for model in models]
+
+    def count_by_asset(self, asset_ids: list[UUID]) -> dict[UUID, int]:
+        """Passage counts for many assets in one query — the library list needs all of them."""
+        if not asset_ids:
+            return {}
+        rows = self.db.execute(
+            select(ChunkModel.knowledge_asset_id, func.count(ChunkModel.id))
+            .where(ChunkModel.knowledge_asset_id.in_(asset_ids))
+            .group_by(ChunkModel.knowledge_asset_id)
+        ).all()
+        return {asset_id: int(count) for asset_id, count in rows}
 
     def list_for_asset(self, asset_id: UUID) -> list[Chunk]:
         rows = self.db.scalars(

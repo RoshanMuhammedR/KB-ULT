@@ -12,7 +12,21 @@ from src.domain.entities import SourceType
 # (`source_type_for_url`) here without disturbing the rest of the pipeline.
 _EXTENSION_TO_SOURCE_TYPE: dict[str, SourceType] = {
     ".pdf": SourceType.PDF,
+    ".md": SourceType.MARKDOWN,
+    ".markdown": SourceType.MARKDOWN,
+    ".pptx": SourceType.PPTX,
+    ".mp3": SourceType.AUDIO,
+    ".m4a": SourceType.AUDIO,
+    ".wav": SourceType.AUDIO,
+    ".ogg": SourceType.AUDIO,
+    ".webm": SourceType.AUDIO,
 }
+
+# Audio uploads are transcribed by a hosted model, which costs real time and money, so the
+# upload route caps their size separately from everything else (see `max_audio_upload_bytes`).
+AUDIO_EXTENSIONS = frozenset(
+    ext for ext, source_type in _EXTENSION_TO_SOURCE_TYPE.items() if source_type is SourceType.AUDIO
+)
 
 
 def source_type_for_filename(filename: str) -> SourceType:

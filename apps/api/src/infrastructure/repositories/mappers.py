@@ -1,21 +1,26 @@
 from src.domain.entities import (
     AssetStatus,
     Chunk,
+    Conversation,
     IngestionJob,
     JobEvent,
     JobStatus,
     KnowledgeAsset,
     KnowledgeBase,
+    Message,
+    MessageRole,
 )
 from src.domain.entities.refresh_token import RefreshToken
 from src.domain.entities.tenant import Tenant, TenantStatus
 from src.domain.entities.user import User, UserStatus
 from src.infrastructure.database.models import (
     ChunkModel,
+    ConversationModel,
     IngestionJobEventModel,
     IngestionJobModel,
     KnowledgeAssetModel,
     KnowledgeBaseModel,
+    MessageModel,
     RefreshTokenModel,
     TenantModel,
     UserModel,
@@ -39,6 +44,7 @@ def user_to_domain(model: UserModel) -> User:
         tenant_id=model.tenant_id,
         email=model.email,
         password_hash=model.password_hash,
+        google_sub=model.google_sub,
         name=model.name,
         status=UserStatus(model.status),
         email_verified_at=model.email_verified_at,
@@ -130,4 +136,30 @@ def chunk_to_domain(model: ChunkModel) -> Chunk:
         text=model.text,
         metadata=model.metadata_ or {},
         created_at=model.created_at,
+    )
+
+
+def message_to_domain(model: MessageModel) -> Message:
+    return Message(
+        id=model.id,
+        conversation_id=model.conversation_id,
+        role=MessageRole(model.role),
+        content=model.content,
+        citations=model.citations or [],
+        insufficient_context=model.insufficient_context,
+        created_at=model.created_at,
+    )
+
+
+def conversation_to_domain(
+    model: ConversationModel, messages: list[MessageModel] | None = None
+) -> Conversation:
+    """`messages` is passed explicitly so list views can skip loading the whole thread."""
+    return Conversation(
+        id=model.id,
+        knowledge_base_id=model.knowledge_base_id,
+        title=model.title,
+        messages=[message_to_domain(message) for message in messages or []],
+        created_at=model.created_at,
+        updated_at=model.updated_at,
     )

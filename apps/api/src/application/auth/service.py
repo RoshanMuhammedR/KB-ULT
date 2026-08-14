@@ -26,7 +26,12 @@ from src.core.tenant_context import system_scope
 from src.domain.entities.refresh_token import RefreshToken
 from src.domain.entities.tenant import Tenant, TenantStatus
 from src.domain.entities.user import User, UserStatus
-from src.domain.interfaces.auth import IPasswordHasher, ITokenService, IUnitOfWork
+from src.domain.interfaces.auth import (
+    IGoogleIdTokenVerifier,
+    IPasswordHasher,
+    ITokenService,
+    IUnitOfWork,
+)
 from src.domain.interfaces.repositories import (
     IRefreshTokenRepository,
     ITenantRepository,
@@ -82,6 +87,7 @@ class AuthService:
         token_service: ITokenService,
         unit_of_work: IUnitOfWork,
         refresh_ttl_seconds: int,
+        google_verifier: IGoogleIdTokenVerifier | None = None,
     ) -> None:
         self.tenant_repo = tenant_repo
         self.user_repo = user_repo
@@ -90,6 +96,7 @@ class AuthService:
         self.token_service = token_service
         self.uow = unit_of_work
         self.refresh_ttl_seconds = refresh_ttl_seconds
+        self.google_verifier = google_verifier
 
     # --- Registration ------------------------------------------------------------
 
@@ -145,6 +152,10 @@ class AuthService:
             user = self.user_repo.get_by_email(email)
             if user is None:
                 self._deny("user_not_found")
+            if not user.password_hash:
+                # A Google-created account has no password. Same generic denial as any
+                # other failure, so this doesn't reveal how the account was created.
+                self._deny("password_login_unavailable", user_id=str(user.id))
             if not self.password_hasher.verify(password, user.password_hash):
                 self._deny("bad_password", user_id=str(user.id))
             if user.status is not UserStatus.ACTIVE:
@@ -159,6 +170,80 @@ class AuthService:
             try:
                 tokens = self._issue(user)
                 self.uow.commit()
+                return tokens
+            except Exception:
+                self.uow.rollback()
+                raise
+
+    # --- Google sign-in ----------------------------------------------------------
+
+    def sign_in_with_google(self, id_token: str) -> AuthTokens:
+        """Sign in (or register) with a verified Google ID token.
+
+        One door, three cases: a returning Google user, a password user signing in with
+        Google for the first time (linked here), and a brand-new account (created exactly
+        the way `register` does, atomically, just without a password).
+
+        The `email_verified` check is load-bearing: linking by email address is only safe
+        because Google asserts it verified that address. Without it, anyone who could get
+        Google to issue a token for an address could take over the matching account.
+        """
+        if self.google_verifier is None:
+            raise InvalidCredentialsError("Google sign-in is not configured on this server")
+
+        identity = self.google_verifier.verify(id_token)
+        if not identity.email_verified:
+            self._deny("google_email_unverified", email=identity.email)
+
+        email = _normalize_email(identity.email)
+
+        with system_scope():
+            user = self.user_repo.get_by_google_sub(identity.subject)
+
+            if user is None:
+                existing = self.user_repo.get_by_email(email)
+                if existing is not None:
+                    user = self.user_repo.link_google(existing.id, identity.subject)
+                    logger.info("google_account_linked", user_id=str(user.id))
+
+            if user is not None:
+                if user.status is not UserStatus.ACTIVE:
+                    self._deny("user_not_active", user_id=str(user.id), status=str(user.status))
+                tenant = self.tenant_repo.get(user.tenant_id)
+                if tenant is None:
+                    self._deny("tenant_not_found", user_id=str(user.id))
+                if tenant.status is not TenantStatus.ACTIVE:
+                    self._deny(
+                        "tenant_not_active", tenant_id=str(tenant.id), status=str(tenant.status)
+                    )
+                try:
+                    tokens = self._issue(user)
+                    self.uow.commit()
+                    return tokens
+                except Exception:
+                    self.uow.rollback()
+                    raise
+
+            # New account. Same atomicity as `register`: tenant and user both land, or neither.
+            display_name = identity.name or _default_workspace_name(email)
+            try:
+                tenant = self.tenant_repo.create(
+                    Tenant(name=display_name, status=TenantStatus.ACTIVE)
+                )
+                created = self.user_repo.create(
+                    User(
+                        tenant_id=tenant.id,
+                        email=email,
+                        password_hash=None,
+                        google_sub=identity.subject,
+                        name=display_name,
+                        status=UserStatus.ACTIVE,
+                        email_verified_at=datetime.now(timezone.utc),
+                    )
+                )
+                tokens = self._issue(created)
+                self.uow.commit()
+                logger.info("google_account_created", user_id=str(created.id))
                 return tokens
             except Exception:
                 self.uow.rollback()

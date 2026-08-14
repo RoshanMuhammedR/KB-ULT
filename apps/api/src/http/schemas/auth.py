@@ -15,6 +15,12 @@ class LoginRequest(BaseModel):
     password: str = Field(min_length=1, max_length=1024)
 
 
+class GoogleSignInRequest(BaseModel):
+    """The ID token Google Identity Services handed the browser."""
+
+    id_token: str = Field(min_length=1, max_length=8192)
+
+
 class RefreshRequest(BaseModel):
     refresh_token: str
 

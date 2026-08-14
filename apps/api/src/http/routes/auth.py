@@ -10,9 +10,11 @@ from src.core.exceptions import (
     InvalidCredentialsError,
     TokenError,
 )
+from src.core.config import Settings, get_settings
 from src.core.identity import Identity
 from src.http.dependencies import get_auth_service, get_current_identity
 from src.http.schemas.auth import (
+    GoogleSignInRequest,
     LoginRequest,
     LogoutRequest,
     MeResponse,
@@ -61,6 +63,27 @@ def login(
     # specific reason is logged server-side only, to avoid account enumeration.
     try:
         tokens = auth_service.login(email=request.email, password=request.password)
+    except InvalidCredentialsError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+    return _to_token_response(tokens)
+
+
+@router.post("/google", response_model=TokenResponse)
+def google_sign_in(
+    request: GoogleSignInRequest,
+    auth_service: Annotated[AuthService, Depends(get_auth_service)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> TokenResponse:
+    # Signs in or registers in one step from a Google ID token the browser already holds.
+    # 503 rather than 401 when unconfigured: it's a server capability that's missing, not a
+    # bad credential, and the client uses that to hide the button.
+    if not settings.google_client_id:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Google sign-in is not configured on this server",
+        )
+    try:
+        tokens = auth_service.sign_in_with_google(request.id_token)
     except InvalidCredentialsError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
     return _to_token_response(tokens)

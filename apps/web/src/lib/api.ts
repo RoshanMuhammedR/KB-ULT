@@ -1,10 +1,14 @@
 import type {
+  AssetCitation,
   ChatResponse,
+  Citation,
+  Conversation,
+  ConversationSummary,
   JobEvent,
-  JobSummary,
   KnowledgeAsset,
   LoginRequest,
   MeResponse,
+  Passage,
   RegisterRequest,
   TokenResponse
 } from "@/types/api";
@@ -99,9 +103,14 @@ function jsonBody(data: unknown): RequestInit {
 export function login(data: LoginRequest): Promise<TokenResponse> {
   return request<TokenResponse>("/auth/login", jsonBody(data), { auth: false });
 }
-// Create a workspace and its owner user; the response is an already-signed-in session.
+// Creates the account and signs in, in one step; the response is an active session.
 export function register(data: RegisterRequest): Promise<TokenResponse> {
   return request<TokenResponse>("/auth/register", jsonBody(data), { auth: false });
+}
+// Signs in or registers from a Google ID token, returning the same session shape as
+// /auth/login — so the caller's token-handling path is identical either way.
+export function signInWithGoogle(idToken: string): Promise<TokenResponse> {
+  return request<TokenResponse>("/auth/google", jsonBody({ id_token: idToken }), { auth: false });
 }
 // The current identity, for the account area. Uses the bearer token + silent refresh.
 export function getMe(): Promise<MeResponse> {
@@ -152,16 +161,158 @@ export function deleteAsset(assetId: string): Promise<void> {
   return request<void>(`/documents/${assetId}`, { method: "DELETE" });
 }
 
-export function listJobs(): Promise<JobSummary[]> {
-  return request<JobSummary[]>("/jobs");
-}
-
 export function getAssetEvents(assetId: string): Promise<JobEvent[]> {
   return request<JobEvent[]>(`/documents/${assetId}/events`);
 }
 
+// The cited passage plus its neighbours — the surrounding context the viewer shows.
+export function getPassages(assetId: string, around?: number, window = 2): Promise<Passage[]> {
+  const query =
+    around === undefined ? "" : `?around=${around}&window=${window}`;
+  return request<Passage[]>(`/documents/${assetId}/passages${query}`);
+}
+
+// Every persisted answer that cited this source.
+export function getAssetCitations(assetId: string): Promise<AssetCitation[]> {
+  return request<AssetCitation[]>(`/documents/${assetId}/citations`);
+}
+
 export function askQuestion(question: string): Promise<ChatResponse> {
   return request<ChatResponse>("/chat/ask", jsonBody({ question }));
+}
+
+// ---- Conversations -------------------------------------------------------
+export function listConversations(): Promise<ConversationSummary[]> {
+  return request<ConversationSummary[]>("/conversations");
+}
+
+export function getConversation(conversationId: string): Promise<Conversation> {
+  return request<Conversation>(`/conversations/${conversationId}`);
+}
+
+export function renameConversation(conversationId: string, title: string): Promise<Conversation> {
+  return request<Conversation>(`/conversations/${conversationId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title })
+  });
+}
+
+export function deleteConversation(conversationId: string): Promise<void> {
+  return request<void>(`/conversations/${conversationId}`, { method: "DELETE" });
+}
+
+export function deleteMessage(conversationId: string, messageId: string): Promise<void> {
+  return request<void>(`/conversations/${conversationId}/messages/${messageId}`, {
+    method: "DELETE"
+  });
+}
+
+/** The events `streamAnswer` reports back, mirroring the server's SSE event names. */
+export type StreamHandlers = {
+  onConversation?: (conversation: { id: string; title: string }) => void;
+  onDelta?: (text: string) => void;
+  onCitations?: (citations: Citation[]) => void;
+  onDone?: (done: { message_id: string; insufficient_context: boolean }) => void;
+};
+
+/**
+ * Ask a question and consume the answer as it streams.
+ *
+ * The shared `request()` wrapper parses JSON and returns once, which is exactly wrong for a
+ * stream, so this is its sibling: same bearer token, same one-shot silent refresh on a 401,
+ * same redirect on failure — but it reads the body incrementally and dispatches SSE frames.
+ * Pass an AbortSignal so navigating away cancels the request rather than leaking it.
+ */
+export async function streamAnswer(
+  conversationId: string | null,
+  question: string,
+  handlers: StreamHandlers,
+  signal?: AbortSignal,
+  retry = true
+): Promise<void> {
+  const target = conversationId ?? "new";
+  const headers = new Headers({ "Content-Type": "application/json", Accept: "text/event-stream" });
+  const token = getAccessToken();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+
+  const response = await fetch(`${API_URL}/conversations/${target}/messages`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ question }),
+    cache: "no-store",
+    signal
+  });
+
+  if (response.status === 401 && retry) {
+    if (await tryRefresh()) {
+      return streamAnswer(conversationId, question, handlers, signal, false);
+    }
+    redirectToLogin();
+    throw new ApiError(401, "Your session has expired. Please sign in again.");
+  }
+  if (!response.ok) {
+    throw new ApiError(response.status, await readError(response));
+  }
+  if (!response.body) {
+    throw new ApiError(0, "This browser can't stream answers.");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      // SSE frames are separated by a blank line; the last piece may be incomplete.
+      const frames = buffer.split("\n\n");
+      buffer = frames.pop() ?? "";
+      for (const frame of frames) {
+        dispatchFrame(frame, handlers);
+      }
+    }
+    if (buffer.trim()) dispatchFrame(buffer, handlers);
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+function dispatchFrame(frame: string, handlers: StreamHandlers): void {
+  let event = "message";
+  const dataLines: string[] = [];
+  for (const line of frame.split("\n")) {
+    if (line.startsWith("event:")) event = line.slice(6).trim();
+    else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
+  }
+  if (dataLines.length === 0) return;
+
+  let payload: unknown;
+  try {
+    payload = JSON.parse(dataLines.join("\n"));
+  } catch {
+    return; // A partial or malformed frame is skipped rather than killing the stream.
+  }
+
+  switch (event) {
+    case "conversation":
+      handlers.onConversation?.(payload as { id: string; title: string });
+      break;
+    case "delta":
+      handlers.onDelta?.(String(payload));
+      break;
+    case "citations":
+      handlers.onCitations?.(payload as Citation[]);
+      break;
+    case "done":
+      handlers.onDone?.(payload as { message_id: string; insufficient_context: boolean });
+      break;
+    case "error":
+      throw new ApiError(500, (payload as { message: string }).message);
+  }
 }
 
 export { ApiError };

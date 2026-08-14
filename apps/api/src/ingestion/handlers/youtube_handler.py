@@ -5,11 +5,7 @@ from typing import Callable
 
 from src.core.text import sanitize_text_for_storage
 from src.domain.entities import AssetStatus, KnowledgeAsset, RawContent
-
-# Coalesce transcript lines into segments of roughly this many characters. YouTube
-# transcript entries are tiny (a few words each); grouping them yields citation-friendly
-# chunks while the start time of each group becomes the citation locator.
-_SEGMENT_CHAR_TARGET = 500
+from src.ingestion.handlers._segments import coalesce_timed_lines
 
 # Callable seams so tests can stub network I/O and the exact youtube-transcript-api call
 # (its surface shifted between 0.6.x and 1.x) lives in one place.
@@ -85,7 +81,7 @@ class YouTubeSourceHandler:
         payload = json.loads(data)
         transcript: list[dict] = payload["transcript"]
 
-        segments = self._coalesce(transcript)
+        segments = coalesce_timed_lines(transcript)
         full_text = sanitize_text_for_storage("\n".join(seg["text"] for seg in segments)).strip()
         title = sanitize_text_for_storage(payload.get("title") or asset.filename)
 
@@ -111,36 +107,3 @@ class YouTubeSourceHandler:
             },
         )
 
-    def _coalesce(self, transcript: list[dict]) -> list[dict]:
-        # Group consecutive transcript lines into ~_SEGMENT_CHAR_TARGET windows, keeping
-        # each window's first line's start time as its timestamp locator (whole seconds).
-        # Flush *before* adding a line that would overflow so windows stay bounded and a
-        # large time gap between lines starts a fresh, correctly-timestamped segment.
-        segments: list[dict] = []
-        buffer: list[str] = []
-        window_start = 0.0
-        current_len = 0
-
-        for line in transcript:
-            text = line.get("text") or ""
-            if buffer and current_len + len(text) > _SEGMENT_CHAR_TARGET:
-                self._emit(segments, buffer, window_start)
-                buffer = []
-                current_len = 0
-            if not buffer:
-                window_start = float(line.get("start", 0) or 0)
-            buffer.append(text)
-            current_len += len(text)
-
-        self._emit(segments, buffer, window_start)
-        return segments
-
-    @staticmethod
-    def _emit(segments: list[dict], buffer: list[str], window_start: float) -> None:
-        if not buffer:
-            return
-        text = sanitize_text_for_storage(" ".join(buffer)).strip()
-        if text:
-            segments.append(
-                {"text": text, "locator": {"type": "timestamp", "value": int(window_start)}}
-            )

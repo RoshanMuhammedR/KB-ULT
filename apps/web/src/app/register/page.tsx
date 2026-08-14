@@ -3,17 +3,17 @@
 import { FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Field, buttonClass } from "@kb/ui";
-import { AuthShell } from "@/components/AuthShell";
+import { Button, Field, Input } from "@kb/ui";
+import { AuthShell } from "@/components/saga/auth-shell";
+import { GoogleButton } from "@/components/saga/google-button";
 import { useAuth } from "@/lib/auth-context";
 import { ApiError } from "@/lib/api";
 
 const MIN_PASSWORD_LENGTH = 8;
 
 export default function RegisterPage() {
-  const { status, register } = useAuth();
+  const { status, register, loginWithGoogle } = useAuth();
   const router = useRouter();
-  const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [remember, setRemember] = useState(true);
@@ -24,96 +24,129 @@ export default function RegisterPage() {
     if (status === "authed") router.replace("/");
   }, [status, router]);
 
-  async function onSubmit(e: FormEvent) {
-    e.preventDefault();
-    setError(null);
+  function describe(err: unknown): string {
+    if (err instanceof ApiError && err.status === 409) {
+      return "That email is already registered. Sign in instead.";
+    }
+    if (err instanceof ApiError && err.status === 422) {
+      return "Please check your details and try again.";
+    }
+    if (err instanceof ApiError && err.status === 503) {
+      return "Google sign-in isn't set up on this server. Use your email and password.";
+    }
+    return err instanceof Error ? err.message : "Sign up failed.";
+  }
 
-    if (!email.includes("@")) return setError("Enter a valid email address.");
+  async function onSubmit(event: FormEvent) {
+    event.preventDefault();
+    if (!email.includes("@")) {
+      setError("Enter a valid email address.");
+      return;
+    }
     if (password.length < MIN_PASSWORD_LENGTH) {
-      return setError(`Password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
+      setError(`Use at least ${MIN_PASSWORD_LENGTH} characters for your password.`);
+      return;
     }
 
     setBusy(true);
+    setError(null);
     try {
-      // Registration returns an already-signed-in session, so this lands in the app.
-      await register(email, password, name.trim() || undefined, remember);
+      await register(email, password, remember);
       router.replace("/");
     } catch (err) {
-      if (err instanceof ApiError && err.status === 409) {
-        setError("That email is already registered. Try signing in instead.");
-      } else if (err instanceof ApiError && err.status === 422) {
-        setError("Please check your details and try again.");
-      } else {
-        setError(err instanceof Error ? err.message : "Something went wrong. Try again.");
-      }
+      setError(describe(err));
+      setBusy(false);
+    }
+  }
+
+  async function onGoogle(idToken: string) {
+    setBusy(true);
+    setError(null);
+    try {
+      await loginWithGoogle(idToken, remember);
+      router.replace("/");
+    } catch (err) {
+      setError(describe(err));
       setBusy(false);
     }
   }
 
   return (
     <AuthShell
-      asideTitle="Create your Saga workspace."
-      asideSub="One isolated, source-cited knowledge base — yours alone. You'll land inside it the moment you're done."
+      asideTitle="Answers you can trace back to the page."
+      asideSub="Add your documents, recordings and links, then ask questions of them. Every answer comes back with the passages behind it."
     >
-      <form className="auth__form" onSubmit={onSubmit} noValidate>
-        <div className="auth__head">
-          <h1 className="auth__title">Get started</h1>
-          <p className="auth__lede">An email and a password is all it takes.</p>
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-display-md">Create your account</h1>
+          <p className="mt-1.5 text-sm text-muted-foreground">
+            Email and password, or Google. No plans to pick.
+          </p>
         </div>
 
-        {error && (
-          <p className="auth__error" role="alert">
+        {error ? (
+          <p
+            className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-[13px] text-destructive"
+            role="alert"
+          >
             {error}
           </p>
-        )}
+        ) : null}
 
-        <div className="auth__fields">
-          <Field
-            label="Workspace name (optional)"
-            placeholder="Acme Research"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            hint="What to call your workspace. Defaults to your email name."
-          />
-          <Field
-            label="Email"
-            type="email"
-            placeholder="you@example.com"
-            autoComplete="email"
-            autoCapitalize="none"
-            spellCheck={false}
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-          />
+        <GoogleButton onCredential={(token) => void onGoogle(token)} disabled={busy} />
+
+        <form className="space-y-4" onSubmit={onSubmit} noValidate>
+          <Field label="Email" id="email">
+            <Input
+              id="email"
+              type="email"
+              placeholder="you@example.com"
+              autoComplete="email"
+              autoCapitalize="none"
+              spellCheck={false}
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              required
+            />
+          </Field>
           <Field
             label="Password"
-            type="password"
-            placeholder={`At least ${MIN_PASSWORD_LENGTH} characters`}
-            autoComplete="new-password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-          />
-        </div>
+            id="password"
+            hint={`At least ${MIN_PASSWORD_LENGTH} characters.`}
+          >
+            <Input
+              id="password"
+              type="password"
+              placeholder="••••••••"
+              autoComplete="new-password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              required
+            />
+          </Field>
 
-        <label className="auth__check">
-          <input
-            type="checkbox"
-            checked={remember}
-            onChange={(e) => setRemember(e.target.checked)}
-          />
-          Keep me signed in on this device
-        </label>
+          <label className="flex items-center gap-2 text-[13px] text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={remember}
+              onChange={(event) => setRemember(event.target.checked)}
+              className="size-4 rounded border-border"
+            />
+            Keep me signed in on this device
+          </label>
 
-        <button className={buttonClass({ variant: "primary", block: true })} disabled={busy}>
-          {busy ? "Creating workspace…" : "Create workspace"}
-        </button>
+          <Button type="submit" className="w-full" disabled={busy}>
+            {busy ? "Creating your account…" : "Create account"}
+          </Button>
+        </form>
 
-        <p className="auth__foot">
-          Already have a workspace? <Link href="/login">Log in</Link>
+        <p className="text-[13px] text-muted-foreground">
+          Already have an account?{" "}
+          <Link href="/login" className="font-medium text-foreground hover:underline">
+            Log in
+          </Link>
         </p>
-      </form>
+      </div>
     </AuthShell>
   );
 }

@@ -12,13 +12,16 @@ class SourceType(StrEnum):
     and can be stored straight into the `knowledge_assets.source_type` String column
     with no migration.
 
-    PDF (uploaded file) and YOUTUBE (URL) are implemented. WEBSITE is reserved so the
-    shape of the system (registry, resolvers, handlers) stays source-agnostic — adding
-    it is a new handler plus a resolver branch, nothing structural.
+    All members below are implemented. WEBSITE is reserved so the shape of the system
+    (registry, resolvers, handlers) stays source-agnostic — adding it is a new handler
+    plus a resolver branch, nothing structural.
     """
 
     PDF = "pdf"
-    YOUTUBE = "youtube"   # acquire = transcript API, parse = timestamped segments
+    YOUTUBE = "youtube"    # acquire = transcript API, parse = timestamped segments
+    MARKDOWN = "markdown"  # acquire = object storage, parse = heading-delimited sections
+    PPTX = "pptx"          # acquire = object storage, parse = one segment per slide
+    AUDIO = "audio"        # acquire = object storage, parse = transcribed timestamped segments
     # WEBSITE = "website"   # planned: acquire = HTTP fetch, parse = HTML -> markdown
 
 

@@ -7,10 +7,14 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 
+from src.core.config import get_settings
 from src.domain.entities import IngestionJob
 from src.domain.interfaces import IFileStorage
+from src.ingestion.source_types import AUDIO_EXTENSIONS
 from src.http.dependencies import get_file_storage, get_ingestion_service
 from src.infrastructure.repositories import (
+    ChunkRepository,
+    ConversationRepository,
     IngestionJobEventRepository,
     IngestionJobRepository,
     KnowledgeAssetRepository,
@@ -19,9 +23,11 @@ from src.infrastructure.repositories import (
 from src.infrastructure.database.session import get_db
 from src.application.ingestion.service import IngestionService
 from src.http.schemas.documents import (
+    AssetCitationSchema,
     IngestUrlRequest,
     IngestionJobSchema,
     KnowledgeAssetSchema,
+    PassageSchema,
     RenameKnowledgeAssetRequest,
 )
 from src.http.schemas.jobs import JobEventSchema
@@ -29,14 +35,26 @@ from src.http.schemas.jobs import JobEventSchema
 router = APIRouter(prefix="/documents", tags=["documents"])
 
 
+def _megabytes(size_bytes: int) -> int:
+    return round(size_bytes / (1024 * 1024))
+
+
 def _to_schema(
     asset,
     file_storage: IFileStorage | None = None,
     job: IngestionJob | None = None,
+    passage_count: int = 0,
 ) -> KnowledgeAssetSchema:
     download_url = None
-    if file_storage is not None and asset.storage_key:
-        download_url = file_storage.get_presigned_url(asset.storage_key)
+    transcript_url = None
+    if file_storage is not None:
+        if asset.storage_key:
+            download_url = file_storage.get_presigned_url(asset.storage_key)
+        # Audio sources store a readable transcript.md beside the original; the viewer
+        # shows it alongside the player.
+        transcript_key = (asset.metadata or {}).get("transcript_key")
+        if transcript_key:
+            transcript_url = file_storage.get_presigned_url(transcript_key)
     return KnowledgeAssetSchema(
         id=asset.id,
         knowledge_base_id=asset.knowledge_base_id,
@@ -47,10 +65,12 @@ def _to_schema(
         source_type=asset.source_type,
         storage_key=asset.storage_key,
         download_url=download_url,
+        transcript_url=transcript_url,
         status=asset.status.value,
         failed_step=asset.failed_step,
         error_message=asset.error_message,
         metadata=asset.metadata,
+        passage_count=passage_count,
         job=(
             IngestionJobSchema(
                 status=job.status.value,
@@ -74,7 +94,9 @@ def list_assets(
 ) -> list[KnowledgeAssetSchema]:
     kb = KnowledgeBaseRepository(db).ensure_default()
     assets = KnowledgeAssetRepository(db).list_current(kb.id)
-    return [_to_schema(asset, file_storage) for asset in assets]
+    # One grouped count for the whole list, rather than a query per row.
+    counts = ChunkRepository(db).count_by_asset([asset.id for asset in assets])
+    return [_to_schema(asset, file_storage, passage_count=counts.get(asset.id, 0)) for asset in assets]
 
 
 @router.get("/{asset_id}", response_model=KnowledgeAssetSchema)
@@ -89,7 +111,8 @@ def get_asset(
     if asset is None:
         raise HTTPException(status_code=404, detail="KnowledgeAsset not found")
     job = IngestionJobRepository(db).latest_for_asset(asset_id)
-    return _to_schema(asset, file_storage, job)
+    counts = ChunkRepository(db).count_by_asset([asset.id])
+    return _to_schema(asset, file_storage, job, passage_count=counts.get(asset.id, 0))
 
 
 @router.get("/{asset_id}/events", response_model=list[JobEventSchema])
@@ -113,6 +136,59 @@ def list_asset_events(
     ]
 
 
+@router.get("/{asset_id}/passages", response_model=list[PassageSchema])
+def list_passages(
+    asset_id: UUID,
+    db: Annotated[Session, Depends(get_db)],
+    around: int | None = None,
+    window: int = 2,
+) -> list[PassageSchema]:
+    """The passages of a source, optionally narrowed to a neighbourhood of one chunk.
+
+    This is what makes a citation openable: the viewer shows the cited passage with the
+    text either side of it, so a quote can be read in context rather than in isolation.
+    Omit `around` to get the whole source.
+    """
+    chunks = ChunkRepository(db).list_for_asset(asset_id)
+    if around is not None:
+        low = around - max(0, window)
+        high = around + max(0, window)
+        chunks = [chunk for chunk in chunks if low <= chunk.chunk_index <= high]
+
+    return [
+        PassageSchema(
+            chunk_index=chunk.chunk_index,
+            text=chunk.text,
+            locator=chunk.metadata.get("locator"),
+        )
+        for chunk in chunks
+    ]
+
+
+@router.get("/{asset_id}/citations", response_model=list[AssetCitationSchema])
+def list_asset_citations(
+    asset_id: UUID,
+    db: Annotated[Session, Depends(get_db)],
+) -> list[AssetCitationSchema]:
+    """Every persisted answer that cited this source — the "answers that cited this" panel.
+
+    A JSONB containment query against the GIN index on `messages.citations`, so it stays
+    cheap as the thread history grows.
+    """
+    rows = ConversationRepository(db).find_by_cited_asset(asset_id)
+    return [
+        AssetCitationSchema(
+            conversation_id=conversation_id,
+            conversation_title=title,
+            locator=citation.get("locator"),
+            chunk_index=citation.get("chunk_index"),
+            score=citation.get("score"),
+            excerpt=citation.get("excerpt"),
+        )
+        for conversation_id, title, citation in rows
+    ]
+
+
 @router.post("/upload", response_model=KnowledgeAssetSchema, status_code=status.HTTP_202_ACCEPTED)
 async def upload_document(
     ingestion_service: Annotated[IngestionService, Depends(get_ingestion_service)],
@@ -126,6 +202,18 @@ async def upload_document(
         raise HTTPException(status_code=400, detail="Uploaded file must include a filename")
 
     file_data = await file.read()
+
+    # Audio is transcribed by a paid hosted model, so it alone carries a size cap.
+    if Path(file.filename).suffix.lower() in AUDIO_EXTENSIONS:
+        limit = get_settings().max_audio_upload_bytes
+        if len(file_data) > limit:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"This audio file is {_megabytes(len(file_data))} MB. "
+                    f"The limit is {_megabytes(limit)} MB — try a shorter recording."
+                ),
+            )
 
     try:
         asset = ingestion_service.enqueue_ingestion(

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Iterator
+
 from src.domain.entities import Embedding
 from src.infrastructure.langchain_adapters.chat_model import OpenAICompatibleChatAdapter
 from src.infrastructure.langchain_adapters.embeddings import OpenAICompatibleEmbeddingsAdapter
@@ -42,3 +44,6 @@ class AICreditsLLMProvider:
 
     def generate(self, messages: list[dict[str, str]]) -> str:
         return self.adapter.generate(messages)
+
+    def stream(self, messages: list[dict[str, str]]) -> Iterator[str]:
+        return self.adapter.stream(messages)

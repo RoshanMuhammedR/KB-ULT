@@ -9,6 +9,7 @@ from src.core.logging import configure_logging
 from src.http.middleware import AuthenticationMiddleware, TenantContextMiddleware
 from src.http.routes.auth import router as auth_router
 from src.http.routes.chat import router as chat_router
+from src.http.routes.conversations import router as conversations_router
 from src.http.routes.documents import router as documents_router
 from src.http.routes.health import router as health_router
 from src.http.routes.jobs import router as jobs_router
@@ -57,4 +58,5 @@ app.include_router(auth_router)
 app.include_router(documents_router)
 app.include_router(jobs_router)
 app.include_router(chat_router)
+app.include_router(conversations_router)
 app.include_router(knowledge_bases_router)

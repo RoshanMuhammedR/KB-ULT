@@ -3,7 +3,17 @@ from __future__ import annotations
 import uuid
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -42,7 +52,10 @@ class UserModel(Base):
     """
 
     __tablename__ = "users"
-    __table_args__ = (UniqueConstraint("email", name="uq_users_email"),)
+    __table_args__ = (
+        UniqueConstraint("email", name="uq_users_email"),
+        UniqueConstraint("google_sub", name="uq_users_google_sub"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(
@@ -50,7 +63,10 @@ class UserModel(Base):
     )
     # Stored lowercased; compared case-insensitively at the app layer (no citext).
     email: Mapped[str] = mapped_column(String(320), nullable=False)
-    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    # NULL for accounts created through Google, which have no password at all.
+    password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Google's stable subject id, set when an account is created through or linked to Google.
+    google_sub: Mapped[str | None] = mapped_column(String(255), nullable=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     # active | suspended | deleted | invited.
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="active")
@@ -210,3 +226,63 @@ class EmbeddingModel(TenantScoped, Base):
     created_at = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     chunk: Mapped[ChunkModel] = relationship(back_populates="embeddings")
+
+
+class ConversationModel(TenantScoped, Base):
+    """A persisted chat thread.
+
+    Scoped to a knowledge base rather than free-floating, so a future second library
+    inherits the right threads without a data migration.
+    """
+
+    __tablename__ = "conversations"
+    __table_args__ = (Index("ix_conversations_updated_at", "updated_at"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    knowledge_base_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("knowledge_bases.id", ondelete="CASCADE"), nullable=False
+    )
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    messages: Mapped[list[MessageModel]] = relationship(
+        back_populates="conversation",
+        cascade="all, delete-orphan",
+        order_by="MessageModel.created_at",
+    )
+
+
+class MessageModel(TenantScoped, Base):
+    """One turn in a thread.
+
+    `citations` stores the citation dicts verbatim so a thread re-reads correctly years
+    later, and so "which answers cited this source?" is a GIN containment query rather than
+    a re-run of retrieval.
+    """
+
+    __tablename__ = "messages"
+    __table_args__ = (
+        Index("ix_messages_conversation_created", "conversation_id", "created_at"),
+        Index(
+            "ix_messages_citations",
+            "citations",
+            postgresql_using="gin",
+            postgresql_ops={"citations": "jsonb_path_ops"},
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False
+    )
+    # user | assistant (stored as a string, like the existing status columns).
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    citations: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    insufficient_context: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    conversation: Mapped[ConversationModel] = relationship(back_populates="messages")

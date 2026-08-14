@@ -35,6 +35,7 @@ from src.domain.interfaces.auth import ITokenService
 _EXEMPT_PREFIXES = (
     "/auth/login",
     "/auth/register",
+    "/auth/google",
     "/auth/refresh",
     "/auth/logout",
     "/health",

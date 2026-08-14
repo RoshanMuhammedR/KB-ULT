@@ -12,13 +12,10 @@ type AuthValue = {
   session: Session | null;
   status: Status;
   login: (email: string, password: string, remember: boolean) => Promise<void>;
-  /** Create a workspace and sign straight into it. */
-  register: (
-    email: string,
-    password: string,
-    name: string | undefined,
-    remember: boolean
-  ) => Promise<void>;
+  /** Create the account and sign straight in. */
+  register: (email: string, password: string, remember: boolean) => Promise<void>;
+  /** Sign in (or register) from a Google ID token — same session path as the others. */
+  loginWithGoogle: (idToken: string, remember: boolean) => Promise<void>;
   logout: () => Promise<void>;
 };
 
@@ -34,17 +31,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const s = getSession();
     setSession(s);
     setStatus(s ? "authed" : "anon");
-    // Refresh the display profile in the background (name/email/domain may have changed).
+    // Refresh the display profile in the background (name/email may have changed).
     if (s) {
       api
         .getMe()
         .then((me) => {
-          const next: Session = {
-            ...s,
-            email: me.email,
-            name: me.name,
-            workspaceName: me.workspace_name
-          };
+          const next: Session = { ...s, email: me.email, name: me.name };
           saveSession(next);
           setSession(next);
         })
@@ -59,7 +51,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       refreshToken: tokens.refresh_token,
       email: "",
       name: "",
-      workspaceName: "",
       expiresAt: Date.now() + tokens.expires_in * 1000,
       remember
     };
@@ -67,7 +58,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     let full = base;
     try {
       const me = await api.getMe();
-      full = { ...base, email: me.email, name: me.name, workspaceName: me.workspace_name };
+      full = { ...base, email: me.email, name: me.name };
       saveSession(full);
     } catch {
       // Keep the base session even if profile hydration fails — tokens are still valid.
@@ -85,8 +76,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   );
 
   const register = useCallback(
-    async (email: string, password: string, name: string | undefined, remember: boolean) => {
-      const tokens = await api.register({ email: email.trim().toLowerCase(), password, name });
+    async (email: string, password: string, remember: boolean) => {
+      const tokens = await api.register({ email: email.trim().toLowerCase(), password });
+      await establish(tokens, remember);
+    },
+    [establish]
+  );
+
+  const loginWithGoogle = useCallback(
+    async (idToken: string, remember: boolean) => {
+      const tokens = await api.signInWithGoogle(idToken);
       await establish(tokens, remember);
     },
     [establish]
@@ -101,8 +100,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [router]);
 
   const value = useMemo(
-    () => ({ session, status, login, register, logout }),
-    [session, status, login, register, logout]
+    () => ({ session, status, login, register, loginWithGoogle, logout }),
+    [session, status, login, register, loginWithGoogle, logout]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
@@ -115,7 +114,7 @@ export function useAuth(): AuthValue {
 }
 
 // Client-side route guard. The cookie isn't checked by Next middleware here, so the gate
-// lives client-side: a splash during hydration, a redirect to /login when anonymous.
+// lives client-side: a quiet placeholder during hydration, a redirect to /login when anonymous.
 export function RequireAuth({ children }: { children: React.ReactNode }) {
   const { status } = useAuth();
   const router = useRouter();
@@ -126,8 +125,9 @@ export function RequireAuth({ children }: { children: React.ReactNode }) {
 
   if (status !== "authed") {
     return (
-      <div className="splash">
-        <div className="spinner" />
+      <div className="flex min-h-dvh items-center justify-center" role="status" aria-live="polite">
+        <span className="sr-only">Loading your library…</span>
+        <div className="size-5 animate-spin rounded-full border-2 border-border border-t-primary" />
       </div>
     );
   }

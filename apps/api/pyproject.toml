@@ -15,9 +15,12 @@ dependencies = [
   "psycopg[binary]>=3.2.3",
   "pwdlib[argon2]>=0.2.1",
   "pydantic-settings>=2.7.1",
-  "pyjwt>=2.9.0",
+  # [crypto] pulls `cryptography` for RS256, needed to verify Google ID tokens locally.
+  "pyjwt[crypto]>=2.9.0",
   "pymupdf4llm>=0.0.17",
   "python-multipart>=0.0.20",
+  # Pure Python over lxml/Pillow — no compilation, no ML runtime.
+  "python-pptx>=1.0.2",
   "sqlalchemy>=2.0.36",
   "structlog>=24.4.0",
   "tiktoken>=0.8.0",

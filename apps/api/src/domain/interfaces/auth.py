@@ -36,6 +36,24 @@ class IPasswordHasher(Protocol):
         ...
 
 
+@dataclass(frozen=True, slots=True)
+class GoogleIdentity:
+    """What a verified Google ID token asserts about the person signing in."""
+
+    subject: str
+    email: str
+    email_verified: bool
+    name: str = ""
+
+
+class IGoogleIdTokenVerifier(Protocol):
+    """ID-token verification, kept behind a port so JWKS/JWT stay in infrastructure."""
+
+    def verify(self, id_token: str) -> GoogleIdentity:
+        """Verify signature/audience/issuer; raise InvalidCredentialsError if any fail."""
+        ...
+
+
 class ITokenService(Protocol):
     """Access-token issue/decode, kept behind a port so JWT stays in infrastructure."""
 

@@ -1,4 +1,10 @@
+from src.infrastructure.auth.google_id_token import GoogleIdentity, GoogleIdTokenVerifier
 from src.infrastructure.auth.jwt_token_service import JwtTokenService
 from src.infrastructure.auth.password_hasher import Argon2PasswordHasher
 
-__all__ = ["Argon2PasswordHasher", "JwtTokenService"]
+__all__ = [
+    "Argon2PasswordHasher",
+    "GoogleIdTokenVerifier",
+    "GoogleIdentity",
+    "JwtTokenService",
+]

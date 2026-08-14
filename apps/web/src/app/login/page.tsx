@@ -3,13 +3,14 @@
 import { FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Field, buttonClass } from "@kb/ui";
-import { AuthShell } from "@/components/AuthShell";
+import { Button, Field, Input } from "@kb/ui";
+import { AuthShell } from "@/components/saga/auth-shell";
+import { GoogleButton } from "@/components/saga/google-button";
 import { useAuth } from "@/lib/auth-context";
 import { ApiError } from "@/lib/api";
 
 export default function LoginPage() {
-  const { status, login } = useAuth();
+  const { status, login, loginWithGoogle } = useAuth();
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -21,23 +22,37 @@ export default function LoginPage() {
     if (status === "authed") router.replace("/");
   }, [status, router]);
 
-  async function onSubmit(e: FormEvent) {
-    e.preventDefault();
+  function describe(err: unknown): string {
+    // The backend returns one generic 401 for every failure by design, so an unknown email
+    // and a wrong password read the same here.
+    if (err instanceof ApiError && err.status === 401) return "Invalid email or password.";
+    if (err instanceof ApiError && err.status === 503) {
+      return "Google sign-in isn't set up on this server. Use your email and password.";
+    }
+    return err instanceof Error ? err.message : "Sign in failed.";
+  }
+
+  async function onSubmit(event: FormEvent) {
+    event.preventDefault();
     setBusy(true);
     setError(null);
     try {
       await login(email, password, remember);
       router.replace("/");
     } catch (err) {
-      // The backend returns one generic 401 for every failure by design, so an unknown
-      // email and a wrong password read the same here.
-      setError(
-        err instanceof ApiError && err.status === 401
-          ? "Invalid email or password."
-          : err instanceof Error
-            ? err.message
-            : "Sign in failed."
-      );
+      setError(describe(err));
+      setBusy(false);
+    }
+  }
+
+  async function onGoogle(idToken: string) {
+    setBusy(true);
+    setError(null);
+    try {
+      await loginWithGoogle(idToken, remember);
+      router.replace("/");
+    } catch (err) {
+      setError(describe(err));
       setBusy(false);
     }
   }
@@ -45,60 +60,73 @@ export default function LoginPage() {
   return (
     <AuthShell
       asideTitle="Cited answers over your own sources."
-      asideSub="Upload, process, ask. Every answer shows the passages it came from — private to your workspace."
+      asideSub="Upload, process, ask. Every answer shows the passages it came from — private to you."
     >
-      <form className="auth__form" onSubmit={onSubmit} noValidate>
-        <div className="auth__head">
-          <h1 className="auth__title">Welcome back</h1>
-          <p className="auth__lede">Sign in to your workspace.</p>
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-display-md">Welcome back</h1>
+          <p className="mt-1.5 text-sm text-muted-foreground">Sign in to your library.</p>
         </div>
 
-        {error && (
-          <p className="auth__error" role="alert">
+        {error ? (
+          <p
+            className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-[13px] text-destructive"
+            role="alert"
+          >
             {error}
           </p>
-        )}
+        ) : null}
 
-        <div className="auth__fields">
-          <Field
-            label="Email"
-            type="email"
-            placeholder="you@example.com"
-            autoComplete="email"
-            autoCapitalize="none"
-            spellCheck={false}
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-          />
-          <Field
-            label="Password"
-            type="password"
-            placeholder="••••••••"
-            autoComplete="current-password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-          />
-        </div>
+        <GoogleButton onCredential={(token) => void onGoogle(token)} disabled={busy} />
 
-        <label className="auth__check">
-          <input
-            type="checkbox"
-            checked={remember}
-            onChange={(e) => setRemember(e.target.checked)}
-          />
-          Keep me signed in on this device
-        </label>
+        <form className="space-y-4" onSubmit={onSubmit} noValidate>
+          <Field label="Email" id="email">
+            <Input
+              id="email"
+              type="email"
+              placeholder="you@example.com"
+              autoComplete="email"
+              autoCapitalize="none"
+              spellCheck={false}
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              required
+            />
+          </Field>
+          <Field label="Password" id="password">
+            <Input
+              id="password"
+              type="password"
+              placeholder="••••••••"
+              autoComplete="current-password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              required
+            />
+          </Field>
 
-        <button className={buttonClass({ variant: "primary", block: true })} disabled={busy}>
-          {busy ? "Signing in…" : "Sign in"}
-        </button>
+          <label className="flex items-center gap-2 text-[13px] text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={remember}
+              onChange={(event) => setRemember(event.target.checked)}
+              className="size-4 rounded border-border"
+            />
+            Keep me signed in on this device
+          </label>
 
-        <p className="auth__foot">
-          No workspace yet? <Link href="/register">Create one</Link>
+          <Button type="submit" className="w-full" disabled={busy}>
+            {busy ? "Signing in…" : "Sign in"}
+          </Button>
+        </form>
+
+        <p className="text-[13px] text-muted-foreground">
+          No account yet?{" "}
+          <Link href="/register" className="font-medium text-foreground hover:underline">
+            Create one
+          </Link>
         </p>
-      </form>
+      </div>
     </AuthShell>
   );
 }

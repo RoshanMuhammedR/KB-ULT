@@ -57,12 +57,18 @@ class UserRepository:
         model = self.db.scalar(select(UserModel).where(UserModel.email == email))
         return user_to_domain(model) if model else None
 
+    def get_by_google_sub(self, google_sub: str) -> User | None:
+        # `google_sub` is globally unique, so one Google account maps to exactly one user.
+        model = self.db.scalar(select(UserModel).where(UserModel.google_sub == google_sub))
+        return user_to_domain(model) if model else None
+
     def create(self, user: User) -> User:
         model = UserModel(
             id=user.id,
             tenant_id=user.tenant_id,
             email=user.email,
             password_hash=user.password_hash,
+            google_sub=user.google_sub,
             name=user.name,
             status=str(user.status),
             email_verified_at=user.email_verified_at,
@@ -72,6 +78,23 @@ class UserRepository:
             self.db.flush()
         except IntegrityError as exc:  # the global-unique `uq_users_email` constraint
             raise EmailAlreadyExistsError("That email is already registered") from exc
+        self.db.refresh(model)
+        return user_to_domain(model)
+
+    def link_google(self, user_id: UUID, google_sub: str) -> User:
+        """Attach a Google subject to an existing (password) account.
+
+        Only ever called after Google reported the email as verified — that check is what
+        makes linking safe, since otherwise anyone able to assert an address could claim
+        someone else's account.
+        """
+        model = self.db.get(UserModel, user_id)
+        if model is None:
+            raise ValueError("User not found")
+        model.google_sub = google_sub
+        if model.email_verified_at is None:
+            model.email_verified_at = datetime.now(timezone.utc)
+        self.db.flush()
         self.db.refresh(model)
         return user_to_domain(model)
 

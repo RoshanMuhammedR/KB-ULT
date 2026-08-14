@@ -12,7 +12,12 @@
     "lint": "echo \"ui package has no lint step\"",
     "test": "echo \"ui package has no test step\""
   },
+  "dependencies": {
+    "@kb/shared": "workspace:*",
+    "lucide-react": "^0.575.0"
+  },
   "peerDependencies": {
+    "next": ">=15",
     "react": ">=19",
     "react-dom": ">=19"
   },
