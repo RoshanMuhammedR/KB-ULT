@@ -17,8 +17,8 @@ TitleFetcher = Callable[[str], str | None]
 # than reporting "no transcript" for a video that simply isn't in English.
 PREFERRED_LANGUAGES = ("en", "en-US", "en-GB")
 
-# YouTube's blocking is partly probabilistic, and with a rotating proxy a retry lands on a
-# different IP entirely — so one cheap retry converts a fair number of hard failures.
+# YouTube's blocking is partly probabilistic, so one cheap retry converts some hard
+# failures. It cannot help a wholesale IP-range block — see `_describe_fetch_error`.
 BLOCKED_RETRY_DELAY_SECONDS = 1.5
 
 
@@ -30,20 +30,11 @@ class TranscriptUnavailable(ValueError):
     """
 
 
-def build_transcript_fetcher(
-    *,
-    proxy_url: str = "",
-    webshare_username: str = "",
-    webshare_password: str = "",
-) -> TranscriptFetcher:
-    """Build the real network fetcher, optionally routed through a proxy.
+def build_transcript_fetcher() -> TranscriptFetcher:
+    """Build the real network fetcher.
 
-    YouTube blocks transcript requests from datacenter IP ranges, which is most of the
-    time an issue only in deployed environments. All three arguments empty means the
-    direct call — so local dev and tests behave exactly as before.
-
-    Takes plain strings rather than `Settings` so this module stays free of app config;
-    the composition root supplies the values.
+    Kept as a factory rather than a bare function so tests can substitute the seam, and so
+    the exact youtube-transcript-api surface stays in this one module.
     """
 
     def fetch(video_id: str) -> list[dict]:
@@ -51,9 +42,8 @@ def build_transcript_fetcher(
         for attempt in range(2):
             try:
                 # A fresh client per attempt: the library documents `YouTubeTranscriptApi`
-                # as not thread-safe (it owns a requests.Session), and a new session is
-                # also what makes a rotating proxy hand us a different IP on the retry.
-                api = _build_api(proxy_url, webshare_username, webshare_password)
+                # as not thread-safe, since it owns a requests.Session.
+                api = _build_api()
                 return _fetch_best_transcript(api, video_id)
             except Exception as exc:  # noqa: BLE001 - re-raised below, classified
                 last_error = exc
@@ -67,23 +57,9 @@ def build_transcript_fetcher(
     return fetch
 
 
-def _build_api(proxy_url: str, webshare_username: str, webshare_password: str) -> Any:
+def _build_api() -> Any:
     from youtube_transcript_api import YouTubeTranscriptApi
-    from youtube_transcript_api.proxies import GenericProxyConfig, WebshareProxyConfig
 
-    # Webshare wins when both are configured: its config knows the rotating-residential
-    # endpoint and retries internally on a blocked IP, which a generic proxy can't.
-    if webshare_username and webshare_password:
-        return YouTubeTranscriptApi(
-            proxy_config=WebshareProxyConfig(
-                proxy_username=webshare_username,
-                proxy_password=webshare_password,
-            )
-        )
-    if proxy_url:
-        return YouTubeTranscriptApi(
-            proxy_config=GenericProxyConfig(http_url=proxy_url, https_url=proxy_url)
-        )
     return YouTubeTranscriptApi()
 
 
@@ -133,10 +109,13 @@ def _describe_fetch_error(exc: Exception) -> str:
     )
 
     if isinstance(exc, (RequestBlocked, PoTokenRequired)):
+        # YouTube blocks datacenter IP ranges, so this is normal on a deployed server and
+        # nothing the reader did wrong. The audio route genuinely works and produces the
+        # same timestamped citations, so it is offered rather than a dead end.
         return (
-            "YouTube is blocking transcript requests from this server. An administrator "
-            "can configure a proxy to fix this — or you can download the video's audio "
-            "and upload it as an audio source instead."
+            "YouTube is blocking transcript requests from this server. Download the "
+            "video's audio and upload it as an audio source instead — you'll get the same "
+            "timestamped citations."
         )
     if isinstance(exc, TranscriptsDisabled):
         return "This video has captions turned off, so there is no transcript to read."

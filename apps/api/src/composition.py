@@ -58,7 +58,6 @@ from src.ingestion.handlers import (
     MarkdownSourceHandler,
     PdfSourceHandler,
     PptxSourceHandler,
-    TranscriptFetcher,
     YouTubeSourceHandler,
     build_transcript_fetcher,
 )
@@ -116,14 +115,6 @@ def _build_rendition_builder(file_storage: IFileStorage) -> RenditionBuilder:
     return builder
 
 
-def _build_transcript_fetcher(settings: Settings) -> TranscriptFetcher:
-    return build_transcript_fetcher(
-        proxy_url=settings.youtube_proxy_url,
-        webshare_username=settings.youtube_webshare_username,
-        webshare_password=settings.youtube_webshare_password,
-    )
-
-
 def _build_source_handler_registry(
     file_storage: IFileStorage, settings: Settings
 ) -> SourceHandlerRegistry:
@@ -132,9 +123,8 @@ def _build_source_handler_registry(
     # a new `registry.register(SourceType.X, XHandler(...))` line here — nothing else.
     registry = SourceHandlerRegistry()
     registry.register(SourceType.PDF, PdfSourceHandler(_build_pdf_parser(), file_storage))
-    # YouTube fetches its own content (transcript API + oEmbed), so it needs no storage —
-    # but it does need the proxy settings, since YouTube blocks datacenter IPs.
-    registry.register(SourceType.YOUTUBE, YouTubeSourceHandler(_build_transcript_fetcher(settings)))
+    # YouTube fetches its own content (transcript API + oEmbed), so it needs no storage.
+    registry.register(SourceType.YOUTUBE, YouTubeSourceHandler(build_transcript_fetcher()))
     registry.register(SourceType.MARKDOWN, MarkdownSourceHandler(file_storage))
     registry.register(SourceType.PPTX, PptxSourceHandler(file_storage))
     registry.register(
