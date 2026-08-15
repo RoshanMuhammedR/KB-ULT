@@ -34,12 +34,19 @@ jobs:
           - image: kb-api
             context: ./apps/api
             dockerfile: ./apps/api/Dockerfile
+            build_args: ""
           - image: kb-web
             context: .
             dockerfile: ./apps/web/Dockerfile
+            # Next.js inlines NEXT_PUBLIC_* into the browser bundle at build time, so this
+            # cannot be supplied as a runtime container env the way the api's copy is. A
+            # Google client id is public by design (it ships in the bundle either way), which
+            # is why it lives in `vars` rather than `secrets`.
+            build_args: NEXT_PUBLIC_GOOGLE_CLIENT_ID=${{ vars.GOOGLE_CLIENT_ID }}
           - image: kb-website
             context: .
             dockerfile: ./apps/website/Dockerfile
+            build_args: ""
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -52,6 +59,7 @@ jobs:
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
+          build-args: ${{ matrix.build_args }}
           push: true
           # No NEXT_PUBLIC_* build-args here on purpose: apps/web and apps/website both
           # default to relative paths (`/api`, `/app`, `/`) when these are unset, which is
@@ -90,6 +98,7 @@ jobs:
           APP_BASE_URL=${{ secrets.APP_BASE_URL }}
           CORS_ALLOWED_ORIGINS=http://37.187.140.45:8082,http://saga.dedyn.io,https://saga.dedyn.io
           JWT_SECRET=${{ secrets.JWT_SECRET }}
+          GOOGLE_CLIENT_ID=${{ vars.GOOGLE_CLIENT_ID }}
           AICREDITS_API_KEY=${{ secrets.AICREDITS_API_KEY }}
           AICREDITS_BASE_URL=https://api.aicredits.in/v1
           AICREDITS_CHAT_MODEL=openai/gpt-4o-mini
