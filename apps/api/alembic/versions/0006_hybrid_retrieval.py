@@ -1,7 +1,7 @@
 """hybrid retrieval — a working vector index, plus a lexical one
 
-Revision ID: 0004_hybrid_retrieval
-Revises: 0003_google_identity
+Revision ID: 0006_hybrid_retrieval
+Revises: 0005_drop_canonical_shape
 Create Date: 2026-08-15
 
 Two independent fixes to retrieval quality.
@@ -34,8 +34,8 @@ existing row as part of the ALTER.
 from alembic import op
 import sqlalchemy as sa
 
-revision = "0004_hybrid_retrieval"
-down_revision = "0003_google_identity"
+revision = "0006_hybrid_retrieval"
+down_revision = "0005_drop_canonical_shape"
 branch_labels = None
 depends_on = None
 
@@ -67,9 +67,9 @@ def upgrade() -> None:
                     f"WITH (m = {_HNSW_M}, ef_construction = {_HNSW_EF_CONSTRUCTION})"
                 )
             )
-        print("0004: created HNSW index on embeddings.vector")
+        print("0006: created HNSW index on embeddings.vector")
     except Exception as exc:  # noqa: BLE001 - pgvector < 0.5 has no hnsw access method
-        print(f"0004: HNSW unavailable ({exc.__class__.__name__}); rebuilding IVFFlat instead")
+        print(f"0006: HNSW unavailable ({exc.__class__.__name__}); rebuilding IVFFlat instead")
         # Still an improvement over the 0001 state: built against real rows, so the
         # centroids mean something, and enough probes to actually search them.
         connection.execute(

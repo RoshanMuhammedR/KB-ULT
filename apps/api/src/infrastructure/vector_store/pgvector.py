@@ -50,10 +50,10 @@ class PgVectorStore:
                 query_embedding, query_text, knowledge_base_id, limit
             )
         except ProgrammingError:
-            # `chunks.fts` is added by migration 0004. If the code is deployed ahead of the
+            # `chunks.fts` is added by migration 0006. If the code is deployed ahead of the
             # migration, degrade to dense-only rather than 500-ing every question — the same
             # honest-degradation rule the ingestion handlers follow.
-            logger.warning("lexical_search_unavailable", reason="chunks.fts missing; run 0004")
+            logger.warning("lexical_search_unavailable", reason="chunks.fts missing; run 0006")
             return []
         return [self._to_result(row) for row in rows]
 

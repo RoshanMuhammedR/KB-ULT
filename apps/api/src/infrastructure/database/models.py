@@ -209,7 +209,7 @@ class ChunkModel(TenantScoped, Base):
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
     text: Mapped[str] = mapped_column(Text, nullable=False)
     metadata_: Mapped[dict] = mapped_column("metadata", JSONB, nullable=False, default=dict)
-    # Lexical search vector, maintained by Postgres itself (see 0004). `Computed` tells
+    # Lexical search vector, maintained by Postgres itself (see 0006). `Computed` tells
     # SQLAlchemy to leave it out of INSERTs and UPDATEs, so ingestion never touches it —
     # the column simply follows `text`.
     fts = mapped_column(
