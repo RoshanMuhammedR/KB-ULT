@@ -10,6 +10,7 @@ import type {
   MeResponse,
   Passage,
   RegisterRequest,
+  RenderedPage,
   TokenResponse
 } from "@/types/api";
 import { clearSession, getAccessToken, getRefreshToken, getSession, saveSession } from "@/lib/auth";
@@ -149,6 +150,12 @@ export function retryAsset(assetId: string): Promise<KnowledgeAsset> {
   return request<KnowledgeAsset>(`/documents/${assetId}/retry`, { method: "POST" });
 }
 
+// Re-run the pipeline on a healthy source — how an already-ingested file picks up new
+// pipeline output (page images, passage coordinates) without being re-uploaded.
+export function reprocessAsset(assetId: string): Promise<KnowledgeAsset> {
+  return request<KnowledgeAsset>(`/documents/${assetId}/reprocess`, { method: "POST" });
+}
+
 export function renameAsset(assetId: string, title: string): Promise<KnowledgeAsset> {
   return request<KnowledgeAsset>(`/documents/${assetId}`, {
     method: "PATCH",
@@ -170,6 +177,13 @@ export function getPassages(assetId: string, around?: number, window = 2): Promi
   const query =
     around === undefined ? "" : `?around=${around}&window=${window}`;
   return request<Passage[]>(`/documents/${assetId}/passages${query}`);
+}
+
+// A signed URL for one rendered page image, plus that page's size in points.
+// Fetched with the bearer token, then handed to an <img> tag — the tag itself cannot
+// authenticate, which is why this returns a URL rather than the bytes.
+export function getRenderedPage(assetId: string, page: number): Promise<RenderedPage> {
+  return request<RenderedPage>(`/documents/${assetId}/render/pages/${page}`);
 }
 
 // Every persisted answer that cited this source.

@@ -34,14 +34,26 @@ class PdfSourceHandler:
         parsed = self.loader.load(file_data, asset.filename)
 
         # Turn the loader's page list into generic segments: {text, locator{type,value}}.
+        # `spans` rides alongside — the block rects for this page, which the chunker resolves
+        # into highlight regions once it knows where each chunk starts and ends.
+        spans_by_page: dict[int, list[dict]] = {}
+        for span in parsed.get("spans") or []:
+            spans_by_page.setdefault(span["page"], []).append(span)
+
         segments = []
         text_parts = []
         for page in parsed["pages"]:
             # Clean extracted text before it reaches metadata, chunks, embeddings, or PostgreSQL.
             page_text = sanitize_text_for_storage(page["text"]).strip()
-            segments.append(
-                {"text": page_text, "locator": {"type": "page", "value": page.get("page_number")}}
-            )
+            page_number = page.get("page_number")
+            segment: dict = {
+                "text": page_text,
+                "locator": {"type": "page", "value": page_number},
+            }
+            page_spans = spans_by_page.get(page_number)
+            if page_spans:
+                segment["spans"] = page_spans
+            segments.append(segment)
             text_parts.append(page_text)
 
         title = sanitize_text_for_storage(parsed.get("title") or asset.filename)
@@ -65,6 +77,9 @@ class PdfSourceHandler:
                 "format": "markdown",
                 "content_type": raw.mime or asset.metadata.get("content_type"),
                 "segments": segments,
+                # Page boxes in points, post-rotation — the renderer sizes page images from
+                # these, and the viewer sizes its canvas before an image loads.
+                "page_boxes": parsed.get("page_boxes") or [],
                 "parser": parsed["metadata"],
             },
         )

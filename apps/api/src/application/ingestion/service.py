@@ -13,6 +13,7 @@ from src.domain.entities import (
     JobEvent,
     KnowledgeAsset,
     SourceType,
+    shape_for_source_type,
 )
 from src.domain.interfaces import (
     Chunker,
@@ -28,6 +29,7 @@ from src.domain.interfaces import (
     VectorStore,
 )
 from src.ingestion.registry import SourceHandlerRegistry
+from src.processing.rendition import RenditionBuilder
 from src.ingestion.source_types import (
     identity_for_url,
     source_type_for_filename,
@@ -68,7 +70,11 @@ class IngestionService:
         vector_store: VectorStore,
         file_storage: IFileStorage,
         job_queue: IJobQueue,
+        # Optional so the request path (and every existing test) can build the service
+        # without one — only the worker path renders.
+        rendition_builder: RenditionBuilder | None = None,
     ) -> None:
+        self.rendition_builder = rendition_builder
         self.kb_repo = kb_repo
         self.asset_repo = asset_repo
         self.chunk_repo = chunk_repo
@@ -88,7 +94,6 @@ class IngestionService:
         file_data: bytes,
         filename: str,
         content_type: str | None = None,
-        user_id: str = "anonymous",
     ) -> KnowledgeAsset:
         """Fast path (HTTP): persist the source + job, then return without processing.
 
@@ -108,7 +113,13 @@ class IngestionService:
         lineage_id = previous.lineage_id if previous else uuid4()
         version = previous.version + 1 if previous else 1
         asset_id = uuid4()
-        storage_key = f"{user_id}/{asset_id}/{safe_filename}"
+        # Tenant-prefixed so the bucket layout mirrors the isolation boundary the database
+        # already enforces. This used to be a `user_id: str = "anonymous"` default parameter
+        # that no caller ever passed, so every object in the bucket landed under the literal
+        # prefix `anonymous/`. Reading the tenant from the ambient context instead of a
+        # parameter means a caller cannot silently forget it: `current_tenant_id()` fails
+        # closed when no tenant is bound.
+        storage_key = f"{current_tenant_id()}/{asset_id}/{safe_filename}"
         stored_key = self.file_storage.upload(
             key=storage_key,
             file_data=file_data,
@@ -126,6 +137,10 @@ class IngestionService:
                 source_type=source_type.value,
                 storage_key=stored_key,
                 status=AssetStatus.QUEUED,
+                # Set at enqueue so the viewer knows how to render even while the asset is
+                # still processing. A source whose rendition later fails is downgraded to
+                # TEXT by the pipeline rather than being left claiming a shape it can't show.
+                canonical_shape=str(shape_for_source_type(source_type.value)),
                 metadata={
                     "filename": safe_filename,
                     "source_type": source_type.value,
@@ -143,7 +158,7 @@ class IngestionService:
         logger.info("ingestion_enqueued", knowledge_asset_id=str(asset.id), filename=safe_filename)
         return asset
 
-    def enqueue_url(self, url: str, user_id: str = "anonymous") -> KnowledgeAsset:
+    def enqueue_url(self, url: str) -> KnowledgeAsset:
         """Fast path (HTTP) for URL sources like YouTube — the file-less sibling of
         `enqueue_ingestion`.
 
@@ -173,6 +188,7 @@ class IngestionService:
                 source_type=source_type.value,
                 storage_key="",  # URL sources keep no object-storage file
                 status=AssetStatus.QUEUED,
+                canonical_shape=str(shape_for_source_type(source_type.value)),
                 metadata={
                     "filename": filename,
                     "source_type": source_type.value,
@@ -191,10 +207,40 @@ class IngestionService:
     def retry(self, asset_id: UUID) -> KnowledgeAsset:
         """Re-enqueue a failed asset. No re-upload needed — the worker re-acquires the
         source from storage, resuming from the step that failed."""
+        return self._requeue(asset_id, {AssetStatus.FAILED}, "retry", "Retry re-enqueued")
+
+    def reprocess(self, asset_id: UUID) -> KnowledgeAsset:
+        """Re-run the whole pipeline on a healthy asset.
+
+        `retry` only touches FAILED assets, which is right for a user-facing retry button —
+        but a pipeline change (new parser output, new chunk metadata) needs to re-derive
+        already-`ready` sources too. Same machinery, wider status gate: the worker re-acquires,
+        re-parses, re-chunks and re-embeds, and `chunk_repo.replace_for_asset` swaps the
+        results in wholesale, so a failure part-way leaves the previous version intact.
+        """
+        return self._requeue(
+            asset_id,
+            {AssetStatus.READY, AssetStatus.FAILED},
+            "reprocess",
+            "Reprocess re-enqueued",
+        )
+
+    def _requeue(
+        self,
+        asset_id: UUID,
+        allowed: set[AssetStatus],
+        event: str,
+        message: str,
+    ) -> KnowledgeAsset:
+        """Shared tail of `retry` and `reprocess` — they differ only in which statuses qualify.
+
+        An asset already QUEUED or mid-flight is returned untouched rather than enqueued a
+        second time, so a double-click cannot put two jobs on the queue for one asset.
+        """
         asset = self.asset_repo.get(asset_id)
         if asset is None:
             raise ValueError(f"KnowledgeAsset not found: {asset_id}")
-        if asset.status != AssetStatus.FAILED:
+        if asset.status not in allowed:
             return asset
 
         job = self.job_repo.latest_for_asset(asset_id)
@@ -208,8 +254,8 @@ class IngestionService:
         asset.error_message = None
         self.asset_repo.update_from_domain(asset)
         self._enqueue(asset_id)
-        self._record(asset, "retry", "Retry re-enqueued", job_id=job.id if job else None)
-        logger.info("ingestion_retry_enqueued", knowledge_asset_id=str(asset_id))
+        self._record(asset, event, message, job_id=job.id if job else None)
+        logger.info(f"ingestion_{event}_enqueued", knowledge_asset_id=str(asset_id))
         return asset
 
     def _enqueue(self, asset_id: UUID) -> None:
@@ -274,6 +320,11 @@ class IngestionService:
                 # so a retry past extraction skips re-acquiring.
                 raw = handler.acquire(asset)
                 asset = handler.parse(asset, raw)
+                # Renditions are built here, while the source bytes are already in hand and
+                # parsed — never per view, and never in the API container. A failure inside
+                # `build` downgrades the asset to the text view rather than raising, so this
+                # can only ever cost page images, never the source itself.
+                asset = self._build_rendition(asset, raw)
                 self.asset_repo.update_from_domain(asset)
 
             step = "chunking"
@@ -318,6 +369,20 @@ class IngestionService:
             self._record(failed, "failed", str(exc), level="error", job_id=job_id, data={"step": step})
             logger.exception("ingestion_failed", step=step, knowledge_asset_id=str(asset.id), error=str(exc))
             return failed
+
+    def _build_rendition(self, asset: KnowledgeAsset, raw) -> KnowledgeAsset:
+        """Render page images for this source, if a renderer is registered for its type.
+
+        Deliberately tolerant: no builder configured, no renderer for this source type, or
+        non-bytes content (a URL source's JSON payload) all mean "nothing to render", which
+        leaves the asset exactly as parsed.
+        """
+        if self.rendition_builder is None or not self.rendition_builder.supports(asset.source_type):
+            return asset
+        data = raw.data if isinstance(raw.data, bytes) else None
+        if data is None:
+            return asset
+        return self.rendition_builder.build(asset, data)
 
     def _record(
         self,

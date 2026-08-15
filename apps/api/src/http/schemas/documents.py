@@ -33,6 +33,14 @@ class KnowledgeAssetSchema(BaseModel):
     failed_step: str | None
     error_message: str | None
     metadata: dict[str, Any]
+    # Display shape ("paged" | "timeline" | "text") — the viewer switches on this and never
+    # branches on `source_type`, so a new format needs no frontend change.
+    canonical_shape: str = "text"
+    # 0 means no rendition has been built; page images live under this version in the object
+    # key, so coordinates and images can never fall out of sync.
+    render_version: int = 0
+    # {"pages": [{"n", "w", "h", "ext"}]} once a rendition exists, else null.
+    page_manifest: dict[str, Any] | None = None
     # How many indexed passages this source contributes — i.e. how much of it is usable.
     passage_count: int = 0
     # Present on single-asset reads so the UI can show attempt count / queue state.
@@ -48,6 +56,24 @@ class PassageSchema(BaseModel):
     chunk_index: int
     text: str
     locator: dict[str, Any] | None = None
+    # Optional geometry, present only when the pipeline recovered it for this passage.
+    # `regions` is [{page, rects[[x0,y0,x1,y1]]}] when paged, [{start, end}] when timeline;
+    # both in normalized units so the client multiplies by whatever size it rendered at.
+    shape: str | None = None
+    regions: list[dict[str, Any]] | None = None
+
+
+class RenderedPageSchema(BaseModel):
+    """A signed URL for one rendered page, with the page's own size in points.
+
+    Size travels with the URL so the viewer can lay out and position highlights before the
+    image has loaded — no layout shift when it arrives.
+    """
+
+    page: int
+    url: str
+    width: float
+    height: float
 
 
 class AssetCitationSchema(BaseModel):

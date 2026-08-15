@@ -102,15 +102,17 @@ class EnqueueIngestionTest(TestCase):
         tenant_id, user_id = uuid4(), uuid4()
         tokens = set_tenant_context(tenant_id, user_id)
         try:
-            asset = service.enqueue_ingestion(
-                b"pdf", "../ My File.pdf ", "application/pdf", user_id="user-1"
-            )
+            asset = service.enqueue_ingestion(b"pdf", "../ My File.pdf ", "application/pdf")
         finally:
             reset_tenant_context(tokens)
 
         # The request path only stores + queues; it must NOT acquire/parse.
         self.assertEqual(asset.status, AssetStatus.QUEUED)
-        self.assertTrue(asset.storage_key.startswith("user-1/"))
+        # Object keys are tenant-prefixed, mirroring the DB isolation boundary. The tenant
+        # comes from the ambient context, not a caller-supplied argument, so it cannot be
+        # forgotten — this used to be a `user_id` default that put everything under
+        # `anonymous/`.
+        self.assertTrue(asset.storage_key.startswith(f"{tenant_id}/"))
         self.assertTrue(asset.storage_key.endswith("/My File.pdf"))
         self.assertEqual(asset.source_type, "pdf")
         deps["file_storage"].upload.assert_called_once()

@@ -58,10 +58,13 @@ from src.ingestion.handlers import (
     MarkdownSourceHandler,
     PdfSourceHandler,
     PptxSourceHandler,
+    TranscriptFetcher,
     YouTubeSourceHandler,
+    build_transcript_fetcher,
 )
 from src.ingestion.registry import SourceHandlerRegistry
 from src.processing.chunking import RecursiveKnowledgeAssetChunker
+from src.processing.rendition import PdfPageRenderer, RenditionBuilder, SlideSvgRenderer
 from src.retrieval.retriever import Retriever
 
 
@@ -104,6 +107,23 @@ def _build_transcription_provider(settings: Settings) -> VoxtralTranscriptionPro
     )
 
 
+def _build_rendition_builder(file_storage: IFileStorage) -> RenditionBuilder:
+    # Giving a format page images is one `register` line — the client switches on
+    # `canonical_shape`, so nothing on the frontend changes when a row is added here.
+    builder = RenditionBuilder(file_storage)
+    builder.register(SourceType.PDF.value, PdfPageRenderer())
+    builder.register(SourceType.PPTX.value, SlideSvgRenderer())
+    return builder
+
+
+def _build_transcript_fetcher(settings: Settings) -> TranscriptFetcher:
+    return build_transcript_fetcher(
+        proxy_url=settings.youtube_proxy_url,
+        webshare_username=settings.youtube_webshare_username,
+        webshare_password=settings.youtube_webshare_password,
+    )
+
+
 def _build_source_handler_registry(
     file_storage: IFileStorage, settings: Settings
 ) -> SourceHandlerRegistry:
@@ -112,8 +132,9 @@ def _build_source_handler_registry(
     # a new `registry.register(SourceType.X, XHandler(...))` line here — nothing else.
     registry = SourceHandlerRegistry()
     registry.register(SourceType.PDF, PdfSourceHandler(_build_pdf_parser(), file_storage))
-    # YouTube fetches its own content (transcript API + oEmbed), so it needs no storage.
-    registry.register(SourceType.YOUTUBE, YouTubeSourceHandler())
+    # YouTube fetches its own content (transcript API + oEmbed), so it needs no storage —
+    # but it does need the proxy settings, since YouTube blocks datacenter IPs.
+    registry.register(SourceType.YOUTUBE, YouTubeSourceHandler(_build_transcript_fetcher(settings)))
     registry.register(SourceType.MARKDOWN, MarkdownSourceHandler(file_storage))
     registry.register(SourceType.PPTX, PptxSourceHandler(file_storage))
     registry.register(
@@ -155,6 +176,7 @@ def build_ingestion_service(db: Session, settings: Settings) -> IngestionService
         vector_store=PgVectorStore(db),
         file_storage=file_storage,
         job_queue=build_job_queue(),
+        rendition_builder=_build_rendition_builder(file_storage),
     )
 
 

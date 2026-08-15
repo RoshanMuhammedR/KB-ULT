@@ -4,12 +4,15 @@ from pathlib import Path
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
+from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
 from src.core.config import get_settings
+from src.core.tenant_context import current_tenant_id
 from src.domain.entities import IngestionJob
 from src.domain.interfaces import IFileStorage
+from src.processing.rendition.builder import rendition_key
 from src.ingestion.source_types import AUDIO_EXTENSIONS
 from src.http.dependencies import get_file_storage, get_ingestion_service
 from src.infrastructure.repositories import (
@@ -29,6 +32,7 @@ from src.http.schemas.documents import (
     KnowledgeAssetSchema,
     PassageSchema,
     RenameKnowledgeAssetRequest,
+    RenderedPageSchema,
 )
 from src.http.schemas.jobs import JobEventSchema
 
@@ -39,22 +43,43 @@ def _megabytes(size_bytes: int) -> int:
     return round(size_bytes / (1024 * 1024))
 
 
+# Signed URLs embedded in a detail response are rendered straight into the DOM — an <a href>
+# the user clicks minutes later, or an <audio src> whose playback starts long after load.
+# Those cannot carry an Authorization header, so they must be pre-signed and must outlive the
+# render. 15 minutes is the window the UI needs; it is deliberately far longer than the 60s
+# default, and is why these are issued only for a single asset the caller already fetched
+# rather than for every row of a list.
+_DETAIL_URL_TTL_SECONDS = 900
+
+
 def _to_schema(
     asset,
     file_storage: IFileStorage | None = None,
     job: IngestionJob | None = None,
     passage_count: int = 0,
 ) -> KnowledgeAssetSchema:
+    """Map an asset row to its wire schema.
+
+    Pass `file_storage` only when the caller actually needs signed URLs. Signing is cheap
+    (a local HMAC, no network call) but the URLs are bearer credentials with a 60s life, so
+    minting one per row on every list read hands out dozens of short-lived grants nobody
+    asked for. List endpoints therefore omit it and the client calls
+    `GET /documents/{id}/download` when the user actually clicks something.
+    """
     download_url = None
     transcript_url = None
     if file_storage is not None:
         if asset.storage_key:
-            download_url = file_storage.get_presigned_url(asset.storage_key)
+            download_url = file_storage.get_presigned_url(
+                asset.storage_key, _DETAIL_URL_TTL_SECONDS
+            )
         # Audio sources store a readable transcript.md beside the original; the viewer
         # shows it alongside the player.
         transcript_key = (asset.metadata or {}).get("transcript_key")
         if transcript_key:
-            transcript_url = file_storage.get_presigned_url(transcript_key)
+            transcript_url = file_storage.get_presigned_url(
+                transcript_key, _DETAIL_URL_TTL_SECONDS
+            )
     return KnowledgeAssetSchema(
         id=asset.id,
         knowledge_base_id=asset.knowledge_base_id,
@@ -70,6 +95,9 @@ def _to_schema(
         failed_step=asset.failed_step,
         error_message=asset.error_message,
         metadata=asset.metadata,
+        canonical_shape=asset.canonical_shape,
+        render_version=asset.render_version,
+        page_manifest=asset.page_manifest,
         passage_count=passage_count,
         job=(
             IngestionJobSchema(
@@ -90,13 +118,14 @@ def _to_schema(
 @router.get("", response_model=list[KnowledgeAssetSchema])
 def list_assets(
     db: Annotated[Session, Depends(get_db)],
-    file_storage: Annotated[IFileStorage, Depends(get_file_storage)],
 ) -> list[KnowledgeAssetSchema]:
     kb = KnowledgeBaseRepository(db).ensure_default()
     assets = KnowledgeAssetRepository(db).list_current(kb.id)
     # One grouped count for the whole list, rather than a query per row.
     counts = ChunkRepository(db).count_by_asset([asset.id for asset in assets])
-    return [_to_schema(asset, file_storage, passage_count=counts.get(asset.id, 0)) for asset in assets]
+    # No `file_storage`: the library list renders names and statuses, not file contents, so
+    # it needs no signed URLs. Clicking through to a source calls /download for one.
+    return [_to_schema(asset, passage_count=counts.get(asset.id, 0)) for asset in assets]
 
 
 @router.get("/{asset_id}", response_model=KnowledgeAssetSchema)
@@ -113,6 +142,96 @@ def get_asset(
     job = IngestionJobRepository(db).latest_for_asset(asset_id)
     counts = ChunkRepository(db).count_by_asset([asset.id])
     return _to_schema(asset, file_storage, job, passage_count=counts.get(asset.id, 0))
+
+
+@router.get("/{asset_id}/download")
+def download_asset(
+    asset_id: UUID,
+    db: Annotated[Session, Depends(get_db)],
+    file_storage: Annotated[IFileStorage, Depends(get_file_storage)],
+    transcript: bool = False,
+) -> Response:
+    """Mint a short-lived signed URL for one asset's file and redirect to it.
+
+    The signed URL is a bearer credential — anyone holding it reads the object without
+    presenting a token — so it is issued here, per click, behind the tenant guard, rather
+    than embedded in every list response. `Cache-Control: private, max-age=45` sits just
+    inside the 60s signature so a reload within a session reuses the redirect instead of
+    re-signing, while never outliving the URL it points at.
+
+    `?transcript=true` returns the readable transcript.md that audio sources write beside
+    the original, rather than the media file.
+    """
+    # Repository reads run under the tenant guard, so another tenant's id 404s here rather
+    # than reaching the signing call.
+    asset = KnowledgeAssetRepository(db).get(asset_id)
+    if asset is None:
+        raise HTTPException(status_code=404, detail="KnowledgeAsset not found")
+
+    if transcript:
+        key = (asset.metadata or {}).get("transcript_key")
+        if not key:
+            raise HTTPException(status_code=404, detail="This source has no transcript file")
+    else:
+        key = asset.storage_key
+        if not key:
+            # URL sources (YouTube) store no file — there is nothing to download.
+            raise HTTPException(status_code=404, detail="This source has no downloadable file")
+
+    return RedirectResponse(
+        url=file_storage.get_presigned_url(key),
+        status_code=status.HTTP_307_TEMPORARY_REDIRECT,
+        headers={"Cache-Control": "private, max-age=45"},
+    )
+
+
+@router.get("/{asset_id}/render/pages/{page}", response_model=RenderedPageSchema)
+def render_page(
+    asset_id: UUID,
+    page: int,
+    response: Response,
+    db: Annotated[Session, Depends(get_db)],
+    file_storage: Annotated[IFileStorage, Depends(get_file_storage)],
+) -> RenderedPageSchema:
+    """Signed URL for one rendered page image, plus that page's size.
+
+    Returns JSON rather than redirecting because the caller is an `<img>` tag: an image
+    element cannot send an Authorization header, and browsers strip one across a cross-origin
+    redirect anyway. So the client fetches this with its token, then points the tag at the
+    signed URL — which also lets the browser cache the image under a stable key.
+
+    The version comes off the asset row rather than the request, which is what makes a stale
+    pairing impossible: a reprocess bumps `render_version` and rewrites the chunk coordinates
+    in the same pass, so the image always matches the coordinates handed out beside it.
+    """
+    asset = KnowledgeAssetRepository(db).get(asset_id)
+    if asset is None:
+        raise HTTPException(status_code=404, detail="KnowledgeAsset not found")
+
+    manifest = (asset.page_manifest or {}).get("pages") or []
+    entry = next((item for item in manifest if int(item.get("n", 0)) == page), None)
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"No rendered page {page} for this source")
+
+    # The tenant comes from the request context, not the row — the repository read above
+    # already ran under the tenant guard, so reaching this line means the asset belongs to
+    # the caller's tenant and the key can only ever address their own prefix.
+    key = rendition_key(
+        current_tenant_id(),
+        asset.id,
+        asset.render_version,
+        page,
+        str(entry.get("ext") or "jpg"),
+    )
+    # Just inside the signature's own lifetime, so paging back and forth reuses the response
+    # instead of re-signing, and a cached entry can never outlive the URL it holds.
+    response.headers["Cache-Control"] = "private, max-age=45"
+    return RenderedPageSchema(
+        page=page,
+        url=file_storage.get_presigned_url(key),
+        width=float(entry.get("w") or 0),
+        height=float(entry.get("h") or 0),
+    )
 
 
 @router.get("/{asset_id}/events", response_model=list[JobEventSchema])
@@ -160,6 +279,8 @@ def list_passages(
             chunk_index=chunk.chunk_index,
             text=chunk.text,
             locator=chunk.metadata.get("locator"),
+            shape=chunk.metadata.get("shape"),
+            regions=chunk.metadata.get("regions"),
         )
         for chunk in chunks
     ]
@@ -251,6 +372,26 @@ def retry_asset(
     # resumes from the step that failed.
     try:
         asset = ingestion_service.retry(asset_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return _to_schema(asset, file_storage)
+
+
+@router.post(
+    "/{asset_id}/reprocess",
+    response_model=KnowledgeAssetSchema,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def reprocess_asset(
+    asset_id: UUID,
+    ingestion_service: Annotated[IngestionService, Depends(get_ingestion_service)],
+    file_storage: Annotated[IFileStorage, Depends(get_file_storage)],
+) -> KnowledgeAssetSchema:
+    # Re-run the pipeline on an already-`ready` asset. Unlike /retry (which exists for the
+    # user-facing "this failed, try again" button), this is how a source picks up the output
+    # of a changed pipeline — new parser metadata, new chunk fields — without a re-upload.
+    try:
+        asset = ingestion_service.reprocess(asset_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return _to_schema(asset, file_storage)

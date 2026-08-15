@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from typing import Callable
+import time
+from typing import Any, Callable
 
 from src.core.text import sanitize_text_for_storage
 from src.domain.entities import AssetStatus, KnowledgeAsset, RawContent
@@ -12,14 +13,145 @@ from src.ingestion.handlers._segments import coalesce_timed_lines
 TranscriptFetcher = Callable[[str], list[dict]]
 TitleFetcher = Callable[[str], str | None]
 
+# Tried in order. If none are present we fall back to whatever the video does have rather
+# than reporting "no transcript" for a video that simply isn't in English.
+PREFERRED_LANGUAGES = ("en", "en-US", "en-GB")
 
-def _default_transcript_fetcher(video_id: str) -> list[dict]:
-    # youtube-transcript-api 1.x is instance-based: fetch() -> FetchedTranscript, whose
-    # to_raw_data() yields [{text, start, duration}]. Errors (captions disabled, no
-    # transcript, blocked) raise CouldNotRetrieveTranscript, handled in `acquire`.
+# YouTube's blocking is partly probabilistic, and with a rotating proxy a retry lands on a
+# different IP entirely — so one cheap retry converts a fair number of hard failures.
+BLOCKED_RETRY_DELAY_SECONDS = 1.5
+
+
+class TranscriptUnavailable(ValueError):
+    """A transcript could not be fetched, with a message already fit to show a user.
+
+    Subclasses ValueError because that is what the ingestion pipeline already treats as a
+    "this source is bad" signal (vs. an infrastructure crash) — see `acquire`.
+    """
+
+
+def build_transcript_fetcher(
+    *,
+    proxy_url: str = "",
+    webshare_username: str = "",
+    webshare_password: str = "",
+) -> TranscriptFetcher:
+    """Build the real network fetcher, optionally routed through a proxy.
+
+    YouTube blocks transcript requests from datacenter IP ranges, which is most of the
+    time an issue only in deployed environments. All three arguments empty means the
+    direct call — so local dev and tests behave exactly as before.
+
+    Takes plain strings rather than `Settings` so this module stays free of app config;
+    the composition root supplies the values.
+    """
+
+    def fetch(video_id: str) -> list[dict]:
+        last_error: Exception | None = None
+        for attempt in range(2):
+            try:
+                # A fresh client per attempt: the library documents `YouTubeTranscriptApi`
+                # as not thread-safe (it owns a requests.Session), and a new session is
+                # also what makes a rotating proxy hand us a different IP on the retry.
+                api = _build_api(proxy_url, webshare_username, webshare_password)
+                return _fetch_best_transcript(api, video_id)
+            except Exception as exc:  # noqa: BLE001 - re-raised below, classified
+                last_error = exc
+                if attempt == 0 and _is_blocked(exc):
+                    time.sleep(BLOCKED_RETRY_DELAY_SECONDS)
+                    continue
+                break
+        assert last_error is not None  # only reachable via the except branch
+        raise TranscriptUnavailable(_describe_fetch_error(last_error)) from last_error
+
+    return fetch
+
+
+def _build_api(proxy_url: str, webshare_username: str, webshare_password: str) -> Any:
     from youtube_transcript_api import YouTubeTranscriptApi
+    from youtube_transcript_api.proxies import GenericProxyConfig, WebshareProxyConfig
 
-    return YouTubeTranscriptApi().fetch(video_id).to_raw_data()
+    # Webshare wins when both are configured: its config knows the rotating-residential
+    # endpoint and retries internally on a blocked IP, which a generic proxy can't.
+    if webshare_username and webshare_password:
+        return YouTubeTranscriptApi(
+            proxy_config=WebshareProxyConfig(
+                proxy_username=webshare_username,
+                proxy_password=webshare_password,
+            )
+        )
+    if proxy_url:
+        return YouTubeTranscriptApi(
+            proxy_config=GenericProxyConfig(http_url=proxy_url, https_url=proxy_url)
+        )
+    return YouTubeTranscriptApi()
+
+
+def _fetch_best_transcript(api: Any, video_id: str) -> list[dict]:
+    """Prefer English, then anything the video actually has.
+
+    `api.fetch()` defaults to English-only and raises `NoTranscriptFound` for, say, a
+    Hindi-captioned video — which reads to the user as "no captions" when captions exist.
+    Listing first and falling back keeps non-English videos ingestible.
+    """
+    from youtube_transcript_api import NoTranscriptFound
+
+    transcript_list = api.list(video_id)
+    try:
+        transcript = transcript_list.find_transcript(PREFERRED_LANGUAGES)
+    except NoTranscriptFound:
+        available = list(transcript_list)
+        if not available:
+            raise
+        transcript = available[0]
+    return transcript.fetch().to_raw_data()
+
+
+def _is_blocked(exc: Exception) -> bool:
+    from youtube_transcript_api import RequestBlocked
+
+    # IpBlocked subclasses RequestBlocked, so this covers both.
+    return isinstance(exc, RequestBlocked)
+
+
+def _describe_fetch_error(exc: Exception) -> str:
+    """Turn a youtube-transcript-api exception into something worth showing a user.
+
+    This is the only place that knows the library's exception hierarchy. The result
+    becomes the job's `last_error`, which the UI renders next to the retry button — so
+    each message says what went wrong *and* what the reader can do about it.
+    """
+    from youtube_transcript_api import (
+        AgeRestricted,
+        InvalidVideoId,
+        NoTranscriptFound,
+        PoTokenRequired,
+        RequestBlocked,
+        TranscriptsDisabled,
+        VideoUnavailable,
+        VideoUnplayable,
+    )
+
+    if isinstance(exc, (RequestBlocked, PoTokenRequired)):
+        return (
+            "YouTube is blocking transcript requests from this server. An administrator "
+            "can configure a proxy to fix this — or you can download the video's audio "
+            "and upload it as an audio source instead."
+        )
+    if isinstance(exc, TranscriptsDisabled):
+        return "This video has captions turned off, so there is no transcript to read."
+    if isinstance(exc, NoTranscriptFound):
+        return "This video has no transcript available in any language."
+    if isinstance(exc, AgeRestricted):
+        return "This video is age-restricted, so its transcript cannot be fetched."
+    if isinstance(exc, (VideoUnavailable, InvalidVideoId)):
+        return "This video is unavailable — it may be private, deleted, or the link may be wrong."
+    if isinstance(exc, VideoUnplayable):
+        return "YouTube will not play this video, so its transcript cannot be fetched."
+    return f"Could not fetch YouTube transcript: {exc}"
+
+
+_default_transcript_fetcher = build_transcript_fetcher()
 
 
 def _default_title_fetcher(url: str) -> str | None:
@@ -66,6 +198,10 @@ class YouTubeSourceHandler:
 
         try:
             transcript = self.transcript_fetcher(video_id)
+        except TranscriptUnavailable:
+            # Already carries a user-facing message from `_describe_fetch_error`; wrapping
+            # it again would bury the actionable part behind a generic prefix.
+            raise
         except Exception as exc:  # noqa: BLE001 - normalize any fetch error to a clear message
             # Surfaced as the job's last_error + a "failed" worker-log event + retry button.
             raise ValueError(f"Could not fetch YouTube transcript: {exc}") from exc

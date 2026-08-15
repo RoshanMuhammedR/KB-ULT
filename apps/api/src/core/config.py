@@ -58,6 +58,15 @@ class Settings(BaseSettings):
     # and the apps render no Google button, so local dev works without Google credentials.
     google_client_id: str = ""
 
+    # --- YouTube ---
+    # YouTube blocks transcript requests from datacenter IP ranges, so a deployed server
+    # usually cannot fetch captions even though a laptop on the same code can. All empty
+    # (the default) means the direct call; set one of these to route around a block.
+    # Webshare credentials take precedence over the generic URL when both are present.
+    youtube_proxy_url: str = ""
+    youtube_webshare_username: str = ""
+    youtube_webshare_password: str = ""
+
     # --- Cache (Valkey) ---
     # No code path uses the cache today (it backed the removed cross-origin handoff). The
     # port and adapter are kept for the next thing that needs one.

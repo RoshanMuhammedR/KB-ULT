@@ -94,6 +94,11 @@ jobs:
           AICREDITS_BASE_URL=https://api.aicredits.in/v1
           AICREDITS_CHAT_MODEL=openai/gpt-4o-mini
           AICREDITS_EMBEDDING_MODEL=text-embedding-3-small
+          # YouTube blocks datacenter IPs, so YouTube sources fail on the VPS until one of
+          # these is set. Unset secrets render empty, which means the direct call.
+          YOUTUBE_PROXY_URL=${{ secrets.YOUTUBE_PROXY_URL }}
+          YOUTUBE_WEBSHARE_USERNAME=${{ secrets.YOUTUBE_WEBSHARE_USERNAME }}
+          YOUTUBE_WEBSHARE_PASSWORD=${{ secrets.YOUTUBE_WEBSHARE_PASSWORD }}
           FILEBASE_ACCESS_KEY=${{ secrets.FILEBASE_ACCESS_KEY }}
           FILEBASE_SECRET_KEY=${{ secrets.FILEBASE_SECRET_KEY }}
           FILEBASE_BUCKET_NAME=${{ secrets.FILEBASE_BUCKET_NAME }}

@@ -20,13 +20,21 @@ class FilebaseAdapter(IFileStorage):
             aws_secret_access_key=settings.filebase_secret_key,
         )
 
-    def upload(self, key: str, file_data: bytes | BinaryIO, content_type: str) -> str:
+    def upload(
+        self,
+        key: str,
+        file_data: bytes | BinaryIO,
+        content_type: str,
+        cache_control: str | None = None,
+    ) -> str:
         try:
+            extra = {"CacheControl": cache_control} if cache_control else {}
             self.client.put_object(
                 Bucket=self.bucket_name,
                 Key=key,
                 Body=file_data,
                 ContentType=content_type,
+                **extra,
             )
             return key
         except Exception as exc:
@@ -42,7 +50,7 @@ class FilebaseAdapter(IFileStorage):
         except Exception as exc:
             raise FileStorageError(f"Failed to download object: {key}") from exc
 
-    def get_presigned_url(self, key: str, expires_in_seconds: int = 900) -> str:
+    def get_presigned_url(self, key: str, expires_in_seconds: int = 60) -> str:
         try:
             return self.client.generate_presigned_url(
                 "get_object",

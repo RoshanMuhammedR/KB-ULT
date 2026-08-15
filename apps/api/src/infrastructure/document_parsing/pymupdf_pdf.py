@@ -35,12 +35,18 @@ class PyMuPDF4LLMAdapter:
             markdown = "\n\n".join(page["text"] for page in pages)
             title = self._extract_title(document, filename)
             page_count = document.page_count
+            geometry = self._extract_geometry(document)
         finally:
             document.close()
 
         return {
             "markdown": markdown,
             "pages": pages,
+            # Per-page text blocks with normalized rects, and the page boxes themselves.
+            # Consumed by the chunker to turn a chunk's character span into highlight
+            # rectangles, and by the renderer to size page images.
+            "spans": geometry["spans"],
+            "page_boxes": geometry["page_boxes"],
             "title": title,
             "metadata": {
                 "status": "success",
@@ -49,10 +55,63 @@ class PyMuPDF4LLMAdapter:
             },
         }
 
+    def _extract_geometry(self, document: Any) -> dict[str, Any]:
+        """Per-block text + rects, normalized to fractions of the page box.
+
+        PyMuPDF hands out block rectangles for free during text extraction; the markdown path
+        discards them. Capturing them here is what lets a citation highlight the actual lines
+        it came from instead of colouring a whole page.
+
+        Rects are `[x0, y0, x1, y1]` as fractions of `page.rect`, origin top-left. Fractions
+        rather than points so the client can multiply by whatever pixel size the image was
+        rendered at — resolution independence falls out for free. `page.rect` already accounts
+        for `page.rotation`, so rotation is baked in here and the client never does that math.
+        """
+        spans: list[dict[str, Any]] = []
+        page_boxes: list[dict[str, Any]] = []
+
+        for page_index, page in enumerate(document, start=1):
+            rect = page.rect
+            width = float(rect.width) or 1.0
+            height = float(rect.height) or 1.0
+            page_boxes.append({"n": page_index, "w": round(width, 2), "h": round(height, 2)})
+
+            try:
+                blocks = page.get_text("blocks")
+            except Exception:  # noqa: BLE001 - geometry is an enhancement, never fail parsing
+                continue
+
+            for block in blocks:
+                # (x0, y0, x1, y1, text, block_no, block_type); type 1 is an image block.
+                if len(block) < 7 or block[6] != 0:
+                    continue
+                text = sanitize_text_for_storage(str(block[4] or "")).strip()
+                if not text:
+                    continue
+                spans.append(
+                    {
+                        "page": page_index,
+                        "text": text,
+                        "rect": [
+                            round(max(0.0, min(1.0, float(block[0]) / width)), 5),
+                            round(max(0.0, min(1.0, float(block[1]) / height)), 5),
+                            round(max(0.0, min(1.0, float(block[2]) / width)), 5),
+                            round(max(0.0, min(1.0, float(block[3]) / height)), 5),
+                        ],
+                    }
+                )
+
+        return {"spans": spans, "page_boxes": page_boxes}
+
     def _extract_pages(self, page_chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        # Number pages by list position (1-indexed) rather than trusting the chunk's own
-        # metadata["page"] field - PyMuPDF4LLM's indexing convention there isn't documented
-        # clearly enough to rely on, and the chunks are already returned in page order.
+        # Number by position in the FULL chunk list, then drop the empty pages - never the
+        # other way around. pymupdf4llm appends one dict per page in page order, empty pages
+        # included, so `enumerate` over the unfiltered list is the true 1-indexed page number.
+        # Filtering first and numbering the survivors would make every page after a blank or
+        # image-only one cite a number lower than its real page, silently.
+        #
+        # Position is preferred over the chunk's own metadata["page"] only because it needs no
+        # trust in an undocumented convention; the two agree (that field is `pno + 1`).
         pages = []
         for page_number, chunk in enumerate(page_chunks, start=1):
             text = sanitize_text_for_storage(chunk.get("text", "")).strip()
