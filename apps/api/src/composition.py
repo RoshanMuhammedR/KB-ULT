@@ -170,7 +170,11 @@ def build_chat_service(db: Session, settings: Settings) -> ChatService:
     return ChatService(
         kb_repo=KnowledgeBaseRepository(db),
         embedding_provider=_build_embedding_provider(settings),
-        retriever=Retriever(PgVectorStore(db)),
+        retriever=Retriever(
+            PgVectorStore(db),
+            candidate_multiplier=settings.retrieval_candidate_multiplier,
+            rrf_k=settings.retrieval_rrf_k,
+        ),
         llm_provider=llm_provider,
         prompt_builder=PromptBuilder(),
         top_k=settings.retrieval_top_k,

@@ -33,6 +33,14 @@ class Settings(BaseSettings):
     retrieval_top_k: int = 5
     retrieval_score_threshold: float = 0.25
     retrieval_min_context_chunks: int = 2
+    # Each retrieval arm fetches top_k * this many candidates before fusion. Over-fetching is
+    # what lets the score threshold be applied to a *pool* rather than to an already-truncated
+    # list — a weak 5th match now gets replaced instead of leaving a hole. Keep the product
+    # (5 * 6 = 30) under pgvector's default `hnsw.ef_search` of 40, or raise that to match.
+    retrieval_candidate_multiplier: int = 6
+    # Smoothing constant in Reciprocal Rank Fusion, from Cormack et al. (SIGIR 2009). Damps
+    # the head of each ranking so one confident-but-wrong arm cannot dominate the other.
+    retrieval_rrf_k: int = 60
 
     filebase_access_key: str = ""
     filebase_secret_key: str = ""

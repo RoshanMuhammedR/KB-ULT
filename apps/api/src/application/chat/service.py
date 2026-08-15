@@ -135,6 +135,10 @@ class ChatService:
             knowledge_base_id=knowledge_base_id,
             top_k=self.top_k,
             threshold=self.threshold,
+            # The raw text drives the lexical arm. It gets the same follow-up expansion as the
+            # embedding, so "what about the second one?" carries the previous question's terms
+            # into the keyword search too.
+            query_text=query,
         )
         logger.info(
             "chat_retrieval",

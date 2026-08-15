@@ -95,8 +95,60 @@ class EmbeddingRepository:
         knowledge_base_id: UUID,
         top_k: int,
     ) -> list[tuple[ChunkModel, KnowledgeAssetModel, float]]:
+        """Dense arm: nearest neighbours by cosine similarity."""
         distance = EmbeddingModel.vector.cosine_distance(query_embedding)
         rows = self.db.execute(
+            self._ready_chunks_base(knowledge_base_id, distance)
+            .order_by(distance)
+            .limit(top_k)
+        ).all()
+        return [(chunk, asset, float(score)) for chunk, asset, score in rows]
+
+    def query_ready_chunks_lexical(
+        self,
+        query_embedding: list[float],
+        query_text: str,
+        knowledge_base_id: UUID,
+        top_k: int,
+    ) -> list[tuple[ChunkModel, KnowledgeAssetModel, float]]:
+        """Lexical arm: chunks containing the query's terms, ranked by `ts_rank_cd`.
+
+        Returns the *same tuple shape* as the dense arm, cosine score included, so everything
+        downstream — the score threshold, the prompt's `score=` label, the citation relevance
+        percentage — works identically whichever arm surfaced a chunk. The similarity is
+        computed as a selected column rather than an ordering, so it is an exact calculation
+        over at most `top_k` rows and never touches the vector index.
+
+        `websearch_to_tsquery` is used over `plainto_tsquery` because it understands quoted
+        phrases and never raises on punctuation a user happens to type. It ANDs the terms, so
+        a long conversational question often matches nothing here — that is intended. This arm
+        exists to catch the exact identifier, error code or proper noun that embeddings miss;
+        when it has nothing to say it stays silent and the dense arm carries the query alone.
+        """
+        if not query_text.strip():
+            return []
+
+        distance = EmbeddingModel.vector.cosine_distance(query_embedding)
+        tsquery = func.websearch_to_tsquery("english", query_text)
+        rows = self.db.execute(
+            self._ready_chunks_base(knowledge_base_id, distance)
+            .where(ChunkModel.fts.op("@@")(tsquery))
+            .order_by(func.ts_rank_cd(ChunkModel.fts, tsquery).desc())
+            .limit(top_k)
+        ).all()
+        return [(chunk, asset, float(score)) for chunk, asset, score in rows]
+
+    @staticmethod
+    def _ready_chunks_base(knowledge_base_id: UUID, distance):
+        """Shared skeleton of both arms: same joins, same visibility rules, same columns.
+
+        Built with ORM `select()` constructs rather than raw SQL on purpose. The tenant filter
+        is injected by the `do_orm_execute` listener, which only fires for ORM statements — a
+        raw-SQL or CTE query would silently escape it and leave only RLS, which is dormant
+        whenever `APP_DATABASE_URL` is unset. Keeping both arms as plain ORM selects means
+        they inherit exactly the isolation the existing search already had.
+        """
+        return (
             select(ChunkModel, KnowledgeAssetModel, (1 - distance).label("score"))
             .join(EmbeddingModel, EmbeddingModel.chunk_id == ChunkModel.id)
             .join(KnowledgeAssetModel, KnowledgeAssetModel.id == ChunkModel.knowledge_asset_id)
@@ -104,7 +156,4 @@ class EmbeddingRepository:
             .where(KnowledgeAssetModel.knowledge_base_id == knowledge_base_id)
             .where(KnowledgeAssetModel.superseded_at.is_(None))
             .where(KnowledgeAssetModel.status == AssetStatus.READY.value)
-            .order_by(distance)
-            .limit(top_k)
-        ).all()
-        return [(chunk, asset, float(score)) for chunk, asset, score in rows]
+        )
