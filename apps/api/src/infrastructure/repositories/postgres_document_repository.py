@@ -60,9 +60,6 @@ class KnowledgeAssetRepository:
             error_message=asset.error_message,
             text_content=self._sanitize_optional_text(asset.text_content),
             metadata_=sanitize_json_for_storage(asset.metadata),
-            canonical_shape=asset.canonical_shape,
-            render_version=asset.render_version,
-            page_manifest=asset.page_manifest,
             superseded_at=asset.superseded_at,
         )
         self.db.add(model)
@@ -81,9 +78,6 @@ class KnowledgeAssetRepository:
         model.error_message = asset.error_message
         model.text_content = self._sanitize_optional_text(asset.text_content)
         model.metadata_ = sanitize_json_for_storage(asset.metadata)
-        model.canonical_shape = asset.canonical_shape
-        model.render_version = asset.render_version
-        model.page_manifest = asset.page_manifest
         model.superseded_at = asset.superseded_at
         self._commit()
         self.db.refresh(model)

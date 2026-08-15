@@ -63,7 +63,6 @@ from src.ingestion.handlers import (
 )
 from src.ingestion.registry import SourceHandlerRegistry
 from src.processing.chunking import RecursiveKnowledgeAssetChunker
-from src.processing.rendition import PdfPageRenderer, RenditionBuilder, SlideSvgRenderer
 from src.retrieval.retriever import Retriever
 
 
@@ -104,15 +103,6 @@ def _build_transcription_provider(settings: Settings) -> VoxtralTranscriptionPro
         base_url=settings.aicredits_base_url,
         model=settings.aicredits_transcription_model,
     )
-
-
-def _build_rendition_builder(file_storage: IFileStorage) -> RenditionBuilder:
-    # Giving a format page images is one `register` line — the client switches on
-    # `canonical_shape`, so nothing on the frontend changes when a row is added here.
-    builder = RenditionBuilder(file_storage)
-    builder.register(SourceType.PDF.value, PdfPageRenderer())
-    builder.register(SourceType.PPTX.value, SlideSvgRenderer())
-    return builder
 
 
 def _build_source_handler_registry(
@@ -166,7 +156,6 @@ def build_ingestion_service(db: Session, settings: Settings) -> IngestionService
         vector_store=PgVectorStore(db),
         file_storage=file_storage,
         job_queue=build_job_queue(),
-        rendition_builder=_build_rendition_builder(file_storage),
     )
 
 

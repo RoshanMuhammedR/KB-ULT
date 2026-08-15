@@ -11,28 +11,6 @@ export type IngestionJob = {
   last_error: string | null;
 };
 
-/**
- * Where a passage sits in its source, in normalized units.
- *
- * Paged: rects are [x0, y0, x1, y1] as fractions of the page box, origin top-left — multiply
- * by the rendered element's pixel size and the highlight lands correctly at any zoom.
- * Timeline: seconds, with a real end (not just a start).
- *
- * One chunk can span two pages, which is why `regions` is a list.
- */
-export type PagedRegion = { page: number; rects: [number, number, number, number][] };
-export type TimelineRegion = { start: number; end: number };
-export type Region = PagedRegion | TimelineRegion;
-
-/** How a source is displayed. The viewer switches on this and never on `source_type`. */
-export type CanonicalShape = "paged" | "timeline" | "text";
-
-/** One rendered page: size in points (post-rotation) and the image format written for it. */
-export type PageManifestEntry = { n: number; w: number; h: number; ext: string };
-
-/** A signed URL for one rendered page, with its size so layout can happen before it loads. */
-export type RenderedPage = { page: number; url: string; width: number; height: number };
-
 export type KnowledgeAsset = {
   id: string;
   knowledge_base_id: string;
@@ -50,13 +28,6 @@ export type KnowledgeAsset = {
   failed_step: string | null;
   error_message: string | null;
   metadata: Record<string, unknown>;
-  // Display shape — drives which viewer renders, with "text" as the honest fallback for
-  // sources that have neither pages nor a timeline (Markdown) or whose rendition failed.
-  canonical_shape: CanonicalShape;
-  // 0 until a rendition exists. Part of the page-image object key, so coordinates and images
-  // can never be paired across versions.
-  render_version: number;
-  page_manifest: { pages: PageManifestEntry[] } | null;
   // How many indexed passages this source contributes — i.e. how much of it is usable.
   passage_count: number;
   job: IngestionJob | null;
@@ -77,10 +48,6 @@ export type Citation = {
   chunk_index: number;
   score: number;
   excerpt: string;
-  // Optional: present only when the pipeline recovered geometry for this passage. Absent on
-  // rows indexed before the pipeline captured coordinates, which fall back to the text view.
-  shape?: CanonicalShape;
-  regions?: Region[];
 };
 
 export type ChatResponse = {
@@ -136,10 +103,6 @@ export type Passage = {
   chunk_index: number;
   text: string;
   locator: Locator;
-  // Optional geometry, same contract as on Citation. Lets the viewer highlight a passage
-  // opened directly, not only one arrived at from an answer.
-  shape?: CanonicalShape;
-  regions?: Region[];
 };
 
 // An answer that cited a given source, for the "answers that cited this" panel.

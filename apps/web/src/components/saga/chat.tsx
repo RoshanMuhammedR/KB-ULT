@@ -4,13 +4,11 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
-  ChevronDown,
   ChevronRight,
   Copy,
   Info,
   MessageSquarePlus,
   MoreHorizontal,
-  Paperclip,
   Pencil,
   RefreshCw,
   Search,
@@ -363,7 +361,7 @@ export function MessageBlock({
       )}
 
       {!streaming && message.citations.length > 0 ? (
-        <SourcesChip
+        <CitationSet
           citations={message.citations}
           messageId={message.id}
           conversationId={conversationId}
@@ -418,18 +416,7 @@ function SmallAction({
   );
 }
 
-/**
- * The answer's sources, collapsed to a single chip.
- *
- * Citations used to render as a stack of cards, each repeating the excerpt already quoted in
- * the answer above — so a three-source answer pushed the next question off the screen. The
- * chip states the count and gets out of the way; the detail is one click away for a reader
- * who wants to verify, which is the only time it matters.
- *
- * Rows are grouped by `asset_id`, because three hits in one PDF are one document to a reader,
- * not three sources.
- */
-export function SourcesChip({
+export function CitationSet({
   citations,
   messageId,
   conversationId
@@ -438,129 +425,76 @@ export function SourcesChip({
   messageId: string;
   conversationId?: string;
 }) {
-  const [open, setOpen] = useState(false);
-  const chipRef = useRef<HTMLButtonElement | null>(null);
-  const popoverRef = useRef<HTMLDivElement | null>(null);
-  const { sources } = useSources();
-
-  // Group by document, preserving the retrieval order the API returned. Each citation keeps
-  // its ORIGINAL index — the viewer's `i` param refers to position in the full citation list,
-  // so grouping must not renumber it.
-  const documents: { assetId: string; citations: { citation: Citation; index: number }[] }[] = [];
-  citations.forEach((citation, index) => {
-    const existing = documents.find((entry) => entry.assetId === citation.asset_id);
-    if (existing) existing.citations.push({ citation, index });
-    else documents.push({ assetId: citation.asset_id, citations: [{ citation, index }] });
-  });
-
-  useEffect(() => {
-    if (!open) return;
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      setOpen(false);
-      chipRef.current?.focus(); // focus returns to the trigger, never to the page top
-    }
-    function onPointerDown(event: MouseEvent) {
-      const target = event.target as Node;
-      if (popoverRef.current?.contains(target) || chipRef.current?.contains(target)) return;
-      setOpen(false);
-    }
-    document.addEventListener("keydown", onKeyDown);
-    document.addEventListener("mousedown", onPointerDown);
-    return () => {
-      document.removeEventListener("keydown", onKeyDown);
-      document.removeEventListener("mousedown", onPointerDown);
-    };
-  }, [open]);
-
-  const label = `${citations.length} ${citations.length === 1 ? "source" : "sources"}`;
-
   return (
-    <div className="relative">
-      <button
-        ref={chipRef}
-        type="button"
-        onClick={() => setOpen((value) => !value)}
-        aria-expanded={open}
-        aria-label={`${label} for this answer`}
-        className={cn(
-          "inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-2.5 py-1",
-          "text-[12px] text-muted-foreground transition-colors",
-          "hover:border-border-strong hover:text-foreground"
-        )}
-      >
-        <Paperclip className="size-3.5" aria-hidden />
-        {label}
-        <ChevronDown
-          className={cn("size-3.5 transition-transform", open && "rotate-180")}
-          aria-hidden
+    <section aria-label="Sources for this answer" className="space-y-2">
+      <h3 className="label-caps text-muted-foreground">
+        {citations.length} cited {citations.length === 1 ? "passage" : "passages"}
+      </h3>
+      {citations.map((citation, index) => (
+        <CitationCard
+          key={`${citation.asset_id}-${citation.chunk_index}`}
+          citation={citation}
+          index={index}
+          messageId={messageId}
+          conversationId={conversationId}
         />
-      </button>
+      ))}
+    </section>
+  );
+}
 
-      {open ? (
-        <div
-          ref={popoverRef}
-          role="group"
-          aria-label={`${label} for this answer`}
-          className={cn(
-            "absolute left-0 z-20 mt-1.5 w-[min(28rem,calc(100vw-2rem))]",
-            "hairline-panel overflow-hidden p-1 shadow-lg",
-            "motion-safe:animate-in motion-safe:fade-in"
-          )}
-        >
-          {documents.map((entry) => {
-            const first = entry.citations[0]!;
-            const source = sources.find((item) => item.id === entry.assetId);
-            const title = source?.title ?? first.citation.filename;
-            return (
-              <div key={entry.assetId} className="p-1">
-                <div className="flex items-center gap-2 px-1.5 pb-1">
-                  <SourceIcon type={first.citation.source_type} className="size-5" />
-                  <span className="min-w-0 flex-1 truncate text-[13px] font-semibold">{title}</span>
-                </div>
-                {entry.citations.map(({ citation, index }) => {
-                  // `conv` lets the viewer fetch exactly one thread instead of scanning them
-                  // all for the message the reader came from.
-                  const query = new URLSearchParams({
-                    cite: String(citation.chunk_index),
-                    from: messageId,
-                    i: String(index)
-                  });
-                  if (conversationId) query.set("conv", conversationId);
-                  return (
-                    <Link
-                      key={`${citation.asset_id}-${citation.chunk_index}`}
-                      href={`/view/${citation.asset_id}?${query.toString()}`}
-                      onClick={() => setOpen(false)}
-                      className={cn(
-                        "flex items-center gap-2 rounded-md px-1.5 py-1.5",
-                        "hover:bg-muted focus-visible:bg-muted"
-                      )}
-                    >
-                      <Pill>{formatLocator(citation.locator)}</Pill>
-                      <span
-                        className={cn(
-                          "ml-auto shrink-0 text-[12px]",
-                          citation.score >= 0.8
-                            ? "text-success"
-                            : citation.score >= 0.6
-                              ? "text-muted-foreground"
-                              : "text-muted-soft"
-                        )}
-                      >
-                        {Math.round(citation.score * 100)}%
-                      </span>
-                      <ChevronRight className="size-3.5 shrink-0 text-muted-soft" aria-hidden />
-                    </Link>
-                  );
-                })}
-              </div>
-            );
-          })}
-        </div>
-      ) : null}
-    </div>
+export function CitationCard({
+  citation,
+  index,
+  messageId,
+  conversationId
+}: {
+  citation: Citation;
+  index: number;
+  messageId: string;
+  conversationId?: string;
+}) {
+  const { sources } = useSources();
+  const source = sources.find((item) => item.id === citation.asset_id);
+  // `conv` lets the viewer fetch exactly one thread instead of scanning them all for the
+  // message the reader came from.
+  const query = new URLSearchParams({
+    cite: String(citation.chunk_index),
+    from: messageId,
+    i: String(index)
+  });
+  if (conversationId) query.set("conv", conversationId);
+  return (
+    <Link
+      href={`/view/${citation.asset_id}?${query.toString()}`}
+      className="flex items-start gap-3 rounded-md border border-border bg-card p-3 transition-colors hover:border-border-strong"
+    >
+      <SourceIcon type={citation.source_type} className="size-8" />
+      <span className="min-w-0 flex-1">
+        <span className="flex flex-wrap items-center gap-2">
+          <span className="max-w-full truncate text-[13px] font-semibold">
+            {source?.title ?? citation.filename}
+          </span>
+          <Pill>{formatLocator(citation.locator)}</Pill>
+          <span
+            className={cn(
+              "text-[12px]",
+              citation.score >= 0.8
+                ? "text-success"
+                : citation.score >= 0.6
+                  ? "text-muted-foreground"
+                  : "text-muted-soft"
+            )}
+          >
+            {Math.round(citation.score * 100)}% relevance
+          </span>
+        </span>
+        <span className="mt-1.5 line-clamp-3 block text-[13px] leading-relaxed text-muted-foreground">
+          “{citation.excerpt}”
+        </span>
+      </span>
+      <ChevronRight className="mt-1 size-4 shrink-0 text-muted-soft" aria-hidden />
+    </Link>
   );
 }
 

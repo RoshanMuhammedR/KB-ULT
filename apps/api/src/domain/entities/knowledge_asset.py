@@ -35,11 +35,6 @@ class KnowledgeAsset:
     error_message: str | None = None
     text_content: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
-    # Display shape + rendition bookkeeping. `render_version` is 0 until a rendition is built;
-    # `page_manifest` is None until then. See migration 0004.
-    canonical_shape: str = "text"
-    render_version: int = 0
-    page_manifest: dict[str, Any] | None = None
     superseded_at: datetime | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None

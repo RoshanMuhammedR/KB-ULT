@@ -2,14 +2,23 @@
 
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, ChevronLeft, ChevronRight } from "lucide-react";
 import { formatLocator, sourceTitle, typeCopy } from "@kb/shared";
 import { Button, Label, Panel, Pill, Skeleton, SourceIcon, buttonClass } from "@kb/ui";
-import type { Citation, Conversation, KnowledgeAsset, Passage, Region } from "@/types/api";
+import type { Citation, Conversation, KnowledgeAsset, Passage } from "@/types/api";
 import * as api from "@/lib/api";
-import { PagedViewer } from "@/components/saga/paged-viewer";
-import { TimelineViewer } from "@/components/saga/timeline-viewer";
+
+/** YouTube ids are stashed on the asset at ingest time, so no URL parsing is needed here. */
+function youtubeEmbed(source: KnowledgeAsset, startSeconds: number): string | null {
+  const videoId = source.metadata?.["video_id"];
+  if (typeof videoId !== "string" || !videoId) return null;
+  return `https://www.youtube-nocookie.com/embed/${videoId}?start=${Math.max(0, startSeconds)}`;
+}
+
+function locatorSeconds(locator: Citation["locator"]): number {
+  return locator?.type === "timestamp" ? Number(locator.value) || 0 : 0;
+}
 
 export default function SourceViewerPage() {
   const { sourceId } = useParams<{ sourceId: string }>();
@@ -26,6 +35,7 @@ export default function SourceViewerPage() {
   const [passages, setPassages] = useState<Passage[]>([]);
   const [index, setIndex] = useState(Number.isFinite(initialIndex) ? initialIndex : 0);
   const [missing, setMissing] = useState(false);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -87,6 +97,19 @@ export default function SourceViewerPage() {
     };
   }, [sourceId, chunkIndex]);
 
+  // Seek the player to the cited second once the audio element knows its duration.
+  const startSeconds = locatorSeconds(citation?.locator ?? null);
+  const timestampsUnavailable = source?.metadata?.["timestamps"] === "unavailable";
+  useEffect(() => {
+    const element = audioRef.current;
+    if (!element || timestampsUnavailable || startSeconds <= 0) return;
+    const seek = () => {
+      element.currentTime = startSeconds;
+    };
+    if (element.readyState >= 1) seek();
+    else element.addEventListener("loadedmetadata", seek, { once: true });
+  }, [startSeconds, timestampsUnavailable, source?.download_url]);
+
   if (missing) {
     return (
       <div className="mx-auto max-w-md px-5 py-24 text-center">
@@ -109,12 +132,8 @@ export default function SourceViewerPage() {
   }
 
   const title = sourceTitle(source);
+  const embedUrl = source.source_type === "youtube" ? youtubeEmbed(source, startSeconds) : null;
   const cited = passages.find((passage) => passage.chunk_index === chunkIndex);
-  const manifestPages = source.page_manifest?.pages ?? [];
-  // Geometry from the citation when the reader arrived from an answer, else from the passage
-  // itself when the source was opened directly — so a directly-opened passage still
-  // highlights. Both carry the same optional contract.
-  const regions: Region[] | undefined = citation?.regions ?? cited?.regions;
   const before = passages.filter((passage) => passage.chunk_index < (chunkIndex ?? -1));
   const after = passages.filter((passage) => passage.chunk_index > (chunkIndex ?? -1));
 
@@ -188,41 +207,41 @@ export default function SourceViewerPage() {
             </span>
           </div>
 
-          {/* One branch per canonical shape, never per file format. A source whose rendition
-              failed reports shape "text" and falls through to the passage list below, which
-              is the honest fallback rather than a special case. */}
-          {source.canonical_shape === "paged" && manifestPages.length > 0 ? (
-            <PagedViewer
-              assetId={source.id}
-              pages={manifestPages}
-              regions={regions}
-              label={title}
-            />
+          {embedUrl ? (
+            <div className="p-5">
+              <div className="aspect-video overflow-hidden rounded-md">
+                <iframe
+                  src={embedUrl}
+                  title={`${title} at ${formatLocator(citation?.locator ?? null)}`}
+                  allow="accelerometer; clipboard-write; encrypted-media; picture-in-picture"
+                  allowFullScreen
+                  className="size-full border-0"
+                />
+              </div>
+              <p className="mt-3 text-[12px] text-muted-foreground">
+                Playing from {citation ? formatLocator(citation.locator) : "the start"} — the cited
+                line is highlighted below.
+              </p>
+            </div>
           ) : null}
 
-          {source.canonical_shape === "timeline" ? (
-            <TimelineViewer
-              source={source}
-              regions={regions}
-              locator={citation?.locator ?? cited?.locator ?? null}
-              downloadUrl={source.download_url}
-            />
-          ) : null}
-
-          {/* PPTX slides are reconstructed from the deck's own geometry rather than rendered
-              by PowerPoint, so charts and graphics can differ. Saying so is better than
-              letting a reader assume they are looking at the real thing. */}
-          {source.canonical_shape === "paged" &&
-          manifestPages.length > 0 &&
-          source.source_type === "pptx" ? (
-            <p className="px-5 pb-4 text-[12px] text-muted-foreground">
-              Reconstructed slide view — charts and graphics may differ from the original.{" "}
-              {source.download_url ? (
-                <a href={source.download_url} download className="underline">
-                  Download the deck
-                </a>
-              ) : null}
-            </p>
+          {source.source_type === "audio" && source.download_url ? (
+            <div className="p-5">
+              <audio
+                ref={audioRef}
+                controls
+                preload="metadata"
+                src={source.download_url}
+                className="w-full"
+              >
+                Your browser can&apos;t play this recording.
+              </audio>
+              <p className="mt-3 text-[12px] text-muted-foreground">
+                {timestampsUnavailable
+                  ? "This recording was transcribed without timings, so the player starts at the beginning."
+                  : `Starting at ${formatLocator(citation?.locator ?? null)} — the cited line is highlighted below.`}
+              </p>
+            </div>
           ) : null}
 
           <div className="space-y-4 p-6 text-[15px] leading-relaxed">

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ChevronDown, ChevronRight, Paperclip } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import { formatLocator } from "@kb/shared";
 import { Panel, Pill, SourceIcon } from "@kb/ui";
 import { DEMO_ANSWER, DEMO_CITATIONS, DEMO_QUESTION } from "@/lib/demo-content";
@@ -53,39 +53,30 @@ export function AnswerDemo() {
           ))}
         </div>
 
-        {/* Mirrors the product's SourcesChip: collapsed by default, expandable. Shown here
-            already open so a visitor sees what is behind it without having to click. */}
         {done ? (
-          <div className="border-t border-border pt-4">
-            <span
-              className={
-                "inline-flex items-center gap-1.5 rounded-full border border-border bg-card " +
-                "px-2.5 py-1 text-[12px] text-muted-foreground"
-              }
-            >
-              <Paperclip className="size-3.5" aria-hidden />
-              {DEMO_CITATIONS.length} sources
-              <ChevronDown className="size-3.5 rotate-180" aria-hidden />
-            </span>
-            <div className="mt-1.5 rounded-md border border-border-soft bg-canvas-soft p-1">
-              {DEMO_CITATIONS.map((citation) => (
-                <div key={citation.chunk_index} className="p-1">
-                  <div className="flex items-center gap-2 px-1.5 pb-1">
-                    <SourceIcon type={citation.source_type} className="size-5" />
-                    <span className="min-w-0 flex-1 truncate text-[13px] font-semibold">
-                      {citation.filename}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2 rounded-md px-1.5 py-1.5">
+          <div className="space-y-2 border-t border-border pt-4">
+            <span className="label-caps text-muted-foreground">Cited passages</span>
+            {DEMO_CITATIONS.map((citation) => (
+              <div
+                key={citation.chunk_index}
+                className="flex items-start gap-3 rounded-md border border-border-soft bg-canvas-soft p-3"
+              >
+                <SourceIcon type={citation.source_type} className="size-8" />
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="truncate text-[13px] font-semibold">{citation.filename}</span>
                     <Pill>{formatLocator(citation.locator)}</Pill>
-                    <span className="ml-auto shrink-0 text-[12px] text-muted-foreground">
-                      {Math.round(citation.score * 100)}%
+                    <span className="text-[12px] text-muted-foreground">
+                      {Math.round(citation.score * 100)}% relevance
                     </span>
-                    <ChevronRight className="size-3.5 shrink-0 text-muted-soft" aria-hidden />
                   </div>
+                  <p className="mt-1.5 line-clamp-2 text-[13px] text-muted-foreground">
+                    “{citation.excerpt}”
+                  </p>
                 </div>
-              ))}
-            </div>
+                <ChevronRight className="mt-1 size-4 shrink-0 text-muted-soft" aria-hidden />
+              </div>
+            ))}
           </div>
         ) : null}
       </div>

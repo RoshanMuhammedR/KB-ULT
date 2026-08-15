@@ -9,10 +9,8 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
 from src.core.config import get_settings
-from src.core.tenant_context import current_tenant_id
 from src.domain.entities import IngestionJob
 from src.domain.interfaces import IFileStorage
-from src.processing.rendition.builder import rendition_key
 from src.ingestion.source_types import AUDIO_EXTENSIONS
 from src.http.dependencies import get_file_storage, get_ingestion_service
 from src.infrastructure.repositories import (
@@ -32,7 +30,6 @@ from src.http.schemas.documents import (
     KnowledgeAssetSchema,
     PassageSchema,
     RenameKnowledgeAssetRequest,
-    RenderedPageSchema,
 )
 from src.http.schemas.jobs import JobEventSchema
 
@@ -95,9 +92,6 @@ def _to_schema(
         failed_step=asset.failed_step,
         error_message=asset.error_message,
         metadata=asset.metadata,
-        canonical_shape=asset.canonical_shape,
-        render_version=asset.render_version,
-        page_manifest=asset.page_manifest,
         passage_count=passage_count,
         job=(
             IngestionJobSchema(
@@ -185,55 +179,6 @@ def download_asset(
     )
 
 
-@router.get("/{asset_id}/render/pages/{page}", response_model=RenderedPageSchema)
-def render_page(
-    asset_id: UUID,
-    page: int,
-    response: Response,
-    db: Annotated[Session, Depends(get_db)],
-    file_storage: Annotated[IFileStorage, Depends(get_file_storage)],
-) -> RenderedPageSchema:
-    """Signed URL for one rendered page image, plus that page's size.
-
-    Returns JSON rather than redirecting because the caller is an `<img>` tag: an image
-    element cannot send an Authorization header, and browsers strip one across a cross-origin
-    redirect anyway. So the client fetches this with its token, then points the tag at the
-    signed URL — which also lets the browser cache the image under a stable key.
-
-    The version comes off the asset row rather than the request, which is what makes a stale
-    pairing impossible: a reprocess bumps `render_version` and rewrites the chunk coordinates
-    in the same pass, so the image always matches the coordinates handed out beside it.
-    """
-    asset = KnowledgeAssetRepository(db).get(asset_id)
-    if asset is None:
-        raise HTTPException(status_code=404, detail="KnowledgeAsset not found")
-
-    manifest = (asset.page_manifest or {}).get("pages") or []
-    entry = next((item for item in manifest if int(item.get("n", 0)) == page), None)
-    if entry is None:
-        raise HTTPException(status_code=404, detail=f"No rendered page {page} for this source")
-
-    # The tenant comes from the request context, not the row — the repository read above
-    # already ran under the tenant guard, so reaching this line means the asset belongs to
-    # the caller's tenant and the key can only ever address their own prefix.
-    key = rendition_key(
-        current_tenant_id(),
-        asset.id,
-        asset.render_version,
-        page,
-        str(entry.get("ext") or "jpg"),
-    )
-    # Just inside the signature's own lifetime, so paging back and forth reuses the response
-    # instead of re-signing, and a cached entry can never outlive the URL it holds.
-    response.headers["Cache-Control"] = "private, max-age=45"
-    return RenderedPageSchema(
-        page=page,
-        url=file_storage.get_presigned_url(key),
-        width=float(entry.get("w") or 0),
-        height=float(entry.get("h") or 0),
-    )
-
-
 @router.get("/{asset_id}/events", response_model=list[JobEventSchema])
 def list_asset_events(
     asset_id: UUID,
@@ -279,8 +224,6 @@ def list_passages(
             chunk_index=chunk.chunk_index,
             text=chunk.text,
             locator=chunk.metadata.get("locator"),
-            shape=chunk.metadata.get("shape"),
-            regions=chunk.metadata.get("regions"),
         )
         for chunk in chunks
     ]
@@ -376,25 +319,6 @@ def retry_asset(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return _to_schema(asset, file_storage)
 
-
-@router.post(
-    "/{asset_id}/reprocess",
-    response_model=KnowledgeAssetSchema,
-    status_code=status.HTTP_202_ACCEPTED,
-)
-def reprocess_asset(
-    asset_id: UUID,
-    ingestion_service: Annotated[IngestionService, Depends(get_ingestion_service)],
-    file_storage: Annotated[IFileStorage, Depends(get_file_storage)],
-) -> KnowledgeAssetSchema:
-    # Re-run the pipeline on an already-`ready` asset. Unlike /retry (which exists for the
-    # user-facing "this failed, try again" button), this is how a source picks up the output
-    # of a changed pipeline — new parser metadata, new chunk fields — without a re-upload.
-    try:
-        asset = ingestion_service.reprocess(asset_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return _to_schema(asset, file_storage)
 
 
 @router.patch("/{asset_id}", response_model=KnowledgeAssetSchema)

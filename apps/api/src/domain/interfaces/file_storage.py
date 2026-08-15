@@ -4,19 +4,8 @@ from typing import BinaryIO, Protocol
 
 
 class IFileStorage(Protocol):
-    def upload(
-        self,
-        key: str,
-        file_data: bytes | BinaryIO,
-        content_type: str,
-        cache_control: str | None = None,
-    ) -> str:
-        """Store file data and return the object key.
-
-        `cache_control` is set on the object itself, so any proxy in front of storage honours
-        it. Used for renditions, which are immutable — a new render writes a new versioned key
-        rather than overwriting — and can therefore be cached indefinitely.
-        """
+    def upload(self, key: str, file_data: bytes | BinaryIO, content_type: str) -> str:
+        """Store file data and return the object key."""
 
     def download(self, key: str) -> bytes:
         """Read an object's bytes back.

@@ -30,43 +30,29 @@ def coalesce_timed_lines(
     segments: list[dict] = []
     buffer: list[str] = []
     window_start = 0.0
-    window_end = 0.0
     current_len = 0
 
     for line in lines:
         text = line.get("text") or ""
         if buffer and current_len + len(text) > char_target:
-            _emit(segments, buffer, window_start, window_end)
+            _emit(segments, buffer, window_start)
             buffer = []
             current_len = 0
         if not buffer:
             window_start = float(line.get("start", 0) or 0)
-        # Track the far edge of the window as it grows. Each line's end is its own start plus
-        # its duration; `max` guards transcripts whose lines overlap or arrive out of order.
-        line_start = float(line.get("start", 0) or 0)
-        window_end = max(window_end, line_start + float(line.get("duration", 0) or 0))
         buffer.append(text)
         current_len += len(text)
 
-    _emit(segments, buffer, window_start, window_end)
+    _emit(segments, buffer, window_start)
     return segments
 
 
-def _emit(segments: list[dict], buffer: list[str], window_start: float, window_end: float) -> None:
+def _emit(segments: list[dict], buffer: list[str], window_start: float) -> None:
     if not buffer:
         return
     text = sanitize_text_for_storage(" ".join(buffer)).strip()
-    if not text:
-        return
-    # The locator stays an int for `formatLocator`, which renders it as a clock time and is
-    # shared with both frontends — changing its type would break every citation label.
-    # The float span rides alongside as `region`: it is what lets a player highlight the
-    # passage rather than just seek to its first second. `duration` used to be discarded
-    # entirely, so no segment had an end at all.
-    segment: dict = {"text": text, "locator": {"type": "timestamp", "value": int(window_start)}}
-    if window_end > window_start:
-        segment["region"] = {"start": round(window_start, 2), "end": round(window_end, 2)}
-    segments.append(segment)
+    if text:
+        segments.append({"text": text, "locator": {"type": "timestamp", "value": int(window_start)}})
 
 
 def split_untimed_text(text: str, *, char_target: int = SEGMENT_CHAR_TARGET) -> list[dict]:
