@@ -7,7 +7,6 @@ image. Transcription runs worker-side, so the timeout is generous rather than re
 from __future__ import annotations
 
 import base64
-import mimetypes
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -86,19 +85,30 @@ class VoxtralTranscriptionProvider:
     # --- Transports ---------------------------------------------------------------
 
     def _transcribe_route(self, data: bytes, filename: str) -> Transcript:
+        # AICredits' own docs (https://aicredits.in/docs/audio) document this route as a
+        # JSON body with base64 `input_audio`, not an OpenAI-style multipart upload — and
+        # its parameter table has no `response_format`/`timestamp_granularities` at all,
+        # for either supported model. A live probe confirmed that: the multipart shape
+        # with those params is accepted (the gateway just ignores the extra fields) but
+        # never returns `segments`, so there was never a timestamp mode to opt into here.
+        # `_parse_response` still reads `segments` defensively in case that ever changes.
         response = httpx.post(
             f"{self.base_url}/audio/transcriptions",
-            headers={"Authorization": f"Bearer {self.api_key}"},
-            files={"file": (filename, data, self._content_type(filename))},
-            data={
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
                 "model": self.model,
-                "response_format": "verbose_json",
-                "timestamp_granularities[]": "segment",
+                "input_audio": {
+                    "data": base64.b64encode(data).decode("ascii"),
+                    "format": self._audio_format(filename),
+                },
             },
             timeout=self.timeout_seconds,
         )
         response.raise_for_status()
-        return self._parse_verbose_json(response.json())
+        return self._parse_response(response.json())
 
     def _transcribe_chat(self, data: bytes, filename: str) -> Transcript:
         # The audio-in-chat shape: an `input_audio` content part alongside a text prompt.
@@ -154,10 +164,11 @@ class VoxtralTranscriptionProvider:
 
     # --- Parsing ------------------------------------------------------------------
 
-    def _parse_verbose_json(self, payload: dict) -> Transcript:
+    def _parse_response(self, payload: dict) -> Transcript:
         text = (payload.get("text") or "").strip()
-        # `segments` is the provider's own response field name (OpenAI's verbose_json
-        # shape), so it stays as-is here — this is the one place that contract is read.
+        # `segments` is OpenAI's own verbose_json field name, kept as-is in case a future
+        # gateway or model actually populates it — AICredits' documented response for this
+        # route never does, so this is currently always `[]` in production.
         raw_lines = payload.get("segments") or []
 
         timed_lines: list[dict] = []
@@ -183,10 +194,6 @@ class VoxtralTranscriptionProvider:
         )
 
     # --- Helpers ------------------------------------------------------------------
-
-    @staticmethod
-    def _content_type(filename: str) -> str:
-        return mimetypes.guess_type(filename)[0] or "application/octet-stream"
 
     @staticmethod
     def _audio_format(filename: str) -> str:

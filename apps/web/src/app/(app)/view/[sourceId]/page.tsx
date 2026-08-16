@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ArrowLeft, ChevronLeft, ChevronRight } from "lucide-react";
 import { formatLocator, sourceTitle, typeCopy } from "@kb/shared";
 import { Button, Label, Panel, Pill, Skeleton, SourceIcon, buttonClass } from "@kb/ui";
@@ -35,7 +35,6 @@ export default function SourceViewerPage() {
   const [passages, setPassages] = useState<Passage[]>([]);
   const [index, setIndex] = useState(Number.isFinite(initialIndex) ? initialIndex : 0);
   const [missing, setMissing] = useState(false);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -97,18 +96,8 @@ export default function SourceViewerPage() {
     };
   }, [sourceId, chunkIndex]);
 
-  // Seek the player to the cited second once the audio element knows its duration.
   const startSeconds = locatorSeconds(citation?.locator ?? null);
   const timestampsUnavailable = source?.metadata?.["timestamps"] === "unavailable";
-  useEffect(() => {
-    const element = audioRef.current;
-    if (!element || timestampsUnavailable || startSeconds <= 0) return;
-    const seek = () => {
-      element.currentTime = startSeconds;
-    };
-    if (element.readyState >= 1) seek();
-    else element.addEventListener("loadedmetadata", seek, { once: true });
-  }, [startSeconds, timestampsUnavailable, source?.download_url]);
 
   if (missing) {
     return (
@@ -225,21 +214,21 @@ export default function SourceViewerPage() {
             </div>
           ) : null}
 
-          {source.source_type === "audio" && source.download_url ? (
+          {source.source_type === "audio" ? (
             <div className="p-5">
-              <audio
-                ref={audioRef}
-                controls
-                preload="metadata"
-                src={source.download_url}
-                className="w-full"
-              >
-                Your browser can&apos;t play this recording.
-              </audio>
-              <p className="mt-3 text-[12px] text-muted-foreground">
+              <p className="text-[12px] text-muted-foreground">
                 {timestampsUnavailable
-                  ? "This recording was transcribed without timings, so the player starts at the beginning."
-                  : `Starting at ${formatLocator(citation?.locator ?? null)} — the cited line is highlighted below.`}
+                  ? "This recording was transcribed without timings."
+                  : `From ${formatLocator(citation?.locator ?? null)} — the cited line is highlighted below.`}{" "}
+                {source.transcript_url ? (
+                  <>
+                    Read the{" "}
+                    <a href={source.transcript_url} target="_blank" rel="noreferrer" className="underline">
+                      full transcript
+                    </a>
+                    .
+                  </>
+                ) : null}
               </p>
             </div>
           ) : null}
