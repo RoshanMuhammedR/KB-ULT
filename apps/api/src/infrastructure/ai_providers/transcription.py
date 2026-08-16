@@ -195,4 +195,40 @@ class VoxtralTranscriptionProvider:
             return "This audio file is too large for the transcription service"
         if status == 429:
             return "The transcription service is rate limiting right now — retry in a minute"
+
+        # Everything else: pass the provider's own words through. This message becomes the
+        # job's `last_error` and is shown next to the retry button, so swallowing it sends
+        # the reader to check their recording when the fault is often configuration — a
+        # misconfigured model id here reported only "rejected this file (error 400)" while
+        # the body said `Model ... does not exist`.
+        detail = VoxtralTranscriptionProvider._error_detail(exc.response)
+        if detail:
+            return f"The transcription service rejected this file (error {status}): {detail}"
         return f"The transcription service rejected this file (error {status})"
+
+    @staticmethod
+    def _error_detail(response: httpx.Response) -> str:
+        """Best-effort extraction of a provider error string, across the shapes gateways use.
+
+        Never raises and never returns a wall of text: a truncated hint beats an unreadable
+        one, and this string is rendered in the UI.
+        """
+        try:
+            payload = response.json()
+        except Exception:  # noqa: BLE001 - a non-JSON body is common enough
+            payload = None
+
+        detail: object = None
+        if isinstance(payload, dict):
+            error = payload.get("error")
+            if isinstance(error, dict):
+                detail = error.get("message") or error.get("detail")
+            elif isinstance(error, str):
+                detail = error
+            if not detail:
+                detail = payload.get("message") or payload.get("detail")
+
+        text = str(detail).strip() if detail else (response.text or "").strip()
+        if not text:
+            return ""
+        return text if len(text) <= 300 else f"{text[:297]}…"

@@ -21,7 +21,13 @@ class Settings(BaseSettings):
     aicredits_embedding_model: str = "text-embedding-3-small"
     # Hosted speech-to-text for audio sources. Nothing runs locally — no ML runtime, no
     # weights in the image — so this is just another model id on the same gateway.
-    aicredits_transcription_model: str = "mistralai/voxtral-small-24b-2507"
+    #
+    # NOTE: the gateway's /audio/transcriptions route serves a much SMALLER model set than
+    # /v1/models advertises — that catalog is the chat catalog. `mistralai/voxtral-small-24b-2507`
+    # is listed there and works for chat, but the transcription route rejects it with
+    # `400 Model ... does not exist`, which is what every audio upload used to fail on.
+    # Verify a replacement against /audio/transcriptions itself, not against /v1/models.
+    aicredits_transcription_model: str = "openai/whisper-1"
     embedding_dimensions: int = 1536
 
     # Audio is transcribed by a paid hosted model, so it gets a size cap the other source
