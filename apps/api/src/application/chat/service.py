@@ -65,10 +65,15 @@ class ChatService:
     def ask_stream(self, conversation_id: UUID | None, question: str) -> Iterator[tuple[str, object]]:
         """Yield `("conversation", id)`, `("delta", str)`, `("citations", list)`, `("done", ids)`.
 
-        The user's message is persisted immediately, but the assistant's only after the
-        stream finishes. A failure mid-stream therefore persists nothing, which is exactly
-        what the client promises the user ("nothing was saved, so you can ask it again
-        as-is") — a half-written answer never survives a reload.
+        Neither message is persisted until the answer is complete: the question and the
+        answer are written together as one turn, at the end. That is what makes the client's
+        promise true — "nothing was saved, so you can ask it again as-is" — and it keeps a
+        failed attempt out of the conversation history entirely.
+
+        The alternative (persisting the question up front) is what this used to do, and it
+        was actively harmful: `append_message` commits immediately, so every failure left an
+        orphan question that `recent_messages` then fed into the *next* prompt. Retrying a
+        failed question made the prompt worse each time.
         """
         if self.conversation_repo is None:
             raise RuntimeError("ChatService was built without a conversation repository")
@@ -79,10 +84,6 @@ class ChatService:
 
         history = self.conversation_repo.recent_messages(conversation.id, _HISTORY_TURNS)
 
-        user_message = self.conversation_repo.append_message(
-            Message(conversation_id=conversation.id, role=MessageRole.USER, content=question)
-        )
-
         results = self._retrieve(question, knowledge_base.id, history=history)
         citations = build_citations(results)
 
@@ -91,7 +92,9 @@ class ChatService:
             logger.info("chat_insufficient_context", query=question, result_count=len(results))
             yield ("delta", answer)
             yield ("citations", citations)
-            assistant = self._persist_answer(conversation.id, answer, citations, insufficient=True)
+            user_message, assistant = self._persist_turn(
+                conversation.id, question, answer, citations, insufficient=True
+            )
             yield ("done", self._done(user_message, assistant, insufficient=True))
             return
 
@@ -110,7 +113,9 @@ class ChatService:
 
         logger.info("chat_llm_response", query=question, answer_length=len(answer))
         yield ("citations", citations)
-        assistant = self._persist_answer(conversation.id, answer, citations, insufficient=False)
+        user_message, assistant = self._persist_turn(
+            conversation.id, question, answer, citations, insufficient=False
+        )
         yield ("done", self._done(user_message, assistant, insufficient=False))
 
     # --- Internals ----------------------------------------------------------------
@@ -175,11 +180,24 @@ class ChatService:
             Conversation(knowledge_base_id=knowledge_base_id, title=title_from_question(question))
         )
 
-    def _persist_answer(
-        self, conversation_id: UUID, answer: str, citations: list[dict], insufficient: bool
-    ) -> Message:
+    def _persist_turn(
+        self,
+        conversation_id: UUID,
+        question: str,
+        answer: str,
+        citations: list[dict],
+        insufficient: bool,
+    ) -> tuple[Message, Message]:
+        """Write the question and its answer together, question first.
+
+        Called only once the answer is complete, so a failure anywhere upstream leaves the
+        thread untouched. Order matters: `created_at` is what the transcript is sorted by.
+        """
         assert self.conversation_repo is not None
-        return self.conversation_repo.append_message(
+        user_message = self.conversation_repo.append_message(
+            Message(conversation_id=conversation_id, role=MessageRole.USER, content=question)
+        )
+        assistant = self.conversation_repo.append_message(
             Message(
                 conversation_id=conversation_id,
                 role=MessageRole.ASSISTANT,
@@ -188,6 +206,7 @@ class ChatService:
                 insufficient_context=insufficient,
             )
         )
+        return user_message, assistant
 
     @staticmethod
     def _done(user_message: Message, assistant: Message, insufficient: bool) -> dict:

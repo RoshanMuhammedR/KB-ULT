@@ -262,11 +262,14 @@ export async function streamAnswer(
   const decoder = new TextDecoder();
   let buffer = "";
 
+  let finished = false;
   try {
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      buffer += decoder.decode(value, { stream: true });
+      // Normalise line endings first: SSE permits \r\n, and a proxy that rewrites them
+      // would otherwise stop the frame split below from ever matching.
+      buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
 
       // SSE frames are separated by a blank line; the last piece may be incomplete.
       const frames = buffer.split("\n\n");
@@ -276,7 +279,11 @@ export async function streamAnswer(
       }
     }
     if (buffer.trim()) dispatchFrame(buffer, handlers);
+    finished = true;
   } finally {
+    // An error frame throws out of the loop above, which leaves the body un-consumed;
+    // cancel it so the connection is released rather than left dangling.
+    if (!finished) await reader.cancel().catch(() => {});
     reader.releaseLock();
   }
 }

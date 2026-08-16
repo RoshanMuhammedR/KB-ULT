@@ -57,9 +57,22 @@ def set_tenant_context(tenant_id: uuid.UUID, user_id: uuid.UUID) -> tuple[Token,
 
 
 def reset_tenant_context(tokens: tuple[Token, Token]) -> None:
-    tenant_token, user_token = tokens
-    _current_tenant_id.reset(tenant_token)
-    _current_user_id.reset(user_token)
+    """Unbind current tenant/user, tolerating a token minted in a different Context.
+
+    A `Token` can only be reset in the exact `contextvars.Context` that produced it. Code
+    that binds and unbinds across a context boundary — most notably a sync generator driven
+    by Starlette's `iterate_in_threadpool`, which gives every `next()` a fresh
+    `copy_context()` — would otherwise raise "was created in a different Context" from a
+    `finally`, long after the caller can do anything about it.
+
+    Unsetting is the safe fallback: `None` is this module's "no tenant" state, so reads
+    afterwards fail closed rather than leaking across tenants.
+    """
+    for var, token in ((_current_tenant_id, tokens[0]), (_current_user_id, tokens[1])):
+        try:
+            var.reset(token)
+        except ValueError:
+            var.set(None)
 
 
 @contextmanager
@@ -74,4 +87,8 @@ def system_scope() -> Iterator[None]:
     try:
         yield
     finally:
-        _system_scope.reset(token)
+        # Same cross-Context caveat as reset_tenant_context; False is the closed state.
+        try:
+            _system_scope.reset(token)
+        except ValueError:
+            _system_scope.set(False)

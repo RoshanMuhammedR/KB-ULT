@@ -6,9 +6,23 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from langchain_openai import ChatOpenAI
 
 
+# The library default is 600s. A streaming answer holds an anyio worker thread and an open
+# database session for its whole duration, so a hung gateway is far more expensive here than
+# a request that gives up early: the user is watching a spinner either way.
+_REQUEST_TIMEOUT_SECONDS = 90.0
+_MAX_RETRIES = 1
+
+
 class OpenAICompatibleChatAdapter:
     def __init__(self, api_key: str, base_url: str, model: str) -> None:
-        self.client = ChatOpenAI(api_key=api_key, base_url=base_url, model=model, temperature=0)
+        self.client = ChatOpenAI(
+            api_key=api_key,
+            base_url=base_url,
+            model=model,
+            temperature=0,
+            timeout=_REQUEST_TIMEOUT_SECONDS,
+            max_retries=_MAX_RETRIES,
+        )
 
     def generate(self, messages: list[dict[str, str]]) -> str:
         response = self.client.invoke(self._convert(messages))

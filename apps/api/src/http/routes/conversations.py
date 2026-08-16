@@ -12,7 +12,6 @@ from sqlalchemy.orm import Session
 from src.composition import build_chat_service
 from src.core.config import Settings, get_settings
 from src.core.identity import Identity
-from src.core.tenant_context import reset_tenant_context, set_tenant_context
 from src.http.dependencies import get_current_identity
 from src.http.schemas.conversations import (
     AskRequest,
@@ -140,8 +139,23 @@ def ask_in_conversation(
     Deliberately does **not** take the request-scoped `get_db` session. A yield-dependency's
     lifetime and a streaming response body are exactly the case where the session can be
     closed out from under the generator, so the generator opens its own `session_scope()`
-    instead — the same pattern the ingestion worker uses — and rebinds the tenant context
-    inside the thread Starlette runs it on.
+    instead — the same pattern the ingestion worker uses.
+
+    The generator must **not** bind the tenant context itself. Starlette drives a sync
+    streaming generator through `iterate_in_threadpool`, which runs every `next()` in a
+    fresh `copy_context()`. A token taken on the first frame therefore cannot be reset on
+    the last — `ContextVar.reset` raises "was created in a different Context", out of a
+    `finally` that no `except` here can catch, after the body has already gone out on the
+    wire. The connection then dies without its terminating chunk and the browser reports a
+    network error for an answer that actually succeeded.
+
+    It does not need to bind anything: `TenantContextMiddleware` has already bound
+    tenant/user in the enclosing context, and each frame's `copy_context()` carries that
+    binding in. Reads inside the generator resolve correctly on every frame.
+
+    `identity` is therefore unused in the body, but it is not dead: it keeps this route's
+    authentication assertion at the route itself rather than relying solely on the
+    middleware's exempt-path list. Leave it.
     """
     question = request.question.strip()
     if not question:
@@ -155,35 +169,29 @@ def ask_in_conversation(
         except ValueError as exc:
             raise HTTPException(status_code=404, detail="Conversation not found") from exc
 
-    tenant_id = identity.tenant_id
-    user_id = identity.user_id
-
     def events() -> Iterator[str]:
-        token = set_tenant_context(tenant_id, user_id)
-        try:
-            with session_scope() as db:
-                chat_service = build_chat_service(db, settings)
-                try:
-                    for event, payload in chat_service.ask_stream(target, question):
-                        yield _frame(event, payload)
-                except ValueError as exc:
-                    # A bad conversation id — the only client-caused failure down here.
-                    yield _frame("error", {"message": str(exc)})
-                except Exception as exc:  # noqa: BLE001 - the stream is the only channel left
-                    # Headers are long gone by now, so an error can only be delivered as an
-                    # event. Nothing was persisted, which is what the client tells the user.
-                    logger.exception("chat_stream_failed", error=str(exc))
-                    yield _frame(
-                        "error",
-                        {
-                            "message": (
-                                "The answer stopped partway through. Nothing was saved, so "
-                                "you can ask it again as-is."
-                            )
-                        },
-                    )
-        finally:
-            reset_tenant_context(token)
+        with session_scope() as db:
+            chat_service = build_chat_service(db, settings)
+            try:
+                for event, payload in chat_service.ask_stream(target, question):
+                    yield _frame(event, payload)
+            except ValueError as exc:
+                # A bad conversation id — the only client-caused failure down here.
+                yield _frame("error", {"message": str(exc)})
+            except Exception as exc:  # noqa: BLE001 - the stream is the only channel left
+                # Headers are long gone by now, so an error can only be delivered as an
+                # event. The turn is persisted only once the answer is complete, so a
+                # failure here really does leave nothing behind — which is what we promise.
+                logger.exception("chat_stream_failed", error=str(exc))
+                yield _frame(
+                    "error",
+                    {
+                        "message": (
+                            "The answer stopped partway through. Nothing was saved, so "
+                            "you can ask it again as-is."
+                        )
+                    },
+                )
 
     return StreamingResponse(events(), media_type="text/event-stream", headers=_SSE_HEADERS)
 
