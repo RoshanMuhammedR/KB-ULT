@@ -5,8 +5,8 @@ import { usePathname } from "next/navigation";
 import { useState, type ReactNode } from "react";
 import { Library, Menu, MessagesSquare, Moon, Sun, UserRound, X } from "lucide-react";
 import { Logo, Pill, cn, useTheme } from "@kb/ui";
-import { useAuth } from "@/lib/auth-context";
-import { useSources } from "@/lib/sources-context";
+import { useAuthStore } from "@/stores/auth-store";
+import { useSourcesStore } from "@/stores/sources-store";
 
 const links = [
   { href: "/", label: "Ask", icon: MessagesSquare, exact: true },
@@ -18,8 +18,10 @@ export function AppShell({ children }: { children: ReactNode }) {
   const { theme, toggle } = useTheme();
   const [open, setOpen] = useState(false);
   const pathname = usePathname();
-  const { counts } = useSources();
-  const { session } = useAuth();
+  // A number, not the counts object: an ingestion poll tick that doesn't move this figure
+  // now leaves the whole shell — and everything it wraps — untouched.
+  const processing = useSourcesStore((state) => state.counts.processing);
+  const email = useAuthStore((state) => state.session?.email ?? null);
   const dark = theme === "dark";
 
   const nav = (
@@ -44,9 +46,9 @@ export function AppShell({ children }: { children: ReactNode }) {
           >
             <link.icon className="size-4" strokeWidth={1.75} aria-hidden />
             {link.label}
-            {link.label === "Library" && counts.processing > 0 ? (
+            {link.label === "Library" && processing > 0 ? (
               <Pill tone="primary" className="ml-auto">
-                {counts.processing} working
+                {processing} working
               </Pill>
             ) : null}
           </Link>
@@ -87,10 +89,10 @@ export function AppShell({ children }: { children: ReactNode }) {
             {dark ? <Sun className="size-4" aria-hidden /> : <Moon className="size-4" aria-hidden />}
             {dark ? "Light appearance" : "Dark appearance"}
           </button>
-          {session?.email ? (
+          {email ? (
             <div className="rounded-md border border-border bg-card p-3">
-              <p className="truncate text-[13px] font-semibold" title={session.email}>
-                {session.email}
+              <p className="truncate text-[13px] font-semibold" title={email}>
+                {email}
               </p>
             </div>
           ) : null}

@@ -61,6 +61,10 @@ async function tryRefresh(): Promise<boolean> {
 const LOGIN_PATH = "/app/login";
 
 function redirectToLogin(): void {
+  // Clear here rather than only in tryRefresh: that one returns early without clearing when
+  // there is no refresh token, which used to bounce to /login leaving a dead cookie behind.
+  // Clearing also notifies listeners, so in-flight pollers stop before the navigation.
+  clearSession();
   if (typeof window !== "undefined" && window.location.pathname !== LOGIN_PATH) {
     window.location.assign(LOGIN_PATH);
   }

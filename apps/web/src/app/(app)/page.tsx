@@ -9,7 +9,7 @@ import {
   NewConversationEmpty,
   Thread
 } from "@/components/saga/chat";
-import { useConversations } from "@/lib/conversations-context";
+import { useConversationsStore } from "@/stores/conversations-store";
 import { useAsk } from "@/lib/use-ask";
 
 /**
@@ -19,7 +19,7 @@ import { useAsk } from "@/lib/use-ask";
  */
 export default function AskPage() {
   const router = useRouter();
-  const { refresh } = useConversations();
+  const refresh = useConversationsStore((state) => state.refresh);
 
   const onCreated = useCallback(
     (created: { id: string }) => {

@@ -30,8 +30,8 @@ import { AppHeader } from "@/components/saga/app-shell";
 import { ActivityTimeline } from "@/components/saga/activity-timeline";
 import type { AssetCitation, JobEvent, KnowledgeAsset } from "@/types/api";
 import * as api from "@/lib/api";
-import { useSources } from "@/lib/sources-context";
-import { useToast } from "@/lib/toast";
+import { useSourcesStore } from "@/stores/sources-store";
+import { toast } from "@/stores/toast-store";
 
 // Metadata keys that are plumbing, not information a reader wants.
 // The parsed source itself is no longer in here to hide: it moved to its own server-side
@@ -49,8 +49,11 @@ const HIDDEN_METADATA = new Set([
 export default function SourceDetailPage() {
   const { sourceId } = useParams<{ sourceId: string }>();
   const router = useRouter();
-  const toast = useToast();
-  const { sources, track, remove } = useSources();
+  // The array *element*, not a derived object: its identity only changes when this specific
+  // asset is upserted, so churn elsewhere in the library doesn't re-render this page.
+  const live = useSourcesStore((state) => state.sources.find((item) => item.id === sourceId));
+  const track = useSourcesStore((state) => state.track);
+  const remove = useSourcesStore((state) => state.remove);
 
   const [source, setSource] = useState<KnowledgeAsset | null>(null);
   const [events, setEvents] = useState<JobEvent[]>([]);
@@ -80,8 +83,8 @@ export default function SourceDetailPage() {
     void load();
   }, [load]);
 
-  // While it's still being prepared, mirror the shared poller's view of it.
-  const live = sources.find((item) => item.id === sourceId);
+  // While it's still being prepared, mirror the shared poller's view of it (`live` is
+  // selected from the store above).
   useEffect(() => {
     if (live) setSource(live);
   }, [live]);

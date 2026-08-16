@@ -161,7 +161,6 @@ export function useAsk({
 
   return {
     conversation,
-    setConversation,
     streamingId,
     error,
     ask,

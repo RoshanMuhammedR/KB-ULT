@@ -1,9 +1,6 @@
-"use client";
-
+import { AppData } from "@/components/saga/app-data";
 import { AppShell } from "@/components/saga/app-shell";
-import { RequireAuth } from "@/lib/auth-context";
-import { ConversationsProvider } from "@/lib/conversations-context";
-import { SourcesProvider } from "@/lib/sources-context";
+import { RequireAuth } from "@/components/saga/require-auth";
 
 /**
  * Everything behind the sign-in wall. /login and /register sit outside this group, so they
@@ -12,11 +9,8 @@ import { SourcesProvider } from "@/lib/sources-context";
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   return (
     <RequireAuth>
-      <SourcesProvider>
-        <ConversationsProvider>
-          <AppShell>{children}</AppShell>
-        </ConversationsProvider>
-      </SourcesProvider>
+      <AppData />
+      <AppShell>{children}</AppShell>
     </RequireAuth>
   );
 }

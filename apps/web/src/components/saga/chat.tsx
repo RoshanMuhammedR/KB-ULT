@@ -27,20 +27,22 @@ import {
   cn
 } from "@kb/ui";
 import type { Citation, Conversation, ConversationSummary, Message } from "@/types/api";
-import { useConversations } from "@/lib/conversations-context";
-import { useSources } from "@/lib/sources-context";
-import { useToast } from "@/lib/toast";
+import { useConversationsStore } from "@/stores/conversations-store";
+import { useSourcesStore } from "@/stores/sources-store";
+import { toast } from "@/stores/toast-store";
 
 /* ----------------------------- Conversation list ---------------------------- */
 
 export function ConversationList({ activeId }: { activeId?: string }) {
-  const { conversations, loading, rename, remove } = useConversations();
+  const conversations = useConversationsStore((state) => state.conversations);
+  const loading = useConversationsStore((state) => state.loading);
+  const rename = useConversationsStore((state) => state.rename);
+  const remove = useConversationsStore((state) => state.remove);
   const [query, setQuery] = useState("");
   const [renaming, setRenaming] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [pendingDelete, setPendingDelete] = useState<ConversationSummary | null>(null);
   const [deleting, setDeleting] = useState(false);
-  const toast = useToast();
 
   const needle = query.trim().toLowerCase();
   const filtered = conversations.filter(
@@ -222,8 +224,8 @@ export function Composer({
   hint?: string;
 }) {
   const [value, setValue] = useState("");
-  const { counts } = useSources();
-  const { ready, processing } = counts;
+  const ready = useSourcesStore((state) => state.counts.ready);
+  const processing = useSourcesStore((state) => state.counts.processing);
 
   return (
     <div className="border-t border-border bg-background p-4 md:px-8 md:py-5">
@@ -454,8 +456,12 @@ export function CitationCard({
   messageId: string;
   conversationId?: string;
 }) {
-  const { sources } = useSources();
-  const source = sources.find((item) => item.id === citation.asset_id);
+  // Selecting the title string rather than the sources array matters here: there is one of
+  // these per citation per message, and subscribing to the array would re-render every one
+  // of them on every ingestion poll tick for an unrelated upload.
+  const sourceTitle = useSourcesStore(
+    (state) => state.sources.find((item) => item.id === citation.asset_id)?.title
+  );
   // `conv` lets the viewer fetch exactly one thread instead of scanning them all for the
   // message the reader came from.
   const query = new URLSearchParams({
@@ -473,7 +479,7 @@ export function CitationCard({
       <span className="min-w-0 flex-1">
         <span className="flex flex-wrap items-center gap-2">
           <span className="max-w-full truncate text-[13px] font-semibold">
-            {source?.title ?? citation.filename}
+            {sourceTitle ?? citation.filename}
           </span>
           <Pill>{formatLocator(citation.locator)}</Pill>
           <span
@@ -527,9 +533,9 @@ const SUGGESTIONS = [
 ];
 
 export function NewConversationEmpty({ onPick }: { onPick: (question: string) => void }) {
-  const { counts } = useSources();
+  const ready = useSourcesStore((state) => state.counts.ready);
 
-  if (counts.ready === 0) {
+  if (ready === 0) {
     return (
       <EmptyState
         icon={MoreHorizontal}
@@ -551,7 +557,7 @@ export function NewConversationEmpty({ onPick }: { onPick: (question: string) =>
     <div className="mx-auto max-w-2xl px-5 py-16 text-center md:py-24">
       <h2 className="text-display-lg">Ask your library.</h2>
       <p className="mx-auto mt-3 max-w-lg text-[15px] text-muted-foreground">
-        {counts.ready} {counts.ready === 1 ? "source is" : "sources are"} ready. Every answer comes
+        {ready} {ready === 1 ? "source is" : "sources are"} ready. Every answer comes
         back with the passages behind it, and you can open any of them at the exact page or
         timestamp.
       </p>

@@ -9,8 +9,8 @@ import { AddSourceDialog } from "@/components/saga/add-source-dialog";
 import { SourceRow } from "@/components/saga/source-row";
 import type { KnowledgeAsset } from "@/types/api";
 import * as api from "@/lib/api";
-import { useSources } from "@/lib/sources-context";
-import { useToast } from "@/lib/toast";
+import { useSourcesStore } from "@/stores/sources-store";
+import { toast } from "@/stores/toast-store";
 
 const TYPE_FILTERS: (SourceType | "all")[] = ["all", "pdf", "youtube", "markdown", "pptx", "audio"];
 const STATUS_FILTERS: { key: "all" | "ready" | "working" | "failed"; label: string }[] = [
@@ -21,8 +21,12 @@ const STATUS_FILTERS: { key: "all" | "ready" | "working" | "failed"; label: stri
 ];
 
 export default function LibraryPage() {
-  const { sources, loading, counts, track, upsert, remove } = useSources();
-  const toast = useToast();
+  const sources = useSourcesStore((state) => state.sources);
+  const loading = useSourcesStore((state) => state.loading);
+  const counts = useSourcesStore((state) => state.counts);
+  const track = useSourcesStore((state) => state.track);
+  const upsert = useSourcesStore((state) => state.upsert);
+  const remove = useSourcesStore((state) => state.remove);
   const [query, setQuery] = useState("");
   const [type, setType] = useState<SourceType | "all">("all");
   const [status, setStatus] = useState<"all" | "ready" | "working" | "failed">("all");

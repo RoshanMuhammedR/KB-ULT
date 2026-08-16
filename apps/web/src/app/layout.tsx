@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import { Inter_Tight, JetBrains_Mono } from "next/font/google";
 import { THEME_SCRIPT } from "@kb/ui";
 import "./globals.css";
-import { AuthProvider } from "@/lib/auth-context";
-import { ToastProvider } from "@/lib/toast";
+import { StoreBootstrap } from "@/components/saga/store-bootstrap";
+import { Toaster } from "@/components/saga/toaster";
 
 // Fed into --font-sans / --font-mono by packages/ui/src/theme.css, which reads these
 // variables rather than naming the families itself.
@@ -23,9 +23,10 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
       </head>
       <body>
-        <AuthProvider>
-          <ToastProvider>{children}</ToastProvider>
-        </AuthProvider>
+        {/* Hydrates the stores from the session cookie, in an effect — never during render. */}
+        <StoreBootstrap />
+        {children}
+        <Toaster />
       </body>
     </html>
   );

@@ -1,14 +1,17 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { Button, Label, Panel } from "@kb/ui";
 import { AppHeader } from "@/components/saga/app-shell";
-import { useAuth } from "@/lib/auth-context";
-import { useSources } from "@/lib/sources-context";
+import { useAuthStore } from "@/stores/auth-store";
+import { useSourcesStore } from "@/stores/sources-store";
 
 export default function AccountPage() {
-  const { session, logout } = useAuth();
-  const { counts } = useSources();
+  const email = useAuthStore((state) => state.session?.email ?? null);
+  const logout = useAuthStore((state) => state.logout);
+  const router = useRouter();
+  const counts = useSourcesStore((state) => state.counts);
   const [signingOut, setSigningOut] = useState(false);
 
   return (
@@ -18,7 +21,7 @@ export default function AccountPage() {
       <div className="grid max-w-3xl gap-6 px-5 py-6 md:px-8">
         <Panel className="p-5">
           <Label>Signed in as</Label>
-          <p className="mt-2 text-[15px] font-semibold">{session?.email ?? "—"}</p>
+          <p className="mt-2 text-[15px] font-semibold">{email ?? "—"}</p>
           <p className="mt-1 text-[13px] text-muted-foreground">
             Email and password, or Google. There are no plans to pick and nothing to configure.
           </p>
@@ -47,7 +50,9 @@ export default function AccountPage() {
             disabled={signingOut}
             onClick={() => {
               setSigningOut(true);
-              void logout();
+              // RequireAuth would bounce us anyway once status flips to "anon"; navigating
+              // here just says so out loud rather than relying on a side effect.
+              void logout().then(() => router.replace("/login"));
             }}
           >
             {signingOut ? "Signing out…" : "Sign out"}

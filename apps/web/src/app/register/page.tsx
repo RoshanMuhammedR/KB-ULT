@@ -6,13 +6,15 @@ import { useRouter } from "next/navigation";
 import { Button, Field, Input } from "@kb/ui";
 import { AuthShell } from "@/components/saga/auth-shell";
 import { GoogleButton } from "@/components/saga/google-button";
-import { useAuth } from "@/lib/auth-context";
+import { useAuthStore } from "@/stores/auth-store";
 import { ApiError } from "@/lib/api";
 
 const MIN_PASSWORD_LENGTH = 8;
 
 export default function RegisterPage() {
-  const { status, register, loginWithGoogle } = useAuth();
+  const status = useAuthStore((state) => state.status);
+  const register = useAuthStore((state) => state.register);
+  const loginWithGoogle = useAuthStore((state) => state.loginWithGoogle);
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");

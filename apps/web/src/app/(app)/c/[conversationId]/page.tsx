@@ -7,16 +7,17 @@ import { Button, ConfirmDialog, Input, Skeleton } from "@kb/ui";
 import { ChatError, Composer, ConversationList, Thread } from "@/components/saga/chat";
 import type { Conversation } from "@/types/api";
 import * as api from "@/lib/api";
-import { useConversations } from "@/lib/conversations-context";
+import { useConversationsStore } from "@/stores/conversations-store";
 import { useAsk } from "@/lib/use-ask";
-import { useToast } from "@/lib/toast";
+import { toast } from "@/stores/toast-store";
 import { useRouter } from "next/navigation";
 
 export default function ConversationPage() {
   const { conversationId } = useParams<{ conversationId: string }>();
   const router = useRouter();
-  const toast = useToast();
-  const { refresh, rename, remove } = useConversations();
+  const refresh = useConversationsStore((state) => state.refresh);
+  const rename = useConversationsStore((state) => state.rename);
+  const remove = useConversationsStore((state) => state.remove);
 
   const [loaded, setLoaded] = useState<Conversation | null>(null);
   const [missing, setMissing] = useState(false);
@@ -49,7 +50,7 @@ export default function ConversationPage() {
     (messageId: string) => {
       void removeMessage(messageId).catch(() => toast.error("Couldn't delete that message."));
     },
-    [removeMessage, toast]
+    [removeMessage]
   );
 
   async function commitRename() {

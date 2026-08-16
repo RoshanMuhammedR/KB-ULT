@@ -16,11 +16,36 @@ function writeCookie(value: string, maxAgeSeconds: number | null): void {
   document.cookie = cookie;
 }
 
+type SessionListener = (session: Session | null) => void;
+
+const listeners = new Set<SessionListener>();
+
+/**
+ * Watch the session for changes. The cookie is the source of truth, so this is how React
+ * finds out about writes it did not initiate — most importantly the silent token refresh in
+ * `api.tryRefresh`, which no component calls and no component could otherwise observe.
+ *
+ * Deliberately lives here rather than in a store: this module imports nothing, so anything
+ * may depend on it without risking an import cycle.
+ */
+export function subscribeToSession(listener: SessionListener): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+function notify(session: Session | null): void {
+  // Copy first — a listener that unsubscribes itself would mutate the set mid-iteration.
+  for (const listener of [...listeners]) listener(session);
+}
+
 export function saveSession(s: Session): void {
   if (typeof document === "undefined") return;
   const encoded = encodeURIComponent(JSON.stringify(s));
   // Persistent cookie when "remember me"; otherwise a session cookie (no Max-Age).
   writeCookie(encoded, s.remember ? REMEMBER_MAX_AGE : null);
+  notify(s);
 }
 
 export function getSession(): Session | null {
@@ -41,6 +66,7 @@ export function getSession(): Session | null {
 export function clearSession(): void {
   if (typeof document === "undefined") return;
   writeCookie("", 0);
+  notify(null);
 }
 
 export function getAccessToken(): string | null {
