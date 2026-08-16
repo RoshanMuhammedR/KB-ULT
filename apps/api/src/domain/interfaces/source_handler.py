@@ -28,7 +28,12 @@ class ISourceHandler(Protocol):
     def parse(self, asset: KnowledgeAsset, raw: RawContent) -> KnowledgeAsset:
         """Normalize raw content into an extracted `KnowledgeAsset`.
 
-        Populates `text_content` and `metadata["segments"]` (each segment carries a
-        typed `locator`, e.g. a page number for PDF), leaving downstream chunking and
-        embedding source-agnostic.
+        Populates `text_content` and `documents`: one LangChain `Document` per natural
+        unit of the source (a page, a slide, a heading section, a transcript window), each
+        carrying a typed `metadata["locator"]` — e.g. `{"type": "page", "value": 3}`.
+
+        Deciding *where the citable boundaries are* is the handler's job, because only it
+        knows what they mean for its format. Deciding *how big each piece may be* is the
+        chunker's, and is identical for every source — which is what leaves downstream
+        chunking and embedding source-agnostic.
         """

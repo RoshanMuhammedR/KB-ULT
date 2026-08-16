@@ -34,8 +34,9 @@ import { useSources } from "@/lib/sources-context";
 import { useToast } from "@/lib/toast";
 
 // Metadata keys that are plumbing, not information a reader wants.
+// The parsed source itself is no longer in here to hide: it moved to its own server-side
+// column, so the whole text of every document stopped being shipped on each status poll.
 const HIDDEN_METADATA = new Set([
-  "segments",
   "transcript_key",
   "source_type",
   "filename",

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from langchain_core.documents import Document
+
 from src.core.text import sanitize_text_for_storage
 from src.domain.entities import AssetStatus, KnowledgeAsset, RawContent
 from src.domain.interfaces import IFileStorage
@@ -14,10 +16,11 @@ class PdfSourceHandler:
     is fetched here at process time (this is also what makes a failed extraction
     retryable without a re-upload).
 
-    `parse` runs the PDF loader and emits the source-neutral **segment** structure
-    (`metadata["segments"]`, each with a typed `locator`) that the chunker consumes.
-    For PDF the locator is the page number; a future YouTube handler would emit a
-    timestamp locator with no change to chunking, embedding, or chat.
+    `parse` runs the PDF loader and emits one `Document` per page, each carrying a typed
+    `metadata["locator"]` that the chunker copies onto every chunk it produces. For PDF
+    the locator is the page number; the YouTube and audio handlers emit timestamp
+    locators from the same field, so chunking, embedding, and chat never special-case a
+    source.
     """
 
     def __init__(self, loader: PyMuPDF4LLMAdapter, file_storage: IFileStorage) -> None:
@@ -33,14 +36,17 @@ class PdfSourceHandler:
         file_data = raw.data if isinstance(raw.data, bytes) else raw.data.encode("utf-8")
         parsed = self.loader.load(file_data, asset.filename)
 
-        # Turn the loader's page list into generic segments: {text, locator{type,value}}.
-        segments = []
+        # Turn the loader's page list into one Document per page, each located by page number.
+        documents = []
         text_parts = []
         for page in parsed["pages"]:
-            # Clean extracted text before it reaches metadata, chunks, embeddings, or PostgreSQL.
+            # Clean extracted text before it reaches chunks, embeddings, or PostgreSQL.
             page_text = sanitize_text_for_storage(page["text"]).strip()
-            segments.append(
-                {"text": page_text, "locator": {"type": "page", "value": page.get("page_number")}}
+            documents.append(
+                Document(
+                    page_content=page_text,
+                    metadata={"locator": {"type": "page", "value": page.get("page_number")}},
+                )
             )
             text_parts.append(page_text)
 
@@ -58,13 +64,13 @@ class PdfSourceHandler:
             storage_key=asset.storage_key,
             status=AssetStatus.EXTRACTING,
             text_content=markdown or "\n\n".join(text_parts),
+            documents=documents,
             metadata={
                 "filename": asset.filename,
                 "title": title,
                 "source_type": asset.source_type,
                 "format": "markdown",
                 "content_type": raw.mime or asset.metadata.get("content_type"),
-                "segments": segments,
                 "parser": parsed["metadata"],
             },
         )

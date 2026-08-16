@@ -29,7 +29,7 @@ class PyMuPDF4LLMAdapter:
         document = pymupdf.open(stream=file_data, filetype="pdf")
         try:
             # page_chunks=True gives one dict per page instead of one flat string, which is
-            # what the rest of the ingestion pipeline (segments -> chunks -> embeddings) wants.
+            # what the rest of the ingestion pipeline (documents -> chunks -> embeddings) wants.
             page_chunks = pymupdf4llm.to_markdown(document, page_chunks=True)
             pages = self._extract_pages(page_chunks)
             markdown = "\n\n".join(page["text"] for page in pages)

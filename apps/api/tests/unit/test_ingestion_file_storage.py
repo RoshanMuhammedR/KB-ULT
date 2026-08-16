@@ -6,6 +6,8 @@ from uuid import UUID, uuid4
 
 sys.modules.setdefault("structlog", SimpleNamespace(get_logger=lambda *_: Mock()))
 
+from langchain_core.documents import Document
+
 from src.application.ingestion.service import IngestionService
 from src.core.tenant_context import reset_tenant_context, set_tenant_context
 from src.domain.entities import (
@@ -50,7 +52,7 @@ def _build_service(**overrides):
     chunk_repo = Mock()
     chunk_repo.replace_for_asset.side_effect = lambda _, chunks: chunks
 
-    # The source handler owns acquire (download) + parse (extract -> segments).
+    # The source handler owns acquire (download) + parse (extract -> documents).
     handler = Mock()
     handler.acquire.return_value = RawContent(data=b"pdf", mime="application/pdf")
     handler.parse.side_effect = lambda asset, raw: KnowledgeAsset(
@@ -62,7 +64,7 @@ def _build_service(**overrides):
         source_type="pdf",
         storage_key=asset.storage_key,
         status=AssetStatus.EXTRACTING,
-        metadata={"segments": [{"text": "hello", "locator": {"type": "page", "value": 1}}]},
+        documents=[Document(page_content="hello", metadata={"locator": {"type": "page", "value": 1}})],
     )
     source_handler_registry = Mock()
     source_handler_registry.get.return_value = handler

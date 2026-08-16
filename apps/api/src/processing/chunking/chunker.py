@@ -9,22 +9,22 @@ class RecursiveKnowledgeAssetChunker:
         self.splitter = splitter
 
     def chunk(self, asset: KnowledgeAsset) -> list[Chunk]:
-        # Handlers normalize every source into `segments` (text + a typed locator), so
-        # chunking is source-agnostic: it never knows or cares whether a locator is a
-        # page number or a timestamp.
-        segments = asset.metadata.get("segments", [])
-        split_chunks = self.splitter.split_segments(segments)
+        # Handlers normalize every source into `Document`s (text + a typed locator in
+        # metadata), so chunking is source-agnostic: it never knows or cares whether a
+        # locator is a page number or a timestamp. The splitter carries each document's
+        # metadata onto every piece it produces, which is what keeps a chunk citable.
+        split_documents = self.splitter.split(asset.documents)
         chunks: list[Chunk] = []
-        for index, split in enumerate(split_chunks):
+        for index, document in enumerate(split_documents):
             chunks.append(
                 Chunk(
                     knowledge_asset_id=asset.id,
                     chunk_index=index,
-                    text=split["text"],
+                    text=document.page_content,
                     metadata={
                         "filename": asset.filename,
                         "title": asset.title,
-                        "locator": split.get("locator"),
+                        "locator": document.metadata.get("locator"),
                         "source_type": asset.source_type,
                         "knowledge_base_id": str(asset.knowledge_base_id),
                         "knowledge_asset_id": str(asset.id),

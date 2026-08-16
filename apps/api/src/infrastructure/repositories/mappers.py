@@ -1,3 +1,5 @@
+from langchain_core.documents import Document
+
 from src.domain.entities import (
     AssetStatus,
     Chunk,
@@ -77,6 +79,38 @@ def kb_to_domain(model: KnowledgeBaseModel) -> KnowledgeBase:
     )
 
 
+def documents_to_storage(documents: list[Document]) -> list[dict]:
+    """`Document` -> plain JSON for the `documents` JSONB column.
+
+    Explicit because `sanitize_json_for_storage` only strips NUL bytes: it returns any
+    object it doesn't recognise by identity, so an un-dumped `Document` would sail through
+    it and only fail later, inside `json.dumps` at commit time.
+    """
+    return [document.model_dump() for document in documents]
+
+
+def documents_to_domain(rows: list[dict] | None) -> list[Document]:
+    """The inverse, applied on every read.
+
+    Doing this here rather than in the caller is what makes the two ingestion paths agree:
+    a fresh run chunks the objects the handler just built, while a retry resuming at the
+    chunking step re-loads them from JSONB. Both must yield `Document`s.
+
+    Rows written before the `documents` column existed decode to `[]`, which the pipeline
+    reads as "re-extract".
+    """
+    documents: list[Document] = []
+    for row in rows or []:
+        if isinstance(row, dict) and row.get("page_content") is not None:
+            documents.append(
+                Document(
+                    page_content=row["page_content"],
+                    metadata=row.get("metadata") or {},
+                )
+            )
+    return documents
+
+
 def asset_to_domain(model: KnowledgeAssetModel) -> KnowledgeAsset:
     return KnowledgeAsset(
         id=model.id,
@@ -92,6 +126,7 @@ def asset_to_domain(model: KnowledgeAssetModel) -> KnowledgeAsset:
         error_message=model.error_message,
         text_content=model.text_content,
         metadata=model.metadata_ or {},
+        documents=documents_to_domain(model.documents),
         superseded_at=model.superseded_at,
         created_at=model.created_at,
         updated_at=model.updated_at,

@@ -52,7 +52,7 @@ class MarkdownSourceHandlerTest(TestCase):
 
         self.assertEqual(parsed.status, AssetStatus.EXTRACTING)
         self.assertEqual(parsed.title, "Field notes")
-        locators = [segment["locator"] for segment in parsed.metadata["segments"]]
+        locators = [document.metadata["locator"] for document in parsed.documents]
         self.assertEqual(
             locators,
             [
@@ -60,7 +60,7 @@ class MarkdownSourceHandlerTest(TestCase):
                 {"type": "section", "value": "Method"},
             ],
         )
-        self.assertIn("We measured twice.", parsed.metadata["segments"][1]["text"])
+        self.assertIn("We measured twice.", parsed.documents[1].page_content)
 
     def test_text_before_the_first_heading_becomes_an_introduction(self) -> None:
         handler, _ = _handler("Stray preamble text.\n\n# Later heading\n\nBody.\n")
@@ -68,9 +68,11 @@ class MarkdownSourceHandlerTest(TestCase):
 
         parsed = handler.parse(asset, handler.acquire(asset))
 
-        first = parsed.metadata["segments"][0]
-        self.assertEqual(first["locator"], {"type": "section", "value": "Introduction"})
-        self.assertIn("Stray preamble", first["text"])
+        first = parsed.documents[0]
+        self.assertEqual(
+            first.metadata["locator"], {"type": "section", "value": "Introduction"}
+        )
+        self.assertIn("Stray preamble", first.page_content)
         # The title still comes from the first real heading, not the preamble.
         self.assertEqual(parsed.title, "Later heading")
 

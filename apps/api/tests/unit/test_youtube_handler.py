@@ -2,6 +2,7 @@ from unittest import TestCase
 from unittest.mock import patch
 from uuid import uuid4
 
+from langchain_core.documents import Document
 from youtube_transcript_api import (
     NoTranscriptFound,
     RequestBlocked,
@@ -65,8 +66,8 @@ class YouTubeSourceHandlerTest(TestCase):
         with self.assertRaises(ValueError):
             handler.acquire(_asset())
 
-    def test_parse_builds_timestamp_locator_segments(self) -> None:
-        # Two short lines under the coalesce target collapse into one segment whose
+    def test_parse_builds_timestamp_locator_documents(self) -> None:
+        # Two short lines under the coalesce target collapse into one document whose
         # locator is the first line's start time (whole seconds).
         transcript = [
             {"text": "first line", "start": 12.4, "duration": 2.0},
@@ -86,12 +87,17 @@ class YouTubeSourceHandlerTest(TestCase):
         self.assertEqual(parsed.metadata["format"], "transcript")
         self.assertEqual(parsed.metadata["video_id"], "dQw4w9WgXcQ")
         self.assertEqual(
-            parsed.metadata["segments"],
-            [{"text": "first line second line", "locator": {"type": "timestamp", "value": 12}}],
+            parsed.documents,
+            [
+                Document(
+                    page_content="first line second line",
+                    metadata={"locator": {"type": "timestamp", "value": 12}},
+                )
+            ],
         )
 
     def test_parse_splits_into_windows_past_char_target(self) -> None:
-        # Long lines exceed the coalesce target, so each becomes its own segment with
+        # Long lines exceed the coalesce target, so each becomes its own document with
         # its own start timestamp.
         long_a = "a" * 400
         long_b = "b" * 400
@@ -106,7 +112,7 @@ class YouTubeSourceHandlerTest(TestCase):
         asset = _asset()
         parsed = handler.parse(asset, handler.acquire(asset))
 
-        locators = [seg["locator"]["value"] for seg in parsed.metadata["segments"]]
+        locators = [doc.metadata["locator"]["value"] for doc in parsed.documents]
         self.assertEqual(locators, [0, 60])
 
     def test_acquire_passes_through_the_user_facing_message(self) -> None:

@@ -6,7 +6,7 @@ from typing import Any, Callable
 
 from src.core.text import sanitize_text_for_storage
 from src.domain.entities import AssetStatus, KnowledgeAsset, RawContent
-from src.ingestion.handlers._segments import coalesce_timed_lines
+from src.ingestion.handlers._documents import coalesce_timed_lines
 
 # Callable seams so tests can stub network I/O and the exact youtube-transcript-api call
 # (its surface shifted between 0.6.x and 1.x) lives in one place.
@@ -156,9 +156,9 @@ class YouTubeSourceHandler:
     The first URL-based source: there is no uploaded file, so `acquire` fetches the
     transcript live from the video id (re-fetching on retry is idempotent and cheap, so
     nothing is snapshotted to object storage). `parse` turns transcript lines into the
-    same source-neutral `segments` the PDF handler emits — the only difference is a
-    `timestamp` locator instead of a `page` one, so chunking, embedding, and chat need
-    no YouTube-specific code.
+    same `Document`s the PDF handler emits — the only difference is a `timestamp` locator
+    instead of a `page` one, so chunking, embedding, and chat need no YouTube-specific
+    code.
     """
 
     def __init__(
@@ -196,8 +196,10 @@ class YouTubeSourceHandler:
         payload = json.loads(data)
         transcript: list[dict] = payload["transcript"]
 
-        segments = coalesce_timed_lines(transcript)
-        full_text = sanitize_text_for_storage("\n".join(seg["text"] for seg in segments)).strip()
+        documents = coalesce_timed_lines(transcript)
+        full_text = sanitize_text_for_storage(
+            "\n".join(document.page_content for document in documents)
+        ).strip()
         title = sanitize_text_for_storage(payload.get("title") or asset.filename)
 
         return KnowledgeAsset(
@@ -211,6 +213,7 @@ class YouTubeSourceHandler:
             storage_key=asset.storage_key,
             status=AssetStatus.EXTRACTING,
             text_content=full_text,
+            documents=documents,
             metadata={
                 "filename": asset.filename,
                 "title": title,
@@ -218,7 +221,6 @@ class YouTubeSourceHandler:
                 "format": "transcript",
                 "source_uri": payload.get("source_uri") or asset.metadata.get("source_uri"),
                 "video_id": asset.metadata.get("video_id"),
-                "segments": segments,
             },
         )
 

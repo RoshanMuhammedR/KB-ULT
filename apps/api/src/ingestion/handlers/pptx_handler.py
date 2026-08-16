@@ -3,6 +3,8 @@ from __future__ import annotations
 import io
 from typing import Callable
 
+from langchain_core.documents import Document
+
 from src.core.text import sanitize_text_for_storage
 from src.domain.entities import AssetStatus, KnowledgeAsset, RawContent
 from src.domain.interfaces import IFileStorage
@@ -55,7 +57,7 @@ def _default_deck_reader(data: bytes) -> list[dict]:
 class PptxSourceHandler:
     """Source handler for uploaded PowerPoint decks (implements `ISourceHandler`).
 
-    One segment per slide, with a `slide` locator — so "Slide 12" is what a citation says
+    One `Document` per slide, with a `slide` locator — so "Slide 12" is what a citation says
     and what the viewer opens to. Slide titles are collected into `metadata["slides"]` so
     source detail can show the deck's structure without re-parsing the file.
     """
@@ -84,7 +86,7 @@ class PptxSourceHandler:
         if not slides:
             raise ValueError("This presentation has no slides in it")
 
-        segments: list[dict] = []
+        documents: list[Document] = []
         outline: list[dict] = []
         text_parts: list[str] = []
 
@@ -97,7 +99,12 @@ class PptxSourceHandler:
             number = slide.get("number")
 
             if body:
-                segments.append({"text": body, "locator": {"type": "slide", "value": number}})
+                documents.append(
+                    Document(
+                        page_content=body,
+                        metadata={"locator": {"type": "slide", "value": number}},
+                    )
+                )
                 text_parts.append(body)
 
             outline.append(
@@ -107,7 +114,7 @@ class PptxSourceHandler:
                 }
             )
 
-        if not segments:
+        if not documents:
             raise ValueError("This presentation has no readable text on any slide")
 
         title = self._title(outline, asset.filename)
@@ -123,6 +130,7 @@ class PptxSourceHandler:
             storage_key=asset.storage_key,
             status=AssetStatus.EXTRACTING,
             text_content="\n\n".join(text_parts),
+            documents=documents,
             metadata={
                 "filename": asset.filename,
                 "title": title,
@@ -131,7 +139,6 @@ class PptxSourceHandler:
                 "content_type": raw.mime or asset.metadata.get("content_type"),
                 "slide_count": len(slides),
                 "slides": outline,
-                "segments": segments,
             },
         )
 

@@ -266,7 +266,12 @@ class IngestionService:
     ) -> KnowledgeAsset:
         step = "extracting"
         try:
-            if asset.failed_step in (None, "extracting"):
+            # `not asset.documents` also forces re-extraction for an asset that failed at a
+            # later step but carries nothing to chunk — which is every row ingested before
+            # the `documents` column existed (migration 0007 leaves those at `[]`). Without
+            # it they would resume straight into "Source produced no indexable text chunks"
+            # forever. Re-parsing is idempotent, so this costs time, not correctness.
+            if asset.failed_step in (None, "extracting") or not asset.documents:
                 asset.status = AssetStatus.EXTRACTING
                 asset.failed_step = None
                 asset.error_message = None

@@ -4,7 +4,14 @@ This MVP is a backend-first AI Knowledge Base for uploading PDFs to Filebase obj
 
 Ingestion is **asynchronous**. The upload request only stores the file and enqueues a job; a separate **worker** runs the acquire → parse → chunk → embed pipeline. The queue is Postgres-backed (Procrastinate), so no extra infrastructure is required, and it sits behind the `IJobQueue` port so the engine stays swappable.
 
-Ingestion is also **source-agnostic**. Everything source-specific (how to fetch raw content and how to parse it) lives behind a single `ISourceHandler` port, one per `SourceType`, resolved through a `SourceHandlerRegistry`. **PDF** (uploaded file) and **YouTube** (URL) are implemented; websites are added later as another handler without touching the service, chunker, embedder, or chat. Handlers emit source-neutral **segments** (each with a typed `locator` — a page number for PDF, a transcript timestamp for YouTube), so chunking and citations never special-case a source.
+Ingestion is also **source-agnostic**. Everything source-specific (how to fetch raw content and how to parse it) lives behind a single `ISourceHandler` port, one per `SourceType`, resolved through a `SourceHandlerRegistry`. **PDF**, **Markdown**, **PPTX** and **audio** (uploaded files) and **YouTube** (URL) are implemented; websites are added later as another handler without touching the service, chunker, embedder, or chat.
+
+Handlers emit **LangChain `Document`s** — one per natural unit of the source (a page, a slide, a heading section, a transcript window), each carrying a typed `metadata["locator"]`: a page number for PDF, a timestamp for YouTube and audio, a slide number for PPTX, a heading for Markdown. The division of labour is the point:
+
+- the **handler** decides *where the citable boundaries are*, because only it knows what they mean for its format;
+- the **chunker** decides *how big each piece may be*, which is identical for every source (the embedding model's token budget) and so has one shared implementation.
+
+Splitting never crosses a document boundary and every split keeps its source document's metadata, so a chunk can never straddle two pages and a citation always resolves to a real position. The parsed documents live in their own `knowledge_assets.documents` JSONB column — not in `metadata`, which is returned verbatim to the browser — and are re-read by a retry that resumes at the chunking step instead of re-parsing the source.
 
 There are two request entry points into ingestion: `enqueue_ingestion` for uploaded files (store bytes, then queue) and `enqueue_url` for URL sources like YouTube (no upload — persist the URL + a `queued` asset with an empty `storage_key`; the worker's handler fetches the content in `acquire`). Both converge on the same worker `process_ingestion` path.
 
@@ -104,8 +111,8 @@ sequenceDiagram
   IngestionService->>JobRepo: mark_running (attempt++)
   IngestionService->>Registry: get(SourceType.PDF)
   IngestionService->>Handler: acquire(asset) [download from storage]
-  IngestionService->>Handler: parse(asset, raw) [PyMuPDF4LLM -> markdown + segments]
-  IngestionService->>Chunker: chunk(asset) [segments -> chunks w/ locator]
+  IngestionService->>Handler: parse(asset, raw) [PyMuPDF4LLM -> markdown + Documents]
+  IngestionService->>Chunker: chunk(asset) [Documents -> chunks, locator carried onto each]
   IngestionService->>Embedder: embed_texts(chunks)
   IngestionService->>VectorStore: upsert_embeddings(...)
   IngestionService->>JobRepo: mark_succeeded / mark_failed (+re-raise for retry)
@@ -138,7 +145,7 @@ sequenceDiagram
 - `application` orchestrates use cases and depends on domain ports (including `IJobQueue` and `ISourceHandler`).
 - `composition.py` is the only module that knows every concrete adapter (including which handler serves each `SourceType`); HTTP and the worker both build services through it.
 - `ingestion` normalizes raw sources into domain assets: `source_types` resolves the `SourceType`, the registry maps it to an `ISourceHandler`, and each handler owns acquisition + parsing for its source.
-- `processing` operates on parsed assets and is source-agnostic (it consumes `segments`/`locator`, never a source-specific field like a page number).
+- `processing` operates on parsed assets and is source-agnostic (it consumes `Document`s and their opaque `locator`, never a source-specific field like a page number).
 - `retrieval` owns query-time search orchestration.
 - `infrastructure` implements external concerns: DB, pgvector, object storage, the Procrastinate queue, LangChain wrappers, and AICredits.
 
@@ -148,16 +155,19 @@ The queue engine is confined to `infrastructure/queue/`. Verify:
 grep -r "procrastinate" apps/api/src/domain/ apps/api/src/application/
 ```
 
-LangChain imports are only allowed in:
+LangChain is **not** fully confined to an adapter directory, and that is a deliberate, narrow exception rather than drift.
 
-```text
-apps/api/src/infrastructure/langchain_adapters/
-```
+`langchain_core.documents.Document` is treated as a **shared data type**, the way `uuid.UUID` or `datetime` are: handlers produce them, `KnowledgeAsset` carries them, the chunker consumes them, and the repository mappers serialize them. Adopting the ecosystem's own type instead of a private dict convention is what lets LangChain loaders, splitters and retrievers drop in later without a translation layer at every seam.
 
-Verification:
+Everything else about LangChain stays behind adapters — the chat model, the embeddings client and the text splitter are all still confined to `infrastructure/langchain_adapters/`, so swapping the splitter or the model client remains a one-file change. What is allowed to spread is the *data type*, not the *machinery*.
+
+Verification — `Document` may be imported anywhere, but every other LangChain import must sit in the adapter directory:
 
 ```bash
-grep -r "import langchain" apps/api/src/
+grep -rn --include=*.py "^from langchain\|^import langchain" apps/api/src/ \
+  | grep -v "langchain_core.documents import Document" \
+  | grep -v "src/infrastructure/langchain_adapters/"
+# Expect: no output.
 ```
 
 ## API
@@ -187,7 +197,7 @@ grep -r "import langchain" apps/api/src/
 - `RefreshToken`: durable, revocable refresh-token record (hash + `family_id`); rotation-based revocation.
 - Every domain table below also carries `tenant_id` + `user_id` (`TenantScoped`).
 - `KnowledgeBase`: default container, with nullable `owner_id` (legacy, superseded by `tenant_id`/`user_id`).
-- `KnowledgeAsset`: immutable source version with `lineage_id`, `version`, status (now including `queued`), failure step, metadata, and supersession state. Tracks the **pipeline stage**.
+- `KnowledgeAsset`: immutable source version with `lineage_id`, `version`, status (now including `queued`), failure step, metadata, and supersession state. Tracks the **pipeline stage**. Also carries `documents` — the parsed source as LangChain `Document`s, in its own JSONB column so it is never serialized to the client, and re-read by a retry resuming at the chunking step.
 - `IngestionJob`: the unit of work and its **retry accounting** (status, attempts, `max_attempts`, `last_error`, timings) for one asset. Domain-owned and queue-engine-agnostic; distinct from Procrastinate's internal tables.
 - `IngestionJobEvent`: append-only **worker log** — one row per pipeline transition/terminal state (event name, level, message, `data`, timestamp), keyed by asset (and job when known). The durable, queryable counterpart to stdout logs; powers the `/jobs` dashboard.
 - `Chunk`: text fragment tied to a specific asset version, carrying a source-neutral `locator` (e.g. `{"type": "page", "value": 3}`) in its metadata.

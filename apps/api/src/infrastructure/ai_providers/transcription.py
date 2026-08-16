@@ -27,13 +27,15 @@ _ROUTE_MISSING_STATUSES = frozenset({404, 405, 422})
 @dataclass(slots=True)
 class Transcript:
     text: str
-    #: `[{text, start}]` — empty when the provider returned no timings.
-    segments: list[dict] = field(default_factory=list)
+    #: `[{text, start}]` — empty when the provider returned no timings. Named for what it
+    #: is rather than after the provider's own `segments` field, so it isn't confused with
+    #: the `Document`s the audio handler coalesces these into.
+    timed_lines: list[dict] = field(default_factory=list)
     duration: float | None = None
 
     @property
     def has_timestamps(self) -> bool:
-        return bool(self.segments)
+        return bool(self.timed_lines)
 
 
 class VoxtralTranscriptionProvider:
@@ -148,33 +150,35 @@ class VoxtralTranscriptionProvider:
         text = (text or "").strip()
         if not text:
             raise ValueError("No speech could be found in this audio file")
-        return Transcript(text=text, segments=[], duration=None)
+        return Transcript(text=text, timed_lines=[], duration=None)
 
     # --- Parsing ------------------------------------------------------------------
 
     def _parse_verbose_json(self, payload: dict) -> Transcript:
         text = (payload.get("text") or "").strip()
-        raw_segments = payload.get("segments") or []
+        # `segments` is the provider's own response field name (OpenAI's verbose_json
+        # shape), so it stays as-is here — this is the one place that contract is read.
+        raw_lines = payload.get("segments") or []
 
-        segments: list[dict] = []
-        for segment in raw_segments:
-            if not isinstance(segment, dict):
+        timed_lines: list[dict] = []
+        for line in raw_lines:
+            if not isinstance(line, dict):
                 continue
-            segment_text = (segment.get("text") or "").strip()
-            if not segment_text:
+            line_text = (line.get("text") or "").strip()
+            if not line_text:
                 continue
-            start = segment.get("start")
-            segments.append({"text": segment_text, "start": float(start or 0)})
+            start = line.get("start")
+            timed_lines.append({"text": line_text, "start": float(start or 0)})
 
-        if not text and segments:
-            text = " ".join(segment["text"] for segment in segments)
+        if not text and timed_lines:
+            text = " ".join(line["text"] for line in timed_lines)
         if not text:
             raise ValueError("No speech could be found in this audio file")
 
         duration = payload.get("duration")
         return Transcript(
             text=text,
-            segments=segments,
+            timed_lines=timed_lines,
             duration=float(duration) if duration is not None else None,
         )
 

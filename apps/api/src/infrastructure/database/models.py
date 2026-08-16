@@ -133,6 +133,12 @@ class KnowledgeAssetModel(TenantScoped, Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     text_content: Mapped[str | None] = mapped_column(Text, nullable=True)
     metadata_: Mapped[dict] = mapped_column("metadata", JSONB, nullable=False, default=dict)
+    # The parsed source as serialized LangChain `Document`s — the handoff between parsing
+    # and chunking. Its own column rather than a key in `metadata` because `metadata` is
+    # returned verbatim to the client by KnowledgeAssetSchema, and this holds the entire
+    # text of the source: shipping it on every status poll was pure waste. A retry that
+    # resumes at the chunking step reads these back instead of re-parsing.
+    documents: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     superseded_at = mapped_column(DateTime(timezone=True), nullable=True)
     created_at = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)

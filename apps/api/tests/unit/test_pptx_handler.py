@@ -33,7 +33,7 @@ def _handler(slides, filename: str = "kickoff.pptx") -> PptxSourceHandler:
 
 
 class PptxSourceHandlerTest(TestCase):
-    def test_parse_emits_one_segment_per_slide_with_slide_locators(self) -> None:
+    def test_parse_emits_one_document_per_slide_with_slide_locators(self) -> None:
         handler = _handler(
             [
                 {"number": 1, "title": "Kickoff", "lines": ["Kickoff", "Q3 plan"], "notes": ""},
@@ -46,7 +46,7 @@ class PptxSourceHandlerTest(TestCase):
 
         self.assertEqual(parsed.status, AssetStatus.EXTRACTING)
         self.assertEqual(parsed.title, "Kickoff")
-        locators = [segment["locator"] for segment in parsed.metadata["segments"]]
+        locators = [document.metadata["locator"] for document in parsed.documents]
         self.assertEqual(
             locators,
             [{"type": "slide", "value": 1}, {"type": "slide", "value": 2}],
@@ -57,7 +57,7 @@ class PptxSourceHandlerTest(TestCase):
             [{"number": 1, "title": "Kickoff"}, {"number": 2, "title": "Risks"}],
         )
 
-    def test_speaker_notes_are_included_in_the_slide_segment(self) -> None:
+    def test_speaker_notes_are_included_in_the_slide_document(self) -> None:
         handler = _handler(
             [{"number": 1, "title": "Kickoff", "lines": ["Kickoff"], "notes": "Mention the budget"}]
         )
@@ -65,7 +65,7 @@ class PptxSourceHandlerTest(TestCase):
 
         parsed = handler.parse(asset, handler.acquire(asset))
 
-        self.assertIn("Mention the budget", parsed.metadata["segments"][0]["text"])
+        self.assertIn("Mention the budget", parsed.documents[0].page_content)
 
     def test_slides_with_no_text_are_skipped_but_still_counted(self) -> None:
         handler = _handler(
@@ -78,8 +78,8 @@ class PptxSourceHandlerTest(TestCase):
 
         parsed = handler.parse(asset, handler.acquire(asset))
 
-        self.assertEqual(len(parsed.metadata["segments"]), 1)
-        self.assertEqual(parsed.metadata["segments"][0]["locator"]["value"], 2)
+        self.assertEqual(len(parsed.documents), 1)
+        self.assertEqual(parsed.documents[0].metadata["locator"]["value"], 2)
         self.assertEqual(parsed.metadata["slide_count"], 2)
 
     def test_empty_deck_fails_into_the_retry_path(self) -> None:

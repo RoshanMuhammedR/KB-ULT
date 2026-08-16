@@ -2,6 +2,8 @@ from unittest import TestCase
 from unittest.mock import Mock
 from uuid import uuid4
 
+from langchain_core.documents import Document
+
 from src.domain.entities import AssetStatus, KnowledgeAsset, SourceType
 from src.infrastructure.ai_providers.transcription import Transcript
 from src.ingestion.handlers import AudioSourceHandler
@@ -48,7 +50,7 @@ def _handler(transcript: Transcript) -> tuple[AudioSourceHandler, Mock, _StubTra
 
 class AudioSourceHandlerTest(TestCase):
     def test_acquire_downloads_then_transcribes(self) -> None:
-        handler, storage, transcriber = _handler(Transcript(text="Hello there", segments=[]))
+        handler, storage, transcriber = _handler(Transcript(text="Hello there", timed_lines=[]))
         asset = _asset()
 
         raw = handler.acquire(asset)
@@ -58,18 +60,18 @@ class AudioSourceHandlerTest(TestCase):
         self.assertEqual(raw.mime, "application/json")
 
     def test_acquire_rejects_audio_with_no_speech(self) -> None:
-        handler, _, _ = _handler(Transcript(text="   ", segments=[]))
+        handler, _, _ = _handler(Transcript(text="   ", timed_lines=[]))
 
         with self.assertRaises(ValueError) as caught:
             handler.acquire(_asset())
 
         self.assertIn("No speech", str(caught.exception))
 
-    def test_timed_segments_become_timestamp_locators(self) -> None:
+    def test_timed_lines_become_timestamp_locators(self) -> None:
         handler, _, _ = _handler(
             Transcript(
                 text="first line second line",
-                segments=[
+                timed_lines=[
                     {"text": "first line", "start": 12.4},
                     {"text": "second line", "start": 14.4},
                 ],
@@ -82,8 +84,13 @@ class AudioSourceHandlerTest(TestCase):
 
         self.assertEqual(parsed.status, AssetStatus.EXTRACTING)
         self.assertEqual(
-            parsed.metadata["segments"],
-            [{"text": "first line second line", "locator": {"type": "timestamp", "value": 12}}],
+            parsed.documents,
+            [
+                Document(
+                    page_content="first line second line",
+                    metadata={"locator": {"type": "timestamp", "value": 12}},
+                )
+            ],
         )
         self.assertEqual(parsed.metadata["duration"], 31)
         self.assertNotIn("timestamps", parsed.metadata)
@@ -92,19 +99,19 @@ class AudioSourceHandlerTest(TestCase):
         # The chat-completions fallback returns flat text. Rather than invent timestamps,
         # the handler emits section locators and flags that timings are unavailable.
         handler, _, _ = _handler(
-            Transcript(text="We opened the meeting. Then we closed it.", segments=[])
+            Transcript(text="We opened the meeting. Then we closed it.", timed_lines=[])
         )
         asset = _asset()
 
         parsed = handler.parse(asset, handler.acquire(asset))
 
-        locators = [segment["locator"] for segment in parsed.metadata["segments"]]
+        locators = [document.metadata["locator"] for document in parsed.documents]
         self.assertEqual(locators, [{"type": "section", "value": "Part 1"}])
         self.assertEqual(parsed.metadata["timestamps"], "unavailable")
 
     def test_transcript_is_written_next_to_the_original(self) -> None:
         handler, storage, _ = _handler(
-            Transcript(text="Hello", segments=[{"text": "Hello", "start": 0.0}])
+            Transcript(text="Hello", timed_lines=[{"text": "Hello", "start": 0.0}])
         )
         asset = _asset()
 
@@ -119,7 +126,7 @@ class AudioSourceHandlerTest(TestCase):
 
     def test_a_failed_transcript_upload_does_not_fail_the_source(self) -> None:
         handler, storage, _ = _handler(
-            Transcript(text="Hello", segments=[{"text": "Hello", "start": 0.0}])
+            Transcript(text="Hello", timed_lines=[{"text": "Hello", "start": 0.0}])
         )
         storage.upload.side_effect = RuntimeError("object storage is down")
         asset = _asset()
@@ -128,10 +135,10 @@ class AudioSourceHandlerTest(TestCase):
 
         # The source is still usable; it just has no downloadable transcript.
         self.assertNotIn("transcript_key", parsed.metadata)
-        self.assertTrue(parsed.metadata["segments"])
+        self.assertTrue(parsed.documents)
 
     def test_title_falls_back_to_the_filename_stem(self) -> None:
-        handler, _, _ = _handler(Transcript(text="Hello", segments=[]))
+        handler, _, _ = _handler(Transcript(text="Hello", timed_lines=[]))
         asset = _asset("q3-board-call.mp3")
 
         parsed = handler.parse(asset, handler.acquire(asset))

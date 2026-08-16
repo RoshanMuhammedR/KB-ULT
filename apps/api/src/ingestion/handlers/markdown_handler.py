@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import re
 
+from langchain_core.documents import Document
+
 from src.core.text import sanitize_text_for_storage
 from src.domain.entities import AssetStatus, KnowledgeAsset, RawContent
 from src.domain.interfaces import IFileStorage
 
 # ATX headings only (`# Heading`). Setext underlines are rare in machine-written Markdown
 # and ambiguous to split on, so a file using them becomes one "Introduction" section
-# rather than being mis-segmented.
+# rather than being split at the wrong boundaries.
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
 
 # Text appearing before the first heading still needs a citable locator.
@@ -21,7 +23,7 @@ class MarkdownSourceHandler:
     The simplest possible handler: no parsing dependency at all. `acquire` re-reads the
     uploaded bytes from object storage (the same retry-without-re-upload property the PDF
     handler has), and `parse` splits on ATX headings so each section becomes a citable
-    segment with a `section` locator.
+    `Document` with a `section` locator.
 
     This is also the path the app's "paste Markdown" affordance uses — the client builds a
     `.md` File from the textarea and posts it through the ordinary upload endpoint, so
@@ -43,12 +45,15 @@ class MarkdownSourceHandler:
             raise ValueError("This Markdown file has no readable text in it")
 
         sections = self._split_sections(cleaned)
-        segments = [
-            {"text": body, "locator": {"type": "section", "value": heading}}
+        documents = [
+            Document(
+                page_content=body,
+                metadata={"locator": {"type": "section", "value": heading}},
+            )
             for heading, body in sections
             if body
         ]
-        if not segments:
+        if not documents:
             raise ValueError("This Markdown file has no readable text in it")
 
         title = self._title(sections, asset.filename)
@@ -65,6 +70,7 @@ class MarkdownSourceHandler:
             storage_key=asset.storage_key,
             status=AssetStatus.EXTRACTING,
             text_content=cleaned.strip(),
+            documents=documents,
             metadata={
                 "filename": asset.filename,
                 "title": title,
@@ -73,7 +79,6 @@ class MarkdownSourceHandler:
                 "content_type": raw.mime or asset.metadata.get("content_type"),
                 "headings": len(headings),
                 "words": len(cleaned.split()),
-                "segments": segments,
             },
         )
 

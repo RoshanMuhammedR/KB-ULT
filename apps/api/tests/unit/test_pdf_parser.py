@@ -3,6 +3,8 @@ from unittest import TestCase
 from unittest.mock import Mock
 from uuid import uuid4
 
+from langchain_core.documents import Document
+
 from src.domain.entities import AssetStatus, KnowledgeAsset, RawContent
 from src.ingestion.handlers import PdfSourceHandler
 
@@ -31,12 +33,12 @@ class PdfSourceHandlerTest(TestCase):
         self.assertEqual(raw.data, b"%PDF")
         file_storage.download.assert_called_once_with("user/asset/sample.pdf")
 
-    def test_parse_builds_markdown_and_segments(self) -> None:
+    def test_parse_builds_markdown_and_documents(self) -> None:
         loader = SimpleNamespace(
             load=lambda file_data, filename: {
                 "markdown": "# Heading\n\n| A | B |",
                 "title": "Parsed Title",
-                # The loader returns pages; the handler turns them into segments.
+                # The loader returns pages; the handler turns them into Documents.
                 "pages": [{"page_number": 3, "text": "# Heading\x00"}],
                 "metadata": {"status": "success", "errors": 0, "page_count": 1},
             }
@@ -54,7 +56,15 @@ class PdfSourceHandlerTest(TestCase):
         self.assertEqual(parsed.metadata["source_type"], "pdf")
         # Page number becomes a typed locator; null bytes are sanitized out of text.
         self.assertEqual(
-            parsed.metadata["segments"],
-            [{"text": "# Heading", "locator": {"type": "page", "value": 3}}],
+            parsed.documents,
+            [
+                Document(
+                    page_content="# Heading",
+                    metadata={"locator": {"type": "page", "value": 3}},
+                )
+            ],
         )
         self.assertEqual(parsed.metadata["parser"]["status"], "success")
+        # The parsed source lives in its own field, never in the client-visible metadata.
+        self.assertNotIn("segments", parsed.metadata)
+        self.assertNotIn("documents", parsed.metadata)

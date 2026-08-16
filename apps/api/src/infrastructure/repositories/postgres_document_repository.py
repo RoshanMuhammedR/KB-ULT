@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from src.core.text import sanitize_json_for_storage, sanitize_text_for_storage
 from src.domain.entities import KnowledgeAsset
 from src.infrastructure.database.models import KnowledgeAssetModel
-from src.infrastructure.repositories.mappers import asset_to_domain
+from src.infrastructure.repositories.mappers import asset_to_domain, documents_to_storage
 
 
 class KnowledgeAssetRepository:
@@ -60,6 +60,7 @@ class KnowledgeAssetRepository:
             error_message=asset.error_message,
             text_content=self._sanitize_optional_text(asset.text_content),
             metadata_=sanitize_json_for_storage(asset.metadata),
+            documents=self._documents(asset),
             superseded_at=asset.superseded_at,
         )
         self.db.add(model)
@@ -78,6 +79,7 @@ class KnowledgeAssetRepository:
         model.error_message = asset.error_message
         model.text_content = self._sanitize_optional_text(asset.text_content)
         model.metadata_ = sanitize_json_for_storage(asset.metadata)
+        model.documents = self._documents(asset)
         model.superseded_at = asset.superseded_at
         self._commit()
         self.db.refresh(model)
@@ -118,3 +120,9 @@ class KnowledgeAssetRepository:
 
     def _sanitize_optional_text(self, value: str | None) -> str | None:
         return sanitize_text_for_storage(value) if value is not None else None
+
+    @staticmethod
+    def _documents(asset: KnowledgeAsset) -> list[dict]:
+        # Dump to plain JSON first, then NUL-strip: extracted text reaches this column too,
+        # and PostgreSQL rejects NUL bytes in JSONB strings.
+        return sanitize_json_for_storage(documents_to_storage(asset.documents))

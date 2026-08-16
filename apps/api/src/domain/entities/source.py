@@ -17,11 +17,11 @@ class SourceType(StrEnum):
     plus a resolver branch, nothing structural.
     """
 
-    PDF = "pdf"
-    YOUTUBE = "youtube"    # acquire = transcript API, parse = timestamped segments
-    MARKDOWN = "markdown"  # acquire = object storage, parse = heading-delimited sections
-    PPTX = "pptx"          # acquire = object storage, parse = one segment per slide
-    AUDIO = "audio"        # acquire = object storage, parse = transcribed timestamped segments
+    PDF = "pdf"             # acquire = object storage, parse = one document per page
+    YOUTUBE = "youtube"     # acquire = transcript API, parse = timestamped documents
+    MARKDOWN = "markdown"   # acquire = object storage, parse = heading-delimited sections
+    PPTX = "pptx"           # acquire = object storage, parse = one document per slide
+    AUDIO = "audio"         # acquire = object storage, parse = transcribed timestamped documents
     # WEBSITE = "website"   # planned: acquire = HTTP fetch, parse = HTML -> markdown
 
 

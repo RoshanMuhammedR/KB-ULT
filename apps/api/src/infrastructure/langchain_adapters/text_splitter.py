@@ -1,3 +1,4 @@
+from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 
@@ -9,14 +10,22 @@ class RecursiveSplitterAdapter:
             chunk_overlap=chunk_overlap_tokens,
         )
 
-    def split_segments(self, segments: list[dict]) -> list[dict]:
-        # Split each source segment's text, carrying that segment's locator onto every
-        # resulting chunk. The locator is opaque here (page for PDF, timestamp/section
-        # for other sources later) — the splitter never inspects it.
-        chunks: list[dict] = []
-        for segment in segments:
-            locator = segment.get("locator")
-            for text in self.splitter.split_text(segment["text"]):
-                if text.strip():
-                    chunks.append({"text": text.strip(), "locator": locator})
-        return chunks
+    def split(self, documents: list[Document]) -> list[Document]:
+        """Split each document to the token budget, keeping its metadata on every piece.
+
+        `split_documents` copies the source document's metadata onto each split, which is
+        what carries the locator (page/timestamp/slide/section) through to every chunk —
+        splitting never crosses a document boundary, so a citation can never straddle two
+        pages.
+
+        It does not strip or drop blanks, so that is done here: whitespace-only pieces
+        would otherwise become empty chunks that cost an embedding call and can never
+        match anything.
+        """
+        split_documents = self.splitter.split_documents(documents)
+        results: list[Document] = []
+        for document in split_documents:
+            text = document.page_content.strip()
+            if text:
+                results.append(Document(page_content=text, metadata=dict(document.metadata)))
+        return results
