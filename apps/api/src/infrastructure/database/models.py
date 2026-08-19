@@ -106,6 +106,12 @@ class RefreshTokenModel(Base):
 
 class KnowledgeBaseModel(TenantScoped, Base):
     __tablename__ = "knowledge_bases"
+    # One knowledge base per (tenant, name). `ensure_default` is a read-then-insert that two
+    # concurrent first requests could both win; this is what makes its ON CONFLICT clause
+    # legal and the duplicate impossible. See migration 0008.
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "name", name="uq_knowledge_base_tenant_name"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name: Mapped[str] = mapped_column(String(255), nullable=False)

@@ -51,6 +51,7 @@ from src.infrastructure.repositories import (
     TenantRepository,
     UserRepository,
 )
+from src.infrastructure.repositories.unit_of_work import SessionAtomicScope
 from src.infrastructure.storage import FilebaseAdapter
 from src.infrastructure.vector_store.pgvector import PgVectorStore
 from src.ingestion.handlers import (
@@ -82,11 +83,17 @@ def build_cache(settings: Settings) -> ICache:
     return _cache
 
 
-def build_job_queue() -> IJobQueue:
+def build_job_queue(db: Session | None = None) -> IJobQueue:
     # Imported lazily so importing the composition root doesn't drag in Procrastinate
     # (and its DB connector) for callers that only need, say, the chat service.
-    from src.infrastructure.queue import ProcrastinateJobQueue
+    from src.infrastructure.queue import ProcrastinateJobQueue, TransactionalProcrastinateJobQueue
 
+    # Given a Session, enqueue through it: the queue table is in the same database, so the
+    # job row commits with the asset row it belongs to instead of on its own connection.
+    # Without one (nothing does this today, but the port allows it), fall back to the
+    # connector-owned defer, which is correct but not atomic with the caller's writes.
+    if db is not None:
+        return TransactionalProcrastinateJobQueue(db)
     return ProcrastinateJobQueue()
 
 
@@ -155,7 +162,9 @@ def build_ingestion_service(db: Session, settings: Settings) -> IngestionService
         embedding_provider=_build_embedding_provider(settings),
         vector_store=PgVectorStore(db),
         file_storage=file_storage,
-        job_queue=build_job_queue(),
+        job_queue=build_job_queue(db),
+        atomic_scope=SessionAtomicScope(db),
+        max_audio_upload_bytes=settings.max_audio_upload_bytes,
     )
 
 

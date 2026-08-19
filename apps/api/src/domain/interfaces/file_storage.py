@@ -23,5 +23,26 @@ class IFileStorage(Protocol):
         a redirect and start a download, and short enough that a leaked URL is worthless.
         """
 
+    def get_presigned_put_url(self, key: str, content_type: str, expires_in_seconds: int = 900) -> str:
+        """Return a temporary signed URL the client can PUT an object to directly.
+
+        The counterpart of `get_presigned_url`, and the reason it exists: with one of these
+        the browser sends the file straight to object storage, so the bytes never pass
+        through — or sit in the memory of — the API process at all.
+
+        `content_type` is part of what gets signed, so the client must send the same value
+        it asked for. That is deliberate: it stops a URL issued for a PDF being reused to
+        store something else.
+        """
+
+    def object_size(self, key: str) -> int | None:
+        """Size in bytes of the object at this key, or None if there isn't one.
+
+        Needed when the upload happened out-of-band: before recording an asset that claims
+        an object exists, check that it does — and how big it is, since the size limits that
+        a multipart upload hits in the request cannot be applied to bytes that never came
+        through here.
+        """
+
     def delete(self, key: str) -> None:
         """Delete an object by key."""

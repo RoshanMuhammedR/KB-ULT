@@ -9,6 +9,7 @@ from src.core.text import sanitize_text_for_storage
 from src.domain.entities import Conversation, Message, MessageRole
 from src.infrastructure.database.models import ConversationModel, MessageModel
 from src.infrastructure.repositories.mappers import conversation_to_domain, message_to_domain
+from src.infrastructure.repositories.unit_of_work import commit_or_flush
 
 
 class ConversationRepository:
@@ -194,8 +195,6 @@ class ConversationRepository:
         ).first()
 
     def _commit(self) -> None:
-        try:
-            self.db.commit()
-        except Exception:
-            self.db.rollback()
-            raise
+        # Commits on its own, unless the caller opened a `unit_of_work` — then this
+        # flushes and the enclosing scope owns the single COMMIT. See unit_of_work.py.
+        commit_or_flush(self.db)

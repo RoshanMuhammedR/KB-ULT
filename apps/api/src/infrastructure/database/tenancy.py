@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import uuid
 
+import structlog
 from sqlalchemy import ForeignKey, event
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, declared_attr, mapped_column, with_loader_criteria
@@ -31,6 +32,8 @@ from src.core.tenant_context import (
     in_system_scope,
     try_current_tenant_id,
 )
+
+logger = structlog.get_logger(__name__)
 
 
 class TenantScoped:
@@ -116,6 +119,52 @@ def _on_after_begin(session, transaction, connection) -> None:
         connection.exec_driver_sql(
             "SELECT set_config('app.current_tenant', %s, true)", (str(tenant_id),)
         )
+
+
+class RLSNotEnforcedError(RuntimeError):
+    """The ORM connects as a role that bypasses Row-Level Security.
+
+    Not a ``KBError``: this is a deployment misconfiguration caught at boot, not a
+    request-time failure, and nothing should be translating it to an HTTP status.
+    """
+
+
+def assert_rls_enforced(engine, *, required: bool) -> None:
+    """Check that the ORM's role does NOT bypass RLS, and say so loudly when it does.
+
+    RLS is the second of the two isolation layers, and it is the silent one: superusers
+    (and any role with ``BYPASSRLS``) skip every policy, so an unset ``APP_DATABASE_URL``
+    quietly drops the system from two layers to one with no symptom at all — every query
+    still returns the right rows, because the ORM filter is still doing its job.
+
+    ``required`` comes from the ``REQUIRE_RLS`` setting: true in real deployments (refuse to
+    boot), false locally so ``docker compose up`` works without provisioning the ``kb_app``
+    role first. Either way the finding is logged, so a dormant backstop is never invisible.
+    """
+    with engine.connect() as connection:
+        row = connection.exec_driver_sql(
+            "SELECT current_user, rolsuper, rolbypassrls "
+            "FROM pg_roles WHERE rolname = current_user"
+        ).first()
+
+    if row is None:  # pragma: no cover - the connected role always exists in pg_roles
+        logger.warning("rls_role_check_inconclusive")
+        return
+
+    role, is_superuser, bypasses_rls = row[0], bool(row[1]), bool(row[2])
+    if not (is_superuser or bypasses_rls):
+        logger.info("rls_enforced", db_role=role)
+        return
+
+    detail = (
+        f"ORM sessions connect as '{role}', which bypasses Row-Level Security "
+        f"(superuser={is_superuser}, bypassrls={bypasses_rls}). Postgres RLS is dormant "
+        "and tenant isolation rests on the ORM filter alone. Set APP_DATABASE_URL to the "
+        "non-superuser app role (see scripts/create_app_role.sql)."
+    )
+    if required:
+        raise RLSNotEnforcedError(detail)
+    logger.warning("rls_dormant", db_role=role, detail=detail)
 
 
 def register_tenant_guards(session_factory) -> None:

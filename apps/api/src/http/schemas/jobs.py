@@ -16,6 +16,10 @@ class JobSummarySchema(BaseModel):
     status: str
     attempts: int
     max_attempts: int
+    # True once the retry budget is spent: the queue will not pick this job up again and
+    # nothing else will, so the dashboard can separate "failed, will retry" from "needs a
+    # human". Derived rather than stored — `status` is FAILED for both.
+    exhausted: bool = False
     last_error: str | None = None
     scheduled_at: datetime | None = None
     started_at: datetime | None = None

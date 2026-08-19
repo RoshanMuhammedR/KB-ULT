@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class IngestionJobSchema(BaseModel):
@@ -69,3 +69,32 @@ class IngestUrlRequest(BaseModel):
     """Ingest a URL-based source (e.g. a YouTube video) — no file upload."""
 
     url: str
+
+
+class UploadUrlRequest(BaseModel):
+    """Ask for somewhere to PUT a file, before sending any of it."""
+
+    filename: str = Field(min_length=1, max_length=512)
+    content_type: str | None = Field(default=None, max_length=255)
+    # What the client says it is about to send, so a file over the limit is refused before
+    # it is uploaded rather than after. Verified against the stored object on completion.
+    size_bytes: int | None = Field(default=None, ge=0)
+
+
+class UploadUrlResponse(BaseModel):
+    """Where to PUT the file, and the id to report back with once it is there."""
+
+    asset_id: UUID
+    upload_url: str
+    storage_key: str
+    expires_in_seconds: int
+    # Echoed back because the signature covers it: the PUT must send this exact header or
+    # object storage rejects it.
+    content_type: str
+
+
+class CompleteUploadRequest(BaseModel):
+    """Tell the API the direct upload finished, so it can record and queue the source."""
+
+    filename: str = Field(min_length=1, max_length=512)
+    content_type: str | None = Field(default=None, max_length=255)

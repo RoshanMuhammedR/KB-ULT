@@ -9,6 +9,7 @@ from src.core.text import sanitize_json_for_storage, sanitize_text_for_storage
 from src.domain.entities import AssetStatus, Chunk, Embedding
 from src.infrastructure.database.models import ChunkModel, EmbeddingModel, KnowledgeAssetModel
 from src.infrastructure.repositories.mappers import chunk_to_domain
+from src.infrastructure.repositories.unit_of_work import commit_or_flush
 
 
 class ChunkRepository:
@@ -53,12 +54,9 @@ class ChunkRepository:
         return [chunk_to_domain(row) for row in rows]
 
     def _commit(self) -> None:
-        try:
-            self.db.commit()
-        except Exception:
-            # A failed flush leaves the Session transaction unusable until it is rolled back.
-            self.db.rollback()
-            raise
+        # Commits on its own, unless the caller opened a `unit_of_work` — then this
+        # flushes and the enclosing scope owns the single COMMIT. See unit_of_work.py.
+        commit_or_flush(self.db)
 
 
 class EmbeddingRepository:
@@ -82,12 +80,9 @@ class EmbeddingRepository:
         self._commit()
 
     def _commit(self) -> None:
-        try:
-            self.db.commit()
-        except Exception:
-            # A failed flush leaves the Session transaction unusable until it is rolled back.
-            self.db.rollback()
-            raise
+        # Commits on its own, unless the caller opened a `unit_of_work` — then this
+        # flushes and the enclosing scope owns the single COMMIT. See unit_of_work.py.
+        commit_or_flush(self.db)
 
     def query_ready_chunks(
         self,

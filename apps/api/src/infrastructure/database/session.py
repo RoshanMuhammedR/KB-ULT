@@ -11,7 +11,14 @@ from src.infrastructure.database.tenancy import register_tenant_guards
 # applies (see app_database_url). Falls back to the superuser URL when unset.
 _settings = get_settings()
 engine = create_engine(
-    _settings.app_database_url or _settings.database_url, pool_pre_ping=True
+    _settings.app_database_url or _settings.database_url,
+    pool_pre_ping=True,
+    # Sized explicitly rather than left on SQLAlchemy's 5+10 default: this pool, not the
+    # 40-thread anyio pool that every sync route runs in, is what actually caps
+    # concurrency. See the arithmetic on `db_pool_size` in core/config.py.
+    pool_size=_settings.db_pool_size,
+    max_overflow=_settings.db_max_overflow,
+    pool_timeout=_settings.db_pool_timeout,
 )
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 

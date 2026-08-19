@@ -10,7 +10,8 @@ import type {
   MeResponse,
   Passage,
   RegisterRequest,
-  TokenResponse
+  TokenResponse,
+  UploadUrlResponse
 } from "@/types/api";
 import { clearSession, getAccessToken, getRefreshToken, getSession, saveSession } from "@/lib/auth";
 
@@ -135,7 +136,58 @@ export function listAssets(): Promise<KnowledgeAsset[]> {
   return request<KnowledgeAsset[]>("/documents");
 }
 
-export function uploadFile(file: File): Promise<KnowledgeAsset> {
+// Upload in three steps: ask for a signed URL, PUT the file straight to object storage,
+// then tell the API it landed. The file never passes through the API process, which is what
+// keeps a large source from being bounded by the API container's memory rather than by
+// storage. The multipart route below is kept as a fallback for the window where an older
+// API is still serving (a deploy in progress), and for anything that cannot reach storage
+// directly.
+export async function uploadFile(file: File): Promise<KnowledgeAsset> {
+  const contentType = file.type || "application/octet-stream";
+  let ticket: UploadUrlResponse;
+  try {
+    ticket = await request<UploadUrlResponse>(
+      "/documents/upload-url",
+      // Sending the size means an over-limit file is refused now, not after uploading it.
+      jsonBody({ filename: file.name, content_type: contentType, size_bytes: file.size })
+    );
+  } catch (error) {
+    // 404/405 means this API doesn't have the endpoint yet. A 400 is a real rejection (an
+    // unsupported file type) and must surface as itself rather than being retried a second
+    // way that will fail identically.
+    if (error instanceof ApiError && (error.status === 404 || error.status === 405)) {
+      return uploadFileMultipart(file);
+    }
+    throw error;
+  }
+
+  let put: Response;
+  try {
+    put = await fetch(ticket.upload_url, {
+      method: "PUT",
+      // Must match what the URL was signed for, or storage rejects the request.
+      headers: { "Content-Type": ticket.content_type },
+      body: file
+    });
+  } catch {
+    // fetch only throws (rather than returning a failed response) for network-level
+    // problems, and the one that matters here is CORS: the storage bucket has to allow PUT
+    // from this origin, which is configuration living outside this repo. Rather than break
+    // uploading entirely if that has not been set up, fall back to the route that goes
+    // through the API — slower and memory-bound, but it works.
+    return uploadFileMultipart(file);
+  }
+  if (!put.ok) {
+    throw new ApiError(put.status, "The file could not be uploaded. Please try again.");
+  }
+
+  return request<KnowledgeAsset>(
+    `/documents/${ticket.asset_id}/complete`,
+    jsonBody({ filename: file.name, content_type: contentType })
+  );
+}
+
+export function uploadFileMultipart(file: File): Promise<KnowledgeAsset> {
   const formData = new FormData();
   formData.append("file", file);
   return request<KnowledgeAsset>("/documents/upload", { method: "POST", body: formData });
