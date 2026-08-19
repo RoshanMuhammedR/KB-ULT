@@ -153,3 +153,11 @@ export type Session = {
   expiresAt: number; // epoch ms
   remember: boolean;
 };
+
+export type UploadUrlResponse = {
+  asset_id: string;
+  upload_url: string;
+  storage_key: string;
+  expires_in_seconds: number;
+  content_type: string;
+};

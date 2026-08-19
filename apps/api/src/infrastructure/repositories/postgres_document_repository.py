@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy import delete, desc, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from src.core.exceptions import DuplicateAssetVersionError
 from src.core.text import sanitize_json_for_storage, sanitize_text_for_storage
 from src.domain.entities import KnowledgeAsset
 from src.infrastructure.database.models import KnowledgeAssetModel
 from src.infrastructure.repositories.mappers import asset_to_domain, documents_to_storage
+from src.infrastructure.repositories.unit_of_work import commit_or_flush
 
 
 class KnowledgeAssetRepository:
@@ -30,6 +34,22 @@ class KnowledgeAssetRepository:
         # identity map and bypasses the tenant auto-filter, so a cross-tenant id would leak.
         row = self.db.scalar(select(KnowledgeAssetModel).where(KnowledgeAssetModel.id == asset_id))
         return asset_to_domain(row) if row else None
+
+    def get_many(self, asset_ids: Iterable[UUID]) -> dict[UUID, KnowledgeAsset]:
+        """Fetch several assets by id in one query, keyed by id.
+
+        For list endpoints that need a field from each row's asset: one `IN (...)` instead
+        of one SELECT per row. Missing ids are simply absent from the mapping — the tenant
+        filter applies here as everywhere, so another tenant's id looks identical to a
+        deleted one.
+        """
+        ids = list(asset_ids)
+        if not ids:
+            return {}
+        rows = self.db.scalars(
+            select(KnowledgeAssetModel).where(KnowledgeAssetModel.id.in_(ids))
+        ).all()
+        return {row.id: asset_to_domain(row) for row in rows}
 
     def get_model(self, asset_id: UUID) -> KnowledgeAssetModel | None:
         # Same reason as get(): stay on select() so the tenant filter applies.
@@ -64,7 +84,18 @@ class KnowledgeAssetRepository:
             superseded_at=asset.superseded_at,
         )
         self.db.add(model)
-        self._commit()
+        try:
+            self._commit()
+        except IntegrityError as exc:
+            # Two concurrent uploads of the same filename both read the same "latest"
+            # version and both computed n+1. The constraint keeps the data correct; this
+            # turns "the database said no" into something the caller can act on, instead
+            # of an opaque 500 for what is really a retryable race.
+            if "uq_asset_lineage_version" in str(exc.orig):
+                raise DuplicateAssetVersionError(
+                    f"version {asset.version} of this source already exists"
+                ) from exc
+            raise
         self.db.refresh(model)
         return asset_to_domain(model)
 
@@ -111,12 +142,9 @@ class KnowledgeAssetRepository:
         self._commit()
 
     def _commit(self) -> None:
-        try:
-            self.db.commit()
-        except Exception:
-            # A failed flush leaves the Session transaction unusable until it is rolled back.
-            self.db.rollback()
-            raise
+        # Commits on its own, unless the caller opened a `unit_of_work` — then this
+        # flushes and the enclosing scope owns the single COMMIT. See unit_of_work.py.
+        commit_or_flush(self.db)
 
     def _sanitize_optional_text(self, value: str | None) -> str | None:
         return sanitize_text_for_storage(value) if value is not None else None

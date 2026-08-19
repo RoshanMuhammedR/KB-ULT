@@ -9,6 +9,7 @@ from src.core.text import sanitize_text_for_storage
 from src.domain.entities import JobEvent
 from src.infrastructure.database.models import IngestionJobEventModel
 from src.infrastructure.repositories.mappers import event_to_domain
+from src.infrastructure.repositories.unit_of_work import commit_or_flush
 
 
 class IngestionJobEventRepository:
@@ -56,8 +57,6 @@ class IngestionJobEventRepository:
         return [event_to_domain(model) for model in models]
 
     def _commit(self) -> None:
-        try:
-            self.db.commit()
-        except Exception:
-            self.db.rollback()
-            raise
+        # Commits on its own, unless the caller opened a `unit_of_work` — then this
+        # flushes and the enclosing scope owns the single COMMIT. See unit_of_work.py.
+        commit_or_flush(self.db)

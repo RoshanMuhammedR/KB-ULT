@@ -15,6 +15,23 @@ class Settings(BaseSettings):
     # Procrastinate connector keep using `database_url` (superuser) for DDL/queue internals.
     # Empty => fall back to `database_url` (RLS dormant; the ORM tenant-filter still applies).
     app_database_url: str = ""
+    # Refuse to boot when the ORM role bypasses RLS. A dormant backstop is invisible —
+    # every query still returns the right rows because the ORM filter covers it — so the
+    # only way a misconfigured APP_DATABASE_URL gets noticed is a startup check. False by
+    # default so local dev boots before `scripts/create_app_role.sql` has been run; set
+    # REQUIRE_RLS=1 in every deployed environment.
+    require_rls: bool = False
+    # Connection pool. SQLAlchemy's defaults (5 + 10 overflow = 15) are the real
+    # concurrency ceiling of this service, not the 40-thread anyio pool that sync routes
+    # run in: 40 concurrent requests contend for 15 connections and the 16th waits
+    # `pool_timeout` seconds before raising. Size the budget as
+    #   postgres max_connections  ÷  (api replicas + worker replicas × worker concurrency)
+    # and leave headroom for migrations, psql, and the Procrastinate connector — which
+    # keeps its own pool on `database_url` and is NOT counted here.
+    db_pool_size: int = 10
+    db_max_overflow: int = 10
+    db_pool_timeout: int = 30
+
     aicredits_api_key: str = ""
     aicredits_base_url: str = "https://api.aicredits.in/v1"
     aicredits_chat_model: str = "openai/gpt-4o-mini"
@@ -30,8 +47,16 @@ class Settings(BaseSettings):
     aicredits_transcription_model: str = "openai/whisper-1"
     embedding_dimensions: int = 1536
 
+    # Ceiling for the multipart upload path, enforced on Content-Length before the body is
+    # read (see http/middleware/upload_limit.py). The handler reads the whole file into
+    # memory against a 512 MB container, so without this one large upload is one OOM. The
+    # direct-to-storage path (/documents/upload-url) does not go through the API at all and
+    # is not bound by this.
+    max_upload_bytes: int = 200 * 1024 * 1024
+
     # Audio is transcribed by a paid hosted model, so it gets a size cap the other source
-    # types don't need. Enforced at upload with a plain-language 400.
+    # types don't need — tighter than the ceiling above, and about money rather than memory.
+    # Enforced at upload with a plain-language 400.
     max_audio_upload_bytes: int = 100 * 1024 * 1024
 
     chunk_size_tokens: int = 800

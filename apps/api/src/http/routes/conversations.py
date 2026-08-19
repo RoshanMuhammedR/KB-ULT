@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import contextvars
 import json
+import queue
+import threading
+from queue import Empty
 from typing import Annotated, Iterator
 from uuid import UUID
 
@@ -34,6 +38,14 @@ NEW_CONVERSATION = "new"
 # Streaming responses must not be buffered anywhere between the model and the browser,
 # or the whole point (a visibly progressing answer) is lost. Caddy's reverse_proxy does
 # not buffer by default; X-Accel-Buffering covers an nginx sitting in front.
+# Sent when the answer has produced nothing for this long. Comfortably under the 30-60s
+# idle timeout typical of proxies and load balancers, and long enough that a normally
+# responsive model never triggers it.
+_HEARTBEAT_SECONDS = 15.0
+_HEARTBEAT_FRAME = ": ping\n\n"
+# Sentinel: the producer thread is finished (successfully or not).
+_STREAM_DONE = object()
+
 _SSE_HEADERS = {
     "Cache-Control": "no-cache",
     "Connection": "keep-alive",
@@ -172,26 +184,69 @@ def ask_in_conversation(
     def events() -> Iterator[str]:
         with session_scope() as db:
             chat_service = build_chat_service(db, settings)
-            try:
-                for event, payload in chat_service.ask_stream(target, question):
-                    yield _frame(event, payload)
-            except ValueError as exc:
-                # A bad conversation id — the only client-caused failure down here.
-                yield _frame("error", {"message": str(exc)})
-            except Exception as exc:  # noqa: BLE001 - the stream is the only channel left
-                # Headers are long gone by now, so an error can only be delivered as an
-                # event. The turn is persisted only once the answer is complete, so a
-                # failure here really does leave nothing behind — which is what we promise.
-                logger.exception("chat_stream_failed", error=str(exc))
-                yield _frame(
-                    "error",
-                    {
-                        "message": (
-                            "The answer stopped partway through. Nothing was saved, so "
-                            "you can ask it again as-is."
+            frames: queue.Queue[str | object] = queue.Queue()
+
+            def produce() -> None:
+                """Drive the answer, pushing each frame to the consumer below."""
+                try:
+                    for event, payload in chat_service.ask_stream(target, question):
+                        frames.put(_frame(event, payload))
+                except ValueError as exc:
+                    # A bad conversation id — the only client-caused failure down here.
+                    frames.put(_frame("error", {"message": str(exc)}))
+                except Exception as exc:  # noqa: BLE001 - the stream is the only channel left
+                    # Headers are long gone by now, so an error can only be delivered as an
+                    # event. The turn is persisted only once the answer is complete, so a
+                    # failure here really does leave nothing behind — which is what we
+                    # promise.
+                    logger.exception("chat_stream_failed", error=str(exc))
+                    frames.put(
+                        _frame(
+                            "error",
+                            {
+                                "message": (
+                                    "The answer stopped partway through. Nothing was "
+                                    "saved, so you can ask it again as-is."
+                                )
+                            },
                         )
-                    },
-                )
+                    )
+                finally:
+                    frames.put(_STREAM_DONE)
+
+            # The answer runs on its own thread so this generator can keep yielding while
+            # it works. Nothing is sent between the request and the first token — retrieval,
+            # a query embedding, and the model's time-to-first-token — which is long enough
+            # for an idle proxy to decide the connection is dead and cut it. Yielding a
+            # comment frame on a timer keeps bytes flowing through that silent window.
+            #
+            # `copy_context()` is what makes this safe: a bare thread starts with EMPTY
+            # contextvars, so the tenant binding would be gone and every scoped query would
+            # fail closed. The copy carries the binding the middleware bound. Note the
+            # inverse of the bug documented above — the problem there was *setting* a
+            # contextvar per frame, not reading an inherited one.
+            context = contextvars.copy_context()
+            worker = threading.Thread(
+                target=lambda: context.run(produce), name="chat-stream", daemon=True
+            )
+            worker.start()
+            try:
+                while True:
+                    try:
+                        item = frames.get(timeout=_HEARTBEAT_SECONDS)
+                    except Empty:
+                        # An SSE comment: the browser's parser ignores it, and so does the
+                        # hand-rolled reader in the web app (a frame with no `data:` line is
+                        # dropped). Its only job is to be bytes on the wire.
+                        yield _HEARTBEAT_FRAME
+                        continue
+                    if item is _STREAM_DONE:
+                        break
+                    yield item  # type: ignore[misc]
+            finally:
+                # The producer owns the Session; let it finish before `session_scope` exits
+                # and commits, so the two never touch the session at once.
+                worker.join()
 
     return StreamingResponse(events(), media_type="text/event-stream", headers=_SSE_HEADERS)
 

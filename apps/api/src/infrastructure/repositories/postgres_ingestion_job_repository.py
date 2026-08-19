@@ -10,6 +10,7 @@ from src.core.text import sanitize_text_for_storage
 from src.domain.entities import IngestionJob, JobStatus
 from src.infrastructure.database.models import IngestionJobModel
 from src.infrastructure.repositories.mappers import job_to_domain
+from src.infrastructure.repositories.unit_of_work import commit_or_flush
 
 
 class IngestionJobRepository:
@@ -113,9 +114,6 @@ class IngestionJobRepository:
         return model
 
     def _commit(self) -> None:
-        try:
-            self.db.commit()
-        except Exception:
-            # A failed flush leaves the Session transaction unusable until rolled back.
-            self.db.rollback()
-            raise
+        # Commits on its own, unless the caller opened a `unit_of_work` — then this
+        # flushes and the enclosing scope owns the single COMMIT. See unit_of_work.py.
+        commit_or_flush(self.db)

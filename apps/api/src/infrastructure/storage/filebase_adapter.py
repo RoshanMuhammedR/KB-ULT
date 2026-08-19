@@ -52,6 +52,33 @@ class FilebaseAdapter(IFileStorage):
         except Exception as exc:
             raise FileStorageError(f"Failed to create presigned URL: {key}") from exc
 
+    def get_presigned_put_url(self, key: str, content_type: str, expires_in_seconds: int = 900) -> str:
+        # Signing is a local HMAC over the request parameters — no network call, so this
+        # cannot fail on a slow or unreachable storage provider.
+        try:
+            return self.client.generate_presigned_url(
+                "put_object",
+                Params={
+                    "Bucket": self.bucket_name,
+                    "Key": key,
+                    "ContentType": content_type,
+                },
+                ExpiresIn=expires_in_seconds,
+            )
+        except Exception as exc:
+            raise FileStorageError(f"Failed to create presigned upload URL: {key}") from exc
+
+    def object_size(self, key: str) -> int | None:
+        # HEAD, so the object's bytes are never transferred just to answer the question.
+        try:
+            response = self.client.head_object(Bucket=self.bucket_name, Key=key)
+            return int(response["ContentLength"])
+        except self.client.exceptions.ClientError:
+            # 404 (absent) and 403 (not visible to us) both mean "not usable here". Anything
+            # else is a real storage failure and should not be swallowed, but boto3 folds
+            # them into the same exception class, so this stays coarse.
+            return None
+
     def delete(self, key: str) -> None:
         try:
             self.client.delete_object(Bucket=self.bucket_name, Key=key)

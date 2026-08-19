@@ -12,6 +12,7 @@ from src.domain.interfaces.repositories import (
     IKnowledgeBaseRepository,
 )
 from src.domain.interfaces.source_handler import ISourceHandler
+from src.domain.interfaces.unit_of_work import IAtomicScope
 from src.domain.interfaces.vector_store import IVectorStore
 
 EmbeddingProvider = IEmbedder
@@ -20,6 +21,7 @@ LLMProvider = ILLMProvider
 VectorStore = IVectorStore
 
 __all__ = [
+    "IAtomicScope",
     "IChunkRepository",
     "IChunker",
     "IDocumentRepository",

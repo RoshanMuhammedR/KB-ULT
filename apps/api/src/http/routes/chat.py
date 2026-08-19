@@ -15,5 +15,8 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 def ask_question(
     request: AskQuestionRequest,
     chat_service: Annotated[ChatService, Depends(get_chat_service)],
-) -> dict:
-    return chat_service.ask(request.question)
+) -> AskQuestionResponse:
+    # `ChatService.ask` returns a plain dict, so this is where the wire contract gets its
+    # type. FastAPI would have validated it against `response_model` either way, but with
+    # `-> dict` the annotation and the model disagreed and no type checker could tell.
+    return AskQuestionResponse.model_validate(chat_service.ask(request.question))

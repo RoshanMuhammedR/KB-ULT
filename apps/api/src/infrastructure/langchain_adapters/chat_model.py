@@ -5,6 +5,8 @@ from typing import Iterator
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
+from src.infrastructure.ai_providers.circuit_breaker import get_breaker
+
 
 # The library default is 600s. A streaming answer holds an anyio worker thread and an open
 # database session for its whole duration, so a hung gateway is far more expensive here than
@@ -23,9 +25,12 @@ class OpenAICompatibleChatAdapter:
             timeout=_REQUEST_TIMEOUT_SECONDS,
             max_retries=_MAX_RETRIES,
         )
+        # Shared with every other chat adapter in this process — the breaker tracks the
+        # provider's health, not this instance's.
+        self._breaker = get_breaker("chat")
 
     def generate(self, messages: list[dict[str, str]]) -> str:
-        response = self.client.invoke(self._convert(messages))
+        response = self._breaker.call(self.client.invoke, self._convert(messages))
         return str(response.content)
 
     def stream(self, messages: list[dict[str, str]]) -> Iterator[str]:
@@ -34,7 +39,11 @@ class OpenAICompatibleChatAdapter:
         `generate` is unchanged and still backs the non-streaming /chat/ask endpoint; this
         is what the SSE route consumes so a long answer is legible while it is being written.
         """
-        for chunk in self.client.stream(self._convert(messages)):
+        # Only opening the stream goes through the breaker. Once tokens are flowing the
+        # provider has demonstrably answered, and a failure mid-answer is a different
+        # problem (a dropped connection) from the one the breaker exists to prevent.
+        stream = self._breaker.call(self.client.stream, self._convert(messages))
+        for chunk in stream:
             text = chunk.content
             if not text:
                 continue

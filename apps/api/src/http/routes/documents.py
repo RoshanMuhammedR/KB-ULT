@@ -25,11 +25,14 @@ from src.infrastructure.database.session import get_db
 from src.application.ingestion.service import IngestionService
 from src.http.schemas.documents import (
     AssetCitationSchema,
+    CompleteUploadRequest,
     IngestUrlRequest,
     IngestionJobSchema,
     KnowledgeAssetSchema,
     PassageSchema,
     RenameKnowledgeAssetRequest,
+    UploadUrlRequest,
+    UploadUrlResponse,
 )
 from src.http.schemas.jobs import JobEventSchema
 
@@ -47,6 +50,11 @@ def _megabytes(size_bytes: int) -> int:
 # default, and is why these are issued only for a single asset the caller already fetched
 # rather than for every row of a list.
 _DETAIL_URL_TTL_SECONDS = 900
+
+# How long a direct-upload URL stays valid. Long enough for a large file on a slow
+# connection, short enough that a leaked URL is worth little: it grants a write to exactly
+# one key that already belongs to the tenant it was issued for.
+_UPLOAD_URL_TTL_SECONDS = 900
 
 
 def _to_schema(
@@ -254,7 +262,7 @@ def list_asset_citations(
 
 
 @router.post("/upload", response_model=KnowledgeAssetSchema, status_code=status.HTTP_202_ACCEPTED)
-async def upload_document(
+def upload_document(
     ingestion_service: Annotated[IngestionService, Depends(get_ingestion_service)],
     file_storage: Annotated[IFileStorage, Depends(get_file_storage)],
     file: UploadFile = File(...),
@@ -262,10 +270,21 @@ async def upload_document(
     # Accepts the upload, stores it, and enqueues the ingestion job — then returns
     # 202 immediately with a `queued` asset. The heavy pipeline runs in the worker;
     # the client polls GET /documents/{id} for progress.
+    #
+    # This handler is deliberately plain `def`, like every other route here, and it has
+    # regressed to `async def` once before. `enqueue_ingestion` below is fully synchronous:
+    # an S3 PUT of the whole body, several Postgres commits, and a fresh blocking connection
+    # for the queue's `.defer()`. On the event loop that stalls EVERY concurrent request in
+    # the process — measured at 2.17s vs 0.18s for a `/health` probe taken mid-upload. As
+    # `def`, FastAPI dispatches the whole unit of blocking work to the anyio threadpool in
+    # one hop. `await file.read()` was never the problem; the unawaited sync call after it
+    # was, which is why the `async def` looked justified. Do not reintroduce it.
     if not file.filename:
         raise HTTPException(status_code=400, detail="Uploaded file must include a filename")
 
-    file_data = await file.read()
+    # The multipart parser has already spooled and rewound this SpooledTemporaryFile, so the
+    # sync read is the same bytes `await file.read()` produced — minus the threadpool hop.
+    file_data = file.file.read()
 
     # Audio is transcribed by a paid hosted model, so it alone carries a size cap.
     if Path(file.filename).suffix.lower() in AUDIO_EXTENSIONS:
@@ -284,6 +303,53 @@ async def upload_document(
             file_data,
             Path(file.filename).name,
             file.content_type,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _to_schema(asset, file_storage)
+
+
+@router.post("/upload-url", response_model=UploadUrlResponse)
+def create_upload_url(
+    request: UploadUrlRequest,
+    ingestion_service: Annotated[IngestionService, Depends(get_ingestion_service)],
+) -> UploadUrlResponse:
+    # Step 1 of the direct upload: the browser PUTs the file to object storage itself, so
+    # the bytes never occupy this process. `/upload` (multipart) still works and is what
+    # older clients use; this path is what keeps a large file from being a memory ceiling.
+    content_type = request.content_type or "application/octet-stream"
+    try:
+        asset_id, storage_key, upload_url = ingestion_service.prepare_direct_upload(
+            request.filename, content_type, request.size_bytes
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return UploadUrlResponse(
+        asset_id=asset_id,
+        upload_url=upload_url,
+        storage_key=storage_key,
+        expires_in_seconds=_UPLOAD_URL_TTL_SECONDS,
+        content_type=content_type,
+    )
+
+
+@router.post(
+    "/{asset_id}/complete",
+    response_model=KnowledgeAssetSchema,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def complete_upload(
+    asset_id: UUID,
+    request: CompleteUploadRequest,
+    ingestion_service: Annotated[IngestionService, Depends(get_ingestion_service)],
+    file_storage: Annotated[IFileStorage, Depends(get_file_storage)],
+) -> KnowledgeAssetSchema:
+    # Step 2: the PUT succeeded, so record the asset and queue the pipeline. The service
+    # rebuilds the storage key from the tenant context and verifies the object is really
+    # there, so a client cannot register an asset for a file it never uploaded.
+    try:
+        asset = ingestion_service.complete_direct_upload(
+            asset_id, request.filename, request.content_type
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

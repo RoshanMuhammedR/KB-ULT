@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 import sys
 from types import SimpleNamespace
 from unittest import TestCase
@@ -31,6 +32,14 @@ class FakeJobQueue:
     def enqueue_ingestion(self, asset_id: UUID, tenant_id: UUID, user_id: UUID) -> None:
         self.enqueued.append(asset_id)
         self.tenant_ids.append(tenant_id)
+
+
+class NullAtomicScope:
+    """Stand-in for the real transaction scope: runs the block, owns no transaction."""
+
+    @contextmanager
+    def atomic(self):
+        yield
 
 
 def _build_service(**overrides):
@@ -90,6 +99,11 @@ def _build_service(**overrides):
         vector_store=vector_store,
         file_storage=file_storage,
         job_queue=FakeJobQueue(),
+        # These tests have no Session, so transaction control is a no-op context manager.
+        # The service only asks for "all of this or none of it"; who provides it is the
+        # composition root's business.
+        atomic_scope=NullAtomicScope(),
+        max_audio_upload_bytes=100 * 1024 * 1024,
     )
     kwargs.update(overrides)
     return IngestionService(**kwargs), kwargs

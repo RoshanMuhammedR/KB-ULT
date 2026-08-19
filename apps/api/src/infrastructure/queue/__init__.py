@@ -3,6 +3,9 @@
 # attribute-based access (e.g. `import ...queue.app as m; m.app`). The worker loads
 # the app via its full dotted path (`src.infrastructure.queue.app.app`), and other
 # code imports it from the submodule directly, so no package-level re-export is needed.
-from src.infrastructure.queue.procrastinate_queue import ProcrastinateJobQueue
+from src.infrastructure.queue.procrastinate_queue import (
+    ProcrastinateJobQueue,
+    TransactionalProcrastinateJobQueue,
+)
 
-__all__ = ["ProcrastinateJobQueue"]
+__all__ = ["ProcrastinateJobQueue", "TransactionalProcrastinateJobQueue"]
