@@ -7,12 +7,14 @@ dependencies = [
   "boto3>=1.35.90",
   "fastapi>=0.115.6",
   "httpx>=0.27",
+  "langchain-classic>=1.0.8",
   "langchain-community>=0.3.14",
   "langchain-openai>=0.2.14",
   "langchain-text-splitters>=0.3.5",
+  "langfuse>=3.0",
   "pgvector>=0.3.6",
   "procrastinate>=2.9.0",
-  "psycopg[binary]>=3.2.3",
+  "psycopg[binary,pool]>=3.2.3",
   "pwdlib[argon2]>=0.2.1",
   "pydantic-settings>=2.7.1",
   # [crypto] pulls `cryptography` for RS256, needed to verify Google ID tokens locally.
@@ -21,11 +23,13 @@ dependencies = [
   "python-multipart>=0.0.20",
   # Pure Python over lxml/Pillow — no compilation, no ML runtime.
   "python-pptx>=1.0.2",
+  # One client for both environments: local Valkey and the shared production Redis both
+  # speak RESP, and redis-py ships `redis.asyncio`, which the async cache layer needs.
+  "redis>=5.2",
   "sqlalchemy>=2.0.36",
   "structlog>=24.4.0",
   "tiktoken>=0.8.0",
   "uvicorn[standard]>=0.34.0",
-  "valkey>=6.0",
   # 1.x floor: the handler uses the instance API (`YouTubeTranscriptApi().list(...)`) and
   # `youtube_transcript_api.proxies`, neither of which exists in 0.6.x.
   "youtube-transcript-api>=1.2"

@@ -35,7 +35,7 @@ from src.infrastructure.auth import (
     GoogleIdTokenVerifier,
     JwtTokenService,
 )
-from src.infrastructure.cache import ValkeyCache
+from src.infrastructure.cache import RedisCache
 from src.infrastructure.document_parsing import PyMuPDF4LLMAdapter
 from src.infrastructure.langchain_adapters.chat_model import OpenAICompatibleChatAdapter
 from src.infrastructure.langchain_adapters.embeddings import OpenAICompatibleEmbeddingsAdapter
@@ -73,13 +73,13 @@ def build_file_storage(settings: Settings) -> IFileStorage:
 
 # One cache client (and its connection pool) is shared process-wide; tenant isolation is
 # in the KEYS (see infrastructure/cache/keys.py), not in separate client instances.
-_cache: ValkeyCache | None = None
+_cache: RedisCache | None = None
 
 
 def build_cache(settings: Settings) -> ICache:
     global _cache
     if _cache is None:
-        _cache = ValkeyCache(settings.cache_url)
+        _cache = RedisCache(settings.cache_url)
     return _cache
 
 

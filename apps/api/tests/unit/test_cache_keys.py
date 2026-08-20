@@ -3,7 +3,7 @@ from uuid import uuid4
 
 from src.core.exceptions import MissingTenantContextError
 from src.core.tenant_context import reset_tenant_context, set_tenant_context
-from src.infrastructure.cache import ValkeyCache, system_cache_key, tenant_cache_key
+from src.infrastructure.cache import RedisCache, system_cache_key, tenant_cache_key
 
 
 class TenantCacheKeyTests(unittest.TestCase):
@@ -30,13 +30,14 @@ class TenantCacheKeyTests(unittest.TestCase):
         self.assertEqual(system_cache_key("health"), "system:health")
 
 
-class ValkeyCacheDegradationTests(unittest.TestCase):
-    def test_cache_outage_degrades_to_miss(self):
+class RedisCacheDegradationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_cache_outage_degrades_to_miss(self):
         # Unreachable host: get() is a miss, set()/delete() are no-ops — never raise.
-        cache = ValkeyCache("redis://127.0.0.1:6390/0")
-        self.assertIsNone(cache.get("system:x"))
-        cache.set("system:x", "1", ttl_seconds=5)  # must not raise
-        cache.delete("system:x")  # must not raise
+        cache = RedisCache("redis://127.0.0.1:6390/0")
+        self.assertIsNone(await cache.get("system:x"))
+        await cache.set("system:x", "1", ttl_seconds=5)  # must not raise
+        await cache.delete("system:x")  # must not raise
+        await cache.close()
 
 
 if __name__ == "__main__":

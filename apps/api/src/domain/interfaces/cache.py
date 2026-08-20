@@ -4,15 +4,21 @@ from typing import Protocol
 
 
 class ICache(Protocol):
-    """A minimal string cache port. The concrete adapter (Valkey) lives in
-    infrastructure/cache. Implementations are best-effort: a cache outage degrades to a
-    miss, never an error, so the request path never depends on the cache being up."""
+    """A minimal string cache port. The concrete adapter (Redis) lives in
+    infrastructure/cache.
 
-    def get(self, key: str) -> str | None:
+    Async because every caller is: the query path that caches embeddings, rerank results
+    and answers runs on the event loop, and a synchronous round-trip there would block it.
+
+    Implementations are best-effort: a cache outage degrades to a miss, never an error, so
+    the request path never depends on the cache being up.
+    """
+
+    async def get(self, key: str) -> str | None:
         ...
 
-    def set(self, key: str, value: str, ttl_seconds: int | None = None) -> None:
+    async def set(self, key: str, value: str, ttl_seconds: int | None = None) -> None:
         ...
 
-    def delete(self, key: str) -> None:
+    async def delete(self, key: str) -> None:
         ...
