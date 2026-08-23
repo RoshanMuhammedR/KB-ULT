@@ -12,3 +12,6 @@ apps/api/.venv/
 apps/api/uploads/
 *.egg-info/
 *.tsbuildinfo
+
+# Timestamped .env backups. Same credentials as .env, and this repo is public.
+.env.bak.*

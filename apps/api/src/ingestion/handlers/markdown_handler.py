@@ -21,6 +21,10 @@ _HEADER_LEVELS = [("#" * level, f"h{level}") for level in range(1, 7)]
 # Text appearing before the first heading still needs a citable locator.
 _PREAMBLE_SECTION = "Introduction"
 
+# Joins a section's ancestor headings into one locator string. ` > ` reads as a path
+# to a human and survives being embedded as plain text.
+_HEADING_SEPARATOR = " > "
+
 # Used only to find the document's own title (the first real heading, fence-aware) —
 # independent of how the splitter above groups sections, since a heading with no content
 # of its own before its first child heading gets folded into that child's section.
@@ -61,11 +65,11 @@ class MarkdownSourceHandler:
             headers_to_split_on=_HEADER_LEVELS, strip_headers=False
         )
 
-    def acquire(self, asset: KnowledgeAsset) -> RawContent:
-        data = self.file_storage.download(asset.storage_key)
+    async def acquire(self, asset: KnowledgeAsset) -> RawContent:
+        data = await self.file_storage.download(asset.storage_key)
         return RawContent(data=data, mime="text/markdown")
 
-    def parse(self, asset: KnowledgeAsset, raw: RawContent) -> KnowledgeAsset:
+    async def parse(self, asset: KnowledgeAsset, raw: RawContent) -> KnowledgeAsset:
         text = raw.data.decode("utf-8", errors="replace") if isinstance(raw.data, bytes) else raw.data
         cleaned = sanitize_text_for_storage(text)
         if not cleaned.strip():
@@ -113,17 +117,27 @@ class MarkdownSourceHandler:
     def _split_sections(self, text: str) -> list[tuple[str, str]]:
         """Return `[(heading, body)]` in document order.
 
-        Each split's heading is the deepest header currently active — the last entry in
-        its metadata dict, which `MarkdownHeaderTextSplitter` resets whenever a shallower
-        heading recurs, so this always matches the most recently seen heading rather than
-        going stale on the way back up. Text before the first heading gets "Introduction".
+        The heading is the full path to the section, not just its own title:
+        "Billing > Invoices > Late payment" rather than "Late payment". The splitter
+        hands back every currently-active header level in its metadata, and taking only
+        the deepest one threw away exactly the context that disambiguates a generic
+        heading - half the sections in a real document are called something like
+        "Overview" or "Limitations", and on its own that locates nothing.
+
+        The path is what the retrieval layer prefixes to a chunk before embedding, so
+        this is the difference between a chunk that reads "Overview" and one that reads
+        "Billing > Invoices > Overview". Text before the first heading gets
+        "Introduction".
         """
         sections: list[tuple[str, str]] = []
         for document in self._splitter.split_text(text):
             body = document.page_content.strip()
             if not body:
                 continue
-            heading = list(document.metadata.values())[-1] if document.metadata else _PREAMBLE_SECTION
+            # dict order is insertion order, and the splitter inserts shallow-to-deep,
+            # so the values already read as a path from the top of the document down.
+            trail = [str(value).strip() for value in document.metadata.values() if str(value).strip()]
+            heading = _HEADING_SEPARATOR.join(trail) if trail else _PREAMBLE_SECTION
             sections.append((heading, body))
         return sections
 

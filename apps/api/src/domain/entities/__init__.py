@@ -1,4 +1,4 @@
-from src.domain.entities.chunk import Chunk, Embedding, RetrievalResult
+from src.domain.entities.chunk import Chunk, ChunkModality, Embedding, RetrievalResult
 from src.domain.entities.conversation import Conversation, Message, MessageRole
 from src.domain.entities.ingestion_job import IngestionJob, JobStatus
 from src.domain.entities.job_event import JobEvent
@@ -10,6 +10,7 @@ from src.domain.entities.source import SourceMetadata, SourceType
 __all__ = [
     "AssetStatus",
     "Chunk",
+    "ChunkModality",
     "Conversation",
     "Embedding",
     "IngestionJob",

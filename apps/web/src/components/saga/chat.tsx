@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
+  Check,
   ChevronRight,
   Copy,
   Info,
@@ -26,7 +27,14 @@ import {
   SourceIcon,
   cn
 } from "@kb/ui";
-import type { Citation, Conversation, ConversationSummary, Message } from "@/types/api";
+import type {
+  AnswerStatus,
+  Citation,
+  Conversation,
+  ConversationSummary,
+  GroundingReport,
+  Message
+} from "@/types/api";
 import { useConversationsStore } from "@/stores/conversations-store";
 import { useSourcesStore } from "@/stores/sources-store";
 import { toast } from "@/stores/toast-store";
@@ -344,7 +352,8 @@ export function MessageBlock({
           aria-live={streaming ? "polite" : undefined}
         >
           {message.content === "" && streaming ? (
-            <div className="space-y-2">
+            <div className="space-y-3">
+              <AnswerProgress status={message.status} />
               <Skeleton className="w-3/4" />
               <Skeleton className="w-full" />
               <Skeleton className="w-2/3" />
@@ -362,11 +371,12 @@ export function MessageBlock({
         </div>
       )}
 
-      {!streaming && message.citations.length > 0 ? (
+      {message.citations.length > 0 ? (
         <CitationSet
           citations={message.citations}
           messageId={message.id}
           conversationId={conversationId}
+          grounding={message.grounding}
         />
       ) : null}
 
@@ -418,20 +428,77 @@ function SmallAction({
   );
 }
 
+/**
+ * What the pipeline is doing before the first token arrives.
+ *
+ * The answer takes a few seconds — retrieval, judging, possibly a second hop — and silence
+ * is the failure mode users actually notice. Naming the stage turns a wait into progress.
+ */
+function AnswerProgress({ status }: { status?: AnswerStatus | null }) {
+  if (!status) return null;
+
+  const label =
+    status.stage === "resolving"
+      ? "Understanding the question"
+      : status.stage === "searching"
+        ? "Searching your sources"
+        : status.sources
+          ? `Reading ${status.sources} passage${status.sources === 1 ? "" : "s"}`
+          : "Reading your sources";
+
+  return (
+    <p aria-live="polite" className="text-[13px] text-muted-foreground">
+      {label}…
+    </p>
+  );
+}
+
+/**
+ * Whether each cited claim was actually supported by the passage it points at.
+ *
+ * Absent until the check reports back, which is after the answer has finished streaming —
+ * so this appears rather than blocks. Nothing here is load-bearing: if the connection ended
+ * before the report arrived, the answer stands on its citations as it always did.
+ */
+function VerifiedBadge({ grounding }: { grounding?: GroundingReport | null }) {
+  if (!grounding || grounding.checked === 0) return null;
+
+  if (grounding.verified) {
+    return (
+      <Pill>
+        <Check className="size-3" aria-hidden /> Claims verified
+      </Pill>
+    );
+  }
+
+  const unsupported = grounding.unsupported.length + grounding.invalid.length;
+  return (
+    <Pill>
+      <Info className="size-3" aria-hidden />
+      {unsupported} claim{unsupported === 1 ? "" : "s"} not supported by the cited passage
+    </Pill>
+  );
+}
+
 export function CitationSet({
   citations,
   messageId,
-  conversationId
+  conversationId,
+  grounding
 }: {
   citations: Citation[];
   messageId: string;
   conversationId?: string;
+  grounding?: GroundingReport | null;
 }) {
   return (
     <section aria-label="Sources for this answer" className="space-y-2">
-      <h3 className="label-caps text-muted-foreground">
-        {citations.length} cited {citations.length === 1 ? "passage" : "passages"}
-      </h3>
+      <div className="flex items-center gap-2">
+        <h3 className="label-caps text-muted-foreground">
+          {citations.length} cited {citations.length === 1 ? "passage" : "passages"}
+        </h3>
+        <VerifiedBadge grounding={grounding} />
+      </div>
       {citations.map((citation, index) => (
         <CitationCard
           key={`${citation.asset_id}-${citation.chunk_index}`}

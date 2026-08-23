@@ -16,22 +16,22 @@ queue over Redis/RabbitMQ, where the same guarantee needs a Transactional Outbox
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-from contextlib import contextmanager
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 # Stored on `Session.info` rather than a contextvar: the scope we mean is exactly "this
 # Session", and a session is already the thing being passed around. A contextvar would also
-# leak across the anyio threadpool hops that sync routes and streaming generators make.
+# leak across the task boundaries the streaming and worker paths create.
 _FLAG = "kb_in_unit_of_work"
 
 
-def in_unit_of_work(db: Session) -> bool:
+def in_unit_of_work(db: AsyncSession) -> bool:
     return bool(db.info.get(_FLAG))
 
 
-def commit_or_flush(db: Session) -> None:
+async def commit_or_flush(db: AsyncSession) -> None:
     """Commit, unless a `unit_of_work` is in charge — then just flush.
 
     Every repository's `_commit()` delegates here, so wrapping a use case in
@@ -41,18 +41,18 @@ def commit_or_flush(db: Session) -> None:
         # Send the SQL so later statements in the same transaction see the rows (and so
         # constraint violations surface here, at the offending write), but leave durability
         # to the enclosing unit of work.
-        db.flush()
+        await db.flush()
         return
     try:
-        db.commit()
+        await db.commit()
     except Exception:
         # A failed flush leaves the Session transaction unusable until it is rolled back.
-        db.rollback()
+        await db.rollback()
         raise
 
 
-@contextmanager
-def unit_of_work(db: Session) -> Iterator[None]:
+@asynccontextmanager
+async def unit_of_work(db: AsyncSession) -> AsyncIterator[None]:
     """Run a block of repository writes as ONE transaction.
 
     Re-entrant: a nested call joins the outer unit rather than committing early, so a
@@ -65,22 +65,22 @@ def unit_of_work(db: Session) -> Iterator[None]:
     db.info[_FLAG] = True
     try:
         yield
-        db.commit()
+        await db.commit()
     except Exception:
-        db.rollback()
+        await db.rollback()
         raise
     finally:
         db.info.pop(_FLAG, None)
 
 
 class SessionAtomicScope:
-    """`IAtomicScope` implementation over a SQLAlchemy `Session`.
+    """`IAtomicScope` implementation over a SQLAlchemy `AsyncSession`.
 
     Exists so the application layer can say "these writes are one transaction" without
     importing SQLAlchemy — the same reason `IUnitOfWork` exists for the auth service.
     """
 
-    def __init__(self, db: Session) -> None:
+    def __init__(self, db: AsyncSession) -> None:
         self.db = db
 
     def atomic(self):

@@ -18,10 +18,10 @@ class IUnitOfWork(Protocol):
     """Transaction control, so a use case can make several repository writes atomic
     without depending on SQLAlchemy. The request/worker `Session` satisfies it."""
 
-    def commit(self) -> None:
+    async def commit(self) -> None:
         ...
 
-    def rollback(self) -> None:
+    async def rollback(self) -> None:
         ...
 
 

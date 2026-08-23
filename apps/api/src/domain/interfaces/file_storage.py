@@ -4,10 +4,10 @@ from typing import BinaryIO, Protocol
 
 
 class IFileStorage(Protocol):
-    def upload(self, key: str, file_data: bytes | BinaryIO, content_type: str) -> str:
+    async def upload(self, key: str, file_data: bytes | BinaryIO, content_type: str) -> str:
         """Store file data and return the object key."""
 
-    def download(self, key: str) -> bytes:
+    async def download(self, key: str) -> bytes:
         """Read an object's bytes back.
 
         Used by the ingestion worker to re-fetch the source instead of carrying
@@ -15,7 +15,7 @@ class IFileStorage(Protocol):
         retryable without the client re-uploading the file.
         """
 
-    def get_presigned_url(self, key: str, expires_in_seconds: int = 60) -> str:
+    async def get_presigned_url(self, key: str, expires_in_seconds: int = 60) -> str:
         """Return a temporary signed URL for reading an object.
 
         Short-lived by default: the URL carries its own authorization, so anyone holding it
@@ -23,7 +23,7 @@ class IFileStorage(Protocol):
         a redirect and start a download, and short enough that a leaked URL is worthless.
         """
 
-    def get_presigned_put_url(self, key: str, content_type: str, expires_in_seconds: int = 900) -> str:
+    async def get_presigned_put_url(self, key: str, content_type: str, expires_in_seconds: int = 900) -> str:
         """Return a temporary signed URL the client can PUT an object to directly.
 
         The counterpart of `get_presigned_url`, and the reason it exists: with one of these
@@ -35,7 +35,7 @@ class IFileStorage(Protocol):
         store something else.
         """
 
-    def object_size(self, key: str) -> int | None:
+    async def object_size(self, key: str) -> int | None:
         """Size in bytes of the object at this key, or None if there isn't one.
 
         Needed when the upload happened out-of-band: before recording an asset that claims
@@ -44,5 +44,5 @@ class IFileStorage(Protocol):
         through here.
         """
 
-    def delete(self, key: str) -> None:
+    async def delete(self, key: str) -> None:
         """Delete an object by key."""

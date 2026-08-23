@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from typing import Any, Callable
@@ -169,14 +170,16 @@ class YouTubeSourceHandler:
         self.transcript_fetcher = transcript_fetcher
         self.title_fetcher = title_fetcher
 
-    def acquire(self, asset: KnowledgeAsset) -> RawContent:
+    async def acquire(self, asset: KnowledgeAsset) -> RawContent:
         video_id = asset.metadata.get("video_id")
         source_uri = asset.metadata.get("source_uri") or f"https://www.youtube.com/watch?v={video_id}"
         if not video_id:
             raise ValueError("YouTube asset is missing its video_id")
 
         try:
-            transcript = self.transcript_fetcher(video_id)
+            # Both fetchers are blocking network calls behind a sync callable seam that
+            # the tests substitute; keep that seam and move the blocking part off the loop.
+            transcript = await asyncio.to_thread(self.transcript_fetcher, video_id)
         except TranscriptUnavailable:
             # Already carries a user-facing message from `_describe_fetch_error`; wrapping
             # it again would bury the actionable part behind a generic prefix.
@@ -187,11 +190,11 @@ class YouTubeSourceHandler:
         if not transcript:
             raise ValueError("YouTube video has no transcript/captions available")
 
-        title = self.title_fetcher(source_uri)
+        title = await asyncio.to_thread(self.title_fetcher, source_uri)
         payload = json.dumps({"transcript": transcript, "title": title, "source_uri": source_uri})
         return RawContent(data=payload, mime="application/json")
 
-    def parse(self, asset: KnowledgeAsset, raw: RawContent) -> KnowledgeAsset:
+    async def parse(self, asset: KnowledgeAsset, raw: RawContent) -> KnowledgeAsset:
         data = raw.data if isinstance(raw.data, str) else raw.data.decode("utf-8")
         payload = json.loads(data)
         transcript: list[dict] = payload["transcript"]

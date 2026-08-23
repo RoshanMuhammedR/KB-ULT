@@ -3,7 +3,8 @@ from __future__ import annotations
 from uuid import UUID, uuid4
 
 from sqlalchemy import delete, func, select
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased, joinedload
 
 from src.core.text import sanitize_json_for_storage, sanitize_text_for_storage
 from src.domain.entities import AssetStatus, Chunk, Embedding
@@ -13,11 +14,11 @@ from src.infrastructure.repositories.unit_of_work import commit_or_flush
 
 
 class ChunkRepository:
-    def __init__(self, db: Session) -> None:
+    def __init__(self, db: AsyncSession) -> None:
         self.db = db
 
-    def replace_for_asset(self, asset_id: UUID, chunks: list[Chunk]) -> list[Chunk]:
-        self.db.execute(delete(ChunkModel).where(ChunkModel.knowledge_asset_id == asset_id))
+    async def replace_for_asset(self, asset_id: UUID, chunks: list[Chunk]) -> list[Chunk]:
+        await self.db.execute(delete(ChunkModel).where(ChunkModel.knowledge_asset_id == asset_id))
         models: list[ChunkModel] = []
         for chunk in chunks:
             model = ChunkModel(
@@ -29,44 +30,71 @@ class ChunkRepository:
             )
             self.db.add(model)
             models.append(model)
-        self._commit()
+        await self._commit()
         for model in models:
-            self.db.refresh(model)
+            await self.db.refresh(model)
         return [chunk_to_domain(model) for model in models]
 
-    def count_by_asset(self, asset_ids: list[UUID]) -> dict[UUID, int]:
+    @staticmethod
+    def _leaves_only(stmt):
+        """Restrict a chunk query to leaves — the passages a reader actually sees.
+
+        Parent sections live in the same table but are an internal retrieval artefact: they
+        are never embedded, never cited, and counting them would inflate a source's passage
+        count by however many sections it has.
+
+        Expressed as "has no children" rather than "parent_id IS NOT NULL" so that chunks
+        written before the hierarchy existed still count as leaves — they have no parent and
+        no children, and they are exactly what the reader used to see.
+        """
+        child = aliased(ChunkModel)
+        return stmt.where(
+            ~select(child.id).where(child.parent_id == ChunkModel.id).exists()
+        )
+
+    async def count_by_asset(self, asset_ids: list[UUID]) -> dict[UUID, int]:
         """Passage counts for many assets in one query — the library list needs all of them."""
         if not asset_ids:
             return {}
-        rows = self.db.execute(
-            select(ChunkModel.knowledge_asset_id, func.count(ChunkModel.id))
-            .where(ChunkModel.knowledge_asset_id.in_(asset_ids))
-            .group_by(ChunkModel.knowledge_asset_id)
-        ).all()
+        rows = (await self.db.execute(
+            self._leaves_only(
+                select(ChunkModel.knowledge_asset_id, func.count(ChunkModel.id))
+                .where(ChunkModel.knowledge_asset_id.in_(asset_ids))
+            ).group_by(ChunkModel.knowledge_asset_id)
+        )).all()
         return {asset_id: int(count) for asset_id, count in rows}
 
-    def list_for_asset(self, asset_id: UUID) -> list[Chunk]:
-        rows = self.db.scalars(
+    async def list_for_asset(self, asset_id: UUID) -> list[Chunk]:
+        rows = (await self.db.scalars(
+            self._leaves_only(
+                select(ChunkModel).where(ChunkModel.knowledge_asset_id == asset_id)
+            ).order_by(ChunkModel.chunk_index)
+        )).all()
+        return [chunk_to_domain(row) for row in rows]
+
+    async def list_all_for_asset(self, asset_id: UUID) -> list[Chunk]:
+        """Every chunk including parents — for the pipeline resuming after chunking."""
+        rows = (await self.db.scalars(
             select(ChunkModel)
             .where(ChunkModel.knowledge_asset_id == asset_id)
             .order_by(ChunkModel.chunk_index)
-        ).all()
+        )).all()
         return [chunk_to_domain(row) for row in rows]
 
-    def _commit(self) -> None:
+    async def _commit(self) -> None:
         # Commits on its own, unless the caller opened a `unit_of_work` — then this
         # flushes and the enclosing scope owns the single COMMIT. See unit_of_work.py.
-        commit_or_flush(self.db)
+        await commit_or_flush(self.db)
 
 
 class EmbeddingRepository:
-    def __init__(self, db: Session) -> None:
+    def __init__(self, db: AsyncSession) -> None:
         self.db = db
 
-    def replace_for_chunks(self, chunks: list[Chunk], embeddings: list[Embedding]) -> None:
+    async def replace_for_chunks(self, chunks: list[Chunk], embeddings: list[Embedding]) -> None:
         chunk_ids = [chunk.id for chunk in chunks]
         if chunk_ids:
-            self.db.execute(delete(EmbeddingModel).where(EmbeddingModel.chunk_id.in_(chunk_ids)))
+            await self.db.execute(delete(EmbeddingModel).where(EmbeddingModel.chunk_id.in_(chunk_ids)))
         for chunk, embedding in zip(chunks, embeddings, strict=True):
             self.db.add(
                 EmbeddingModel(
@@ -77,14 +105,14 @@ class EmbeddingRepository:
                     vector=embedding.vector,
                 )
             )
-        self._commit()
+        await self._commit()
 
-    def _commit(self) -> None:
+    async def _commit(self) -> None:
         # Commits on its own, unless the caller opened a `unit_of_work` — then this
         # flushes and the enclosing scope owns the single COMMIT. See unit_of_work.py.
-        commit_or_flush(self.db)
+        await commit_or_flush(self.db)
 
-    def query_ready_chunks(
+    async def query_ready_chunks(
         self,
         query_embedding: list[float],
         knowledge_base_id: UUID,
@@ -92,14 +120,14 @@ class EmbeddingRepository:
     ) -> list[tuple[ChunkModel, KnowledgeAssetModel, float]]:
         """Dense arm: nearest neighbours by cosine similarity."""
         distance = EmbeddingModel.vector.cosine_distance(query_embedding)
-        rows = self.db.execute(
+        rows = (await self.db.execute(
             self._ready_chunks_base(knowledge_base_id, distance)
             .order_by(distance)
             .limit(top_k)
-        ).all()
+        )).all()
         return [(chunk, asset, float(score)) for chunk, asset, score in rows]
 
-    def query_ready_chunks_lexical(
+    async def query_ready_chunks_lexical(
         self,
         query_embedding: list[float],
         query_text: str,
@@ -125,12 +153,12 @@ class EmbeddingRepository:
 
         distance = EmbeddingModel.vector.cosine_distance(query_embedding)
         tsquery = func.websearch_to_tsquery("english", query_text)
-        rows = self.db.execute(
+        rows = (await self.db.execute(
             self._ready_chunks_base(knowledge_base_id, distance)
             .where(ChunkModel.fts.op("@@")(tsquery))
             .order_by(func.ts_rank_cd(ChunkModel.fts, tsquery).desc())
             .limit(top_k)
-        ).all()
+        )).all()
         return [(chunk, asset, float(score)) for chunk, asset, score in rows]
 
     @staticmethod

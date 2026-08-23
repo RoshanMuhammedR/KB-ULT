@@ -3,7 +3,13 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.composition import build_authenticators
+from src.core.event_loop import configure_event_loop
+
+# Must run before uvicorn creates the loop: on Windows the default policy cannot drive
+# psycopg's async mode at all. No-op on Linux.
+configure_event_loop()
+
+from src.composition import build_authenticators  # noqa: E402
 from src.core.config import get_settings
 from src.core.logging import configure_logging
 from src.http.error_handlers import register_error_handlers
@@ -20,6 +26,7 @@ from src.http.routes.health import router as health_router
 from src.http.routes.jobs import router as jobs_router
 from src.http.routes.knowledge_bases import router as knowledge_bases_router
 from src.infrastructure.database.session import engine
+from src.infrastructure.observability import tracing
 from src.infrastructure.database.tenancy import assert_rls_enforced
 from src.infrastructure.queue.app import app as queue_app
 
@@ -33,13 +40,21 @@ async def lifespan(_: FastAPI):
     # bypasses RLS, tenant isolation is running on one layer instead of two and nothing
     # about the running system would ever show it. Raises here (killing the boot) when
     # REQUIRE_RLS is set; warns loudly otherwise.
-    assert_rls_enforced(engine, required=settings.require_rls)
+    await assert_rls_enforced(engine, required=settings.require_rls)
 
     # Open the Procrastinate connector for the lifetime of the web process so the
     # synchronous `.defer()` in request handlers has a live connection pool. Without
     # this, deferring raises AppNotOpen. The worker process opens the app on its own.
-    with queue_app.open():
+    async with queue_app.open_async():
         yield
+
+    # Push any buffered spans before the process goes away, or the last question of a
+    # deploy is never traced.
+    tracing.flush()
+
+    # Release the pools this process owns. Without this a reload or a graceful shutdown
+    # leaves connections open until Postgres times them out.
+    await engine.dispose()
 
 
 app = FastAPI(title="AI Knowledge Base PDF MVP", lifespan=lifespan)

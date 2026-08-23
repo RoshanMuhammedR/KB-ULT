@@ -20,8 +20,11 @@ _RETRY = RetryStrategy(max_attempts=3, exponential_wait=5)
 
 @app.task(name="ingest_asset", retry=_RETRY)
 @tenant_task
-def ingest_asset(asset_id: str) -> None:
+async def ingest_asset(asset_id: str) -> None:
     """Worker entrypoint: run the ingestion pipeline for one asset.
+
+    Procrastinate awaits coroutine tasks natively, so this is a plain `async def` — no
+    bridging layer, and the ingestion pipeline's own awaits reach the driver directly.
 
     `@tenant_task` (outer of the body) rebuilds tenant context from the job's
     tenant_id/user_id before this runs, so the worker-scoped session filters exactly
@@ -34,6 +37,6 @@ def ingest_asset(asset_id: str) -> None:
     from src.composition import build_ingestion_service
 
     logger.info("ingest_task_received", asset_id=asset_id)
-    with session_scope() as db:
+    async with session_scope() as db:
         service = build_ingestion_service(db, get_settings())
-        service.process_ingestion(UUID(asset_id))
+        await service.process_ingestion(UUID(asset_id))

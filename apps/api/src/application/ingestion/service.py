@@ -90,7 +90,7 @@ class IngestionService:
 
     # ------------------------------------------------------------------ request path
 
-    def enqueue_ingestion(
+    async def enqueue_ingestion(
         self,
         file_data: bytes,
         filename: str,
@@ -109,7 +109,7 @@ class IngestionService:
         # Fail fast in the request if we can't handle this source type at all.
         source_type = source_type_for_filename(safe_filename)
         self.source_handler_registry.get(source_type)
-        knowledge_base = self.kb_repo.ensure_default()
+        knowledge_base = await self.kb_repo.ensure_default()
         asset_id = uuid4()
         # Tenant-prefixed so the bucket layout mirrors the isolation boundary the database
         # already enforces. This used to be a `user_id: str = "anonymous"` default parameter
@@ -118,7 +118,7 @@ class IngestionService:
         # parameter means a caller cannot silently forget it: `current_tenant_id()` fails
         # closed when no tenant is bound.
         storage_key = f"{current_tenant_id()}/{asset_id}/{safe_filename}"
-        stored_key = self.file_storage.upload(
+        stored_key = await self.file_storage.upload(
             key=storage_key,
             file_data=file_data,
             content_type=content_type or "application/octet-stream",
@@ -127,7 +127,7 @@ class IngestionService:
         # The object is uploaded before any of this, deliberately: an S3 round-trip inside
         # an open transaction would hold a database connection for its duration, and an
         # orphaned object is harmless (nothing references it) where an orphaned row is not.
-        asset = self._persist_queued_asset(
+        asset = await self._persist_queued_asset(
             knowledge_base_id=knowledge_base.id,
             filename=safe_filename,
             build=lambda lineage_id, version: KnowledgeAsset(
@@ -151,7 +151,7 @@ class IngestionService:
         logger.info("ingestion_enqueued", knowledge_asset_id=str(asset.id), filename=safe_filename)
         return asset
 
-    def prepare_direct_upload(
+    async def prepare_direct_upload(
         self,
         filename: str,
         content_type: str | None = None,
@@ -184,7 +184,7 @@ class IngestionService:
 
         asset_id = uuid4()
         storage_key = f"{current_tenant_id()}/{asset_id}/{safe_filename}"
-        upload_url = self.file_storage.get_presigned_put_url(
+        upload_url = await self.file_storage.get_presigned_put_url(
             storage_key, content_type or "application/octet-stream"
         )
         logger.info(
@@ -192,7 +192,7 @@ class IngestionService:
         )
         return asset_id, storage_key, upload_url
 
-    def complete_direct_upload(
+    async def complete_direct_upload(
         self,
         asset_id: UUID,
         filename: str,
@@ -213,7 +213,7 @@ class IngestionService:
         self.source_handler_registry.get(source_type)
 
         storage_key = f"{current_tenant_id()}/{asset_id}/{safe_filename}"
-        size_bytes = self.file_storage.object_size(storage_key)
+        size_bytes = await self.file_storage.object_size(storage_key)
         if size_bytes is None:
             raise ValueError("The uploaded file was not found in storage. Please try again.")
 
@@ -225,11 +225,11 @@ class IngestionService:
         except ValueError:
             # Nothing references the object yet, so it is pure garbage — drop it rather
             # than leave the tenant paying for storage on a file we refused.
-            self.file_storage.delete(storage_key)
+            await self.file_storage.delete(storage_key)
             raise
 
-        knowledge_base = self.kb_repo.ensure_default()
-        asset = self._persist_queued_asset(
+        knowledge_base = await self.kb_repo.ensure_default()
+        asset = await self._persist_queued_asset(
             knowledge_base_id=knowledge_base.id,
             filename=safe_filename,
             build=lambda lineage_id, version: KnowledgeAsset(
@@ -258,7 +258,7 @@ class IngestionService:
         )
         return asset
 
-    def enqueue_url(self, url: str) -> KnowledgeAsset:
+    async def enqueue_url(self, url: str) -> KnowledgeAsset:
         """Fast path (HTTP) for URL sources like YouTube — the file-less sibling of
         `enqueue_ingestion`.
 
@@ -272,10 +272,10 @@ class IngestionService:
         # Fail fast in the request if we can't handle this source type at all.
         self.source_handler_registry.get(source_type)
         filename, source_uri, extra = identity_for_url(source_type, url)
-        knowledge_base = self.kb_repo.ensure_default()
+        knowledge_base = await self.kb_repo.ensure_default()
         asset_id = uuid4()
 
-        asset = self._persist_queued_asset(
+        asset = await self._persist_queued_asset(
             knowledge_base_id=knowledge_base.id,
             filename=filename,
             build=lambda lineage_id, version: KnowledgeAsset(
@@ -300,16 +300,16 @@ class IngestionService:
         logger.info("ingestion_url_enqueued", knowledge_asset_id=str(asset.id), source_uri=source_uri)
         return asset
 
-    def retry(self, asset_id: UUID) -> KnowledgeAsset:
+    async def retry(self, asset_id: UUID) -> KnowledgeAsset:
         """Re-enqueue a failed asset. No re-upload needed — the worker re-acquires the
         source from storage, resuming from the step that failed."""
-        asset = self.asset_repo.get(asset_id)
+        asset = await self.asset_repo.get(asset_id)
         if asset is None:
             raise ValueError(f"KnowledgeAsset not found: {asset_id}")
         if asset.status != AssetStatus.FAILED:
             return asset
 
-        job = self.job_repo.latest_for_asset(asset_id)
+        job = await self.job_repo.latest_for_asset(asset_id)
         # The asset's FAILED status alone is not enough to say nothing is running. The
         # pipeline marks the asset FAILED *before* re-raising, and the queue's own
         # RetryStrategy only re-schedules after that — so between those two moments a
@@ -327,18 +327,18 @@ class IngestionService:
             )
             return asset
 
-        with self.atomic_scope.atomic():
+        async with self.atomic_scope.atomic():
             if job is not None:
-                self.job_repo.reset_for_retry(job.id)
+                await self.job_repo.reset_for_retry(job.id)
             else:
                 # Older asset predating the jobs table: create a fresh job for it.
-                job = self.job_repo.create(IngestionJob(asset_id=asset_id))
+                job = await self.job_repo.create(IngestionJob(asset_id=asset_id))
 
             asset.status = AssetStatus.QUEUED
             asset.error_message = None
-            self.asset_repo.update_from_domain(asset)
-            self._enqueue(asset_id)
-            self._record(asset, "retry", "Retry re-enqueued", job_id=job.id if job else None)
+            await self.asset_repo.update_from_domain(asset)
+            await self._enqueue(asset_id)
+            await self._record(asset, "retry", "Retry re-enqueued", job_id=job.id if job else None)
         logger.info("ingestion_retry_enqueued", knowledge_asset_id=str(asset_id))
         return asset
 
@@ -375,7 +375,7 @@ class IngestionService:
             f"{round(limit / (1024 * 1024))} MB — try a shorter recording."
         )
 
-    def _persist_queued_asset(
+    async def _persist_queued_asset(
         self,
         *,
         knowledge_base_id: UUID,
@@ -401,15 +401,15 @@ class IngestionService:
         """
         for attempts_left in (1, 0):
             try:
-                with self.atomic_scope.atomic():
-                    previous = self.asset_repo.latest_for_filename(knowledge_base_id, filename)
+                async with self.atomic_scope.atomic():
+                    previous = await self.asset_repo.latest_for_filename(knowledge_base_id, filename)
                     lineage_id = previous.lineage_id if previous else uuid4()
                     version = previous.version + 1 if previous else 1
 
-                    asset = self.asset_repo.create_pending(build(lineage_id, version))
-                    job = self.job_repo.create(IngestionJob(asset_id=asset.id))
-                    self._enqueue(asset.id)
-                    self._record(asset, "queued", event_message, job_id=job.id)
+                    asset = await self.asset_repo.create_pending(build(lineage_id, version))
+                    job = await self.job_repo.create(IngestionJob(asset_id=asset.id))
+                    await self._enqueue(asset.id)
+                    await self._record(asset, "queued", event_message, job_id=job.id)
                     return asset
             except DuplicateAssetVersionError:
                 # One retry, not a loop: a second conflict means something other than a
@@ -419,16 +419,16 @@ class IngestionService:
                 logger.info("ingestion_version_conflict_retrying", filename=filename)
         raise AssertionError("unreachable")  # pragma: no cover
 
-    def _enqueue(self, asset_id: UUID) -> None:
+    async def _enqueue(self, asset_id: UUID) -> None:
         # Enqueue carries the current tenant/user so the worker can rebuild context.
         # Runs inside a tenant-scoped request, so the contextvars are set.
-        self.job_queue.enqueue_ingestion(
+        await self.job_queue.enqueue_ingestion(
             asset_id, tenant_id=current_tenant_id(), user_id=current_user_id()
         )
 
     # ------------------------------------------------------------------- worker path
 
-    def process_ingestion(self, asset_id: UUID) -> KnowledgeAsset:
+    async def process_ingestion(self, asset_id: UUID) -> KnowledgeAsset:
         """Slow path (worker): run the full pipeline for one asset.
 
         Marks the job running, then runs the state machine (which acquires the source via
@@ -436,23 +436,23 @@ class IngestionService:
         re-raises `IngestionError` so the queue engine can retry — the asset keeps its
         `failed_step` so the retry resumes rather than starting over.
         """
-        asset = self.asset_repo.get(asset_id)
+        asset = await self.asset_repo.get(asset_id)
         if asset is None:
             raise ValueError(f"KnowledgeAsset not found: {asset_id}")
 
-        job = self.job_repo.latest_for_asset(asset_id)
+        job = await self.job_repo.latest_for_asset(asset_id)
         job_id = job.id if job is not None else None
         if job is not None:
-            self.job_repo.mark_running(job.id)
-        self._record(asset, "running", f"Attempt {job.attempts + 1 if job else 1} started", job_id=job_id)
+            await self.job_repo.mark_running(job.id)
+        await self._record(asset, "running", f"Attempt {job.attempts + 1 if job else 1} started", job_id=job_id)
 
         handler = self.source_handler_registry.get(SourceType(asset.source_type))
-        result = self._run_pipeline(asset, handler, job_id)
+        result = await self._run_pipeline(asset, handler, job_id)
 
         if result.status == AssetStatus.FAILED:
             error = result.error_message or "ingestion failed"
             if job is not None:
-                failed = self.job_repo.mark_failed(job.id, error)
+                failed = await self.job_repo.mark_failed(job.id, error)
                 # Retries are automatic and quiet; running out of them is not. There is no
                 # dead-letter queue to move the job to — Procrastinate leaves an exhausted
                 # job sitting in `failed` — so the terminal attempt gets its own error-level
@@ -460,7 +460,7 @@ class IngestionService:
                 # aggregator can alert on. Without this, the only signal that a source will
                 # never become ready is a user noticing it never became ready.
                 if failed.attempts >= failed.max_attempts:
-                    self._record(
+                    await self._record(
                         result,
                         "dead_letter",
                         f"Ingestion failed permanently after {failed.attempts} attempts",
@@ -480,10 +480,10 @@ class IngestionService:
             raise IngestionError(error)
 
         if job is not None:
-            self.job_repo.mark_succeeded(job.id)
+            await self.job_repo.mark_succeeded(job.id)
         return result
 
-    def _run_pipeline(
+    async def _run_pipeline(
         self,
         asset: KnowledgeAsset,
         handler: ISourceHandler,
@@ -500,8 +500,8 @@ class IngestionService:
                 asset.status = AssetStatus.EXTRACTING
                 asset.failed_step = None
                 asset.error_message = None
-                self.asset_repo.update_from_domain(asset)
-                self._record(asset, step, "Extracting source content", job_id=job_id)
+                await self.asset_repo.update_from_domain(asset)
+                await self._record(asset, step, "Extracting source content", job_id=job_id)
                 logger.info("ingestion_step", step=step, knowledge_asset_id=str(asset.id), status=asset.status)
                 # Acquire happens here (inside the try) so a fetch failure — e.g. a
                 # YouTube video with no captions — routes through the FAILED path below
@@ -509,38 +509,54 @@ class IngestionService:
                 # so a retry past extraction skips re-acquiring.
                 raw = handler.acquire(asset)
                 asset = handler.parse(asset, raw)
-                self.asset_repo.update_from_domain(asset)
+                await self.asset_repo.update_from_domain(asset)
 
             step = "chunking"
             if asset.failed_step in (None, "chunking"):
                 asset.status = AssetStatus.CHUNKING
                 asset.failed_step = None
                 asset.error_message = None
-                self.asset_repo.update_from_domain(asset)
-                self._record(asset, step, "Splitting into chunks", job_id=job_id)
+                await self.asset_repo.update_from_domain(asset)
+                await self._record(asset, step, "Splitting into chunks", job_id=job_id)
                 logger.info("ingestion_step", step=step, knowledge_asset_id=str(asset.id), status=asset.status)
-                chunks = self.chunker.chunk(asset)
+                chunks = await self.chunker.chunk(asset)
                 if not chunks:
                     raise ValueError("Source produced no indexable text chunks")
-                chunks = self.chunk_repo.replace_for_asset(asset.id, chunks)
+                chunks = await self.chunk_repo.replace_for_asset(asset.id, chunks)
             else:
-                chunks = self.chunk_repo.list_for_asset(asset.id)
+                # `list_all_for_asset`, not `list_for_asset`: the latter returns leaves only
+                # (what a reader sees), and a resumed run needs the parents too.
+                chunks = await self.chunk_repo.list_all_for_asset(asset.id)
 
             step = "embedding"
             asset.status = AssetStatus.EMBEDDING
-            self.asset_repo.update_from_domain(asset)
-            self._record(asset, step, "Embedding chunks", job_id=job_id, data={"chunk_count": len(chunks)})
-            logger.info("ingestion_step", step=step, knowledge_asset_id=str(asset.id), status=asset.status, chunk_count=len(chunks))
-            embeddings = self.embedding_provider.embed_texts([chunk.text for chunk in chunks])
-            self.vector_store.upsert_embeddings(asset, chunks, embeddings)
+            await self.asset_repo.update_from_domain(asset)
+            # Only children are embedded. A parent section exists to be *read* once its
+            # child matched — embedding it too would put the same passage in the index at
+            # two granularities and let one document win a query twice.
+            searchable = [chunk for chunk in chunks if not chunk.is_parent]
+            await self._record(
+                asset, step, "Embedding chunks", job_id=job_id,
+                data={"chunk_count": len(searchable), "section_count": len(chunks) - len(searchable)},
+            )
+            logger.info(
+                "ingestion_step", step=step, knowledge_asset_id=str(asset.id),
+                status=asset.status, chunk_count=len(searchable),
+            )
+            # `text_for_embedding` is the enriched text where enrichment ran, and the plain
+            # text where it did not — so this line is correct for both.
+            embeddings = await self.embedding_provider.embed_texts(
+                [chunk.text_for_embedding for chunk in searchable]
+            )
+            await self.vector_store.upsert_embeddings(asset, searchable, embeddings)
 
             step = "persisting"
             asset.status = AssetStatus.READY
             asset.failed_step = None
             asset.error_message = None
-            ready = self.asset_repo.update_from_domain(asset)
-            self.asset_repo.supersede_previous_versions(asset.lineage_id, asset.id)
-            self._record(ready, "ready", "Ingestion complete", job_id=job_id)
+            ready = await self.asset_repo.update_from_domain(asset)
+            await self.asset_repo.supersede_previous_versions(asset.lineage_id, asset.id)
+            await self._record(ready, "ready", "Ingestion complete", job_id=job_id)
             logger.info("ingestion_step", step=step, knowledge_asset_id=str(asset.id), status=ready.status)
             return ready
         except Exception as exc:
@@ -549,12 +565,12 @@ class IngestionService:
             asset.status = AssetStatus.FAILED
             asset.failed_step = step
             asset.error_message = str(exc)
-            failed = self.asset_repo.update_from_domain(asset)
-            self._record(failed, "failed", str(exc), level="error", job_id=job_id, data={"step": step})
+            failed = await self.asset_repo.update_from_domain(asset)
+            await self._record(failed, "failed", str(exc), level="error", job_id=job_id, data={"step": step})
             logger.exception("ingestion_failed", step=step, knowledge_asset_id=str(asset.id), error=str(exc))
             return failed
 
-    def _record(
+    async def _record(
         self,
         asset: KnowledgeAsset,
         event: str,
@@ -567,7 +583,7 @@ class IngestionService:
         # Persist one worker-log line. Best-effort: a logging failure must never break
         # ingestion, so any error here is swallowed (the structlog trail still fires).
         try:
-            self.job_event_repo.append(
+            await self.job_event_repo.append(
                 JobEvent(
                     asset_id=asset.id,
                     job_id=job_id,

@@ -4,7 +4,7 @@ import json
 from uuid import UUID
 
 from sqlalchemy import text
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.domain.interfaces import IJobQueue
 from src.infrastructure.queue.tasks import ingest_asset
@@ -18,15 +18,15 @@ class ProcrastinateJobQueue(IJobQueue):
     this file plus app.py/tasks.py and nothing else.
     """
 
-    def enqueue_ingestion(self, asset_id: UUID, tenant_id: UUID, user_id: UUID) -> None:
+    async def enqueue_ingestion(self, asset_id: UUID, tenant_id: UUID, user_id: UUID) -> None:
         # `.defer()` inserts a row into Procrastinate's Postgres queue; a running
         # worker is woken via LISTEN/NOTIFY. Only ids cross the boundary — including
         # tenant_id/user_id, so the worker's @tenant_task wrapper can rebuild context.
         #
-        # Called synchronously from the FastAPI request. Because the app is never
-        # opened in the web process, the async PsycopgConnector derives a one-off
-        # sync connection for this defer under the hood — no `app.open()` needed.
-        ingest_asset.defer(
+        # `defer_async` uses the connector's own pool, opened for the lifetime of the
+        # process in the FastAPI lifespan. This path is the non-transactional fallback;
+        # the request path uses TransactionalProcrastinateJobQueue below.
+        await ingest_asset.defer_async(
             asset_id=str(asset_id), tenant_id=str(tenant_id), user_id=str(user_id)
         )
 
@@ -78,10 +78,10 @@ class TransactionalProcrastinateJobQueue(IJobQueue):
     single atomic fact, and neither can be observed without the other.
     """
 
-    def __init__(self, db: Session) -> None:
+    def __init__(self, db: AsyncSession) -> None:
         self.db = db
 
-    def enqueue_ingestion(self, asset_id: UUID, tenant_id: UUID, user_id: UUID) -> None:
+    async def enqueue_ingestion(self, asset_id: UUID, tenant_id: UUID, user_id: UUID) -> None:
         # Same payload as `.defer()` — ids only, with tenant_id/user_id carried explicitly
         # so @tenant_task can rebuild context in a worker that has no HTTP request.
         args = {
@@ -89,7 +89,7 @@ class TransactionalProcrastinateJobQueue(IJobQueue):
             "tenant_id": str(tenant_id),
             "user_id": str(user_id),
         }
-        self.db.execute(
+        await self.db.execute(
             _DEFER_SQL,
             {
                 "queue_name": _QUEUE_NAME,

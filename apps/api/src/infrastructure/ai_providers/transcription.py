@@ -6,6 +6,7 @@ image. Transcription runs worker-side, so the timeout is generous rather than re
 
 from __future__ import annotations
 
+import asyncio
 import base64
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -58,7 +59,13 @@ class VoxtralTranscriptionProvider:
         self.model = model
         self.timeout_seconds = timeout_seconds
 
-    def transcribe(self, data: bytes, filename: str) -> Transcript:
+    async def transcribe(self, data: bytes, filename: str) -> Transcript:
+        """Transcribe audio. The httpx calls underneath are synchronous, so the whole
+        thing runs in a worker thread — this is a worker task that legitimately takes
+        minutes, and blocking the loop for that long would stall every other job."""
+        return await asyncio.to_thread(self._transcribe_sync, data, filename)
+
+    def _transcribe_sync(self, data: bytes, filename: str) -> Transcript:
         if not self.api_key:
             raise ValueError("Audio transcription is not configured on this server")
 

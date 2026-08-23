@@ -77,6 +77,10 @@ export type Message = {
   citations: Citation[];
   insufficient_context: boolean;
   created_at: string | null;
+  /** Set only while streaming, so the UI can say what it is doing before tokens arrive. */
+  status?: AnswerStatus | null;
+  /** Set once the post-answer grounding check reports back. */
+  grounding?: GroundingReport | null;
 };
 
 // List view — enough to recognise a thread without loading it.
@@ -160,4 +164,27 @@ export type UploadUrlResponse = {
   storage_key: string;
   expires_in_seconds: number;
   content_type: string;
+};
+/** What the pipeline is doing during the seconds before the first token. */
+export type AnswerStage = "resolving" | "searching" | "reading";
+
+export type AnswerStatus = {
+  stage: AnswerStage;
+  /** Present on "reading": how many passages the answer is being written from. */
+  sources?: number;
+};
+
+/**
+ * The result of checking each cited claim against the passage it cites. Arrives after the
+ * answer has finished streaming, so the badge resolves in place rather than delaying a word
+ * of the response.
+ */
+export type GroundingReport = {
+  verified: boolean;
+  checked: number;
+  supported: number;
+  /** Ordinals whose passage did not support the claim. */
+  unsupported: number[];
+  /** Ordinals the answer cited that were never offered to it. */
+  invalid: number[];
 };

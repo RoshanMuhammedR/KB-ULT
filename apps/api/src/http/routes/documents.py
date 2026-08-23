@@ -39,7 +39,7 @@ from src.http.schemas.jobs import JobEventSchema
 router = APIRouter(prefix="/documents", tags=["documents"])
 
 
-def _megabytes(size_bytes: int) -> int:
+async def _megabytes(size_bytes: int) -> int:
     return round(size_bytes / (1024 * 1024))
 
 
@@ -57,7 +57,7 @@ _DETAIL_URL_TTL_SECONDS = 900
 _UPLOAD_URL_TTL_SECONDS = 900
 
 
-def _to_schema(
+async def _to_schema(
     asset,
     file_storage: IFileStorage | None = None,
     job: IngestionJob | None = None,
@@ -75,14 +75,14 @@ def _to_schema(
     transcript_url = None
     if file_storage is not None:
         if asset.storage_key:
-            download_url = file_storage.get_presigned_url(
+            download_url = await file_storage.get_presigned_url(
                 asset.storage_key, _DETAIL_URL_TTL_SECONDS
             )
         # Audio sources store a readable transcript.md beside the original; the viewer
         # shows it alongside the player.
         transcript_key = (asset.metadata or {}).get("transcript_key")
         if transcript_key:
-            transcript_url = file_storage.get_presigned_url(
+            transcript_url = await file_storage.get_presigned_url(
                 transcript_key, _DETAIL_URL_TTL_SECONDS
             )
     return KnowledgeAssetSchema(
@@ -118,36 +118,36 @@ def _to_schema(
 
 
 @router.get("", response_model=list[KnowledgeAssetSchema])
-def list_assets(
+async def list_assets(
     db: Annotated[Session, Depends(get_db)],
 ) -> list[KnowledgeAssetSchema]:
-    kb = KnowledgeBaseRepository(db).ensure_default()
-    assets = KnowledgeAssetRepository(db).list_current(kb.id)
+    kb = await KnowledgeBaseRepository(db).ensure_default()
+    assets = await KnowledgeAssetRepository(db).list_current(kb.id)
     # One grouped count for the whole list, rather than a query per row.
-    counts = ChunkRepository(db).count_by_asset([asset.id for asset in assets])
+    counts = await ChunkRepository(db).count_by_asset([asset.id for asset in assets])
     # No `file_storage`: the library list renders names and statuses, not file contents, so
     # it needs no signed URLs. Clicking through to a source calls /download for one.
     return [_to_schema(asset, passage_count=counts.get(asset.id, 0)) for asset in assets]
 
 
 @router.get("/{asset_id}", response_model=KnowledgeAssetSchema)
-def get_asset(
+async def get_asset(
     asset_id: UUID,
     db: Annotated[Session, Depends(get_db)],
     file_storage: Annotated[IFileStorage, Depends(get_file_storage)],
 ) -> KnowledgeAssetSchema:
     # Single-asset read used by the frontend to poll ingestion progress. Includes the
     # latest job so the UI can render attempt count and the last error.
-    asset = KnowledgeAssetRepository(db).get(asset_id)
+    asset = await KnowledgeAssetRepository(db).get(asset_id)
     if asset is None:
         raise HTTPException(status_code=404, detail="KnowledgeAsset not found")
-    job = IngestionJobRepository(db).latest_for_asset(asset_id)
-    counts = ChunkRepository(db).count_by_asset([asset.id])
+    job = await IngestionJobRepository(db).latest_for_asset(asset_id)
+    counts = await ChunkRepository(db).count_by_asset([asset.id])
     return _to_schema(asset, file_storage, job, passage_count=counts.get(asset.id, 0))
 
 
 @router.get("/{asset_id}/download")
-def download_asset(
+async def download_asset(
     asset_id: UUID,
     db: Annotated[Session, Depends(get_db)],
     file_storage: Annotated[IFileStorage, Depends(get_file_storage)],
@@ -166,7 +166,7 @@ def download_asset(
     """
     # Repository reads run under the tenant guard, so another tenant's id 404s here rather
     # than reaching the signing call.
-    asset = KnowledgeAssetRepository(db).get(asset_id)
+    asset = await KnowledgeAssetRepository(db).get(asset_id)
     if asset is None:
         raise HTTPException(status_code=404, detail="KnowledgeAsset not found")
 
@@ -181,20 +181,20 @@ def download_asset(
             raise HTTPException(status_code=404, detail="This source has no downloadable file")
 
     return RedirectResponse(
-        url=file_storage.get_presigned_url(key),
+        url=await file_storage.get_presigned_url(key),
         status_code=status.HTTP_307_TEMPORARY_REDIRECT,
         headers={"Cache-Control": "private, max-age=45"},
     )
 
 
 @router.get("/{asset_id}/events", response_model=list[JobEventSchema])
-def list_asset_events(
+async def list_asset_events(
     asset_id: UUID,
     db: Annotated[Session, Depends(get_db)],
 ) -> list[JobEventSchema]:
     # The persisted worker log for one asset (all attempts), expanded in the /jobs
     # dashboard. Ordered oldest-first by the repository.
-    events = IngestionJobEventRepository(db).list_for_asset(asset_id)
+    events = await IngestionJobEventRepository(db).list_for_asset(asset_id)
     return [
         JobEventSchema(
             id=event.id,
@@ -209,7 +209,7 @@ def list_asset_events(
 
 
 @router.get("/{asset_id}/passages", response_model=list[PassageSchema])
-def list_passages(
+async def list_passages(
     asset_id: UUID,
     db: Annotated[Session, Depends(get_db)],
     around: int | None = None,
@@ -221,7 +221,7 @@ def list_passages(
     text either side of it, so a quote can be read in context rather than in isolation.
     Omit `around` to get the whole source.
     """
-    chunks = ChunkRepository(db).list_for_asset(asset_id)
+    chunks = await ChunkRepository(db).list_for_asset(asset_id)
     if around is not None:
         low = around - max(0, window)
         high = around + max(0, window)
@@ -238,7 +238,7 @@ def list_passages(
 
 
 @router.get("/{asset_id}/citations", response_model=list[AssetCitationSchema])
-def list_asset_citations(
+async def list_asset_citations(
     asset_id: UUID,
     db: Annotated[Session, Depends(get_db)],
 ) -> list[AssetCitationSchema]:
@@ -247,7 +247,7 @@ def list_asset_citations(
     A JSONB containment query against the GIN index on `messages.citations`, so it stays
     cheap as the thread history grows.
     """
-    rows = ConversationRepository(db).find_by_cited_asset(asset_id)
+    rows = await ConversationRepository(db).find_by_cited_asset(asset_id)
     return [
         AssetCitationSchema(
             conversation_id=conversation_id,
@@ -262,7 +262,7 @@ def list_asset_citations(
 
 
 @router.post("/upload", response_model=KnowledgeAssetSchema, status_code=status.HTTP_202_ACCEPTED)
-def upload_document(
+async def upload_document(
     ingestion_service: Annotated[IngestionService, Depends(get_ingestion_service)],
     file_storage: Annotated[IFileStorage, Depends(get_file_storage)],
     file: UploadFile = File(...),
@@ -299,7 +299,7 @@ def upload_document(
             )
 
     try:
-        asset = ingestion_service.enqueue_ingestion(
+        asset = await ingestion_service.enqueue_ingestion(
             file_data,
             Path(file.filename).name,
             file.content_type,
@@ -310,7 +310,7 @@ def upload_document(
 
 
 @router.post("/upload-url", response_model=UploadUrlResponse)
-def create_upload_url(
+async def create_upload_url(
     request: UploadUrlRequest,
     ingestion_service: Annotated[IngestionService, Depends(get_ingestion_service)],
 ) -> UploadUrlResponse:
@@ -319,7 +319,7 @@ def create_upload_url(
     # older clients use; this path is what keeps a large file from being a memory ceiling.
     content_type = request.content_type or "application/octet-stream"
     try:
-        asset_id, storage_key, upload_url = ingestion_service.prepare_direct_upload(
+        asset_id, storage_key, upload_url = await ingestion_service.prepare_direct_upload(
             request.filename, content_type, request.size_bytes
         )
     except ValueError as exc:
@@ -338,7 +338,7 @@ def create_upload_url(
     response_model=KnowledgeAssetSchema,
     status_code=status.HTTP_202_ACCEPTED,
 )
-def complete_upload(
+async def complete_upload(
     asset_id: UUID,
     request: CompleteUploadRequest,
     ingestion_service: Annotated[IngestionService, Depends(get_ingestion_service)],
@@ -348,7 +348,7 @@ def complete_upload(
     # rebuilds the storage key from the tenant context and verifies the object is really
     # there, so a client cannot register an asset for a file it never uploaded.
     try:
-        asset = ingestion_service.complete_direct_upload(
+        asset = await ingestion_service.complete_direct_upload(
             asset_id, request.filename, request.content_type
         )
     except ValueError as exc:
@@ -357,7 +357,7 @@ def complete_upload(
 
 
 @router.post("/ingest-url", response_model=KnowledgeAssetSchema, status_code=status.HTTP_202_ACCEPTED)
-def ingest_url(
+async def ingest_url(
     request: IngestUrlRequest,
     ingestion_service: Annotated[IngestionService, Depends(get_ingestion_service)],
     file_storage: Annotated[IFileStorage, Depends(get_file_storage)],
@@ -365,14 +365,14 @@ def ingest_url(
     # URL sources (YouTube today) have no upload: resolve + queue, then return 202. The
     # worker fetches the transcript. Client polls GET /documents/{id} like an upload.
     try:
-        asset = ingestion_service.enqueue_url(request.url)
+        asset = await ingestion_service.enqueue_url(request.url)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return _to_schema(asset, file_storage)
 
 
 @router.post("/{asset_id}/retry", response_model=KnowledgeAssetSchema, status_code=status.HTTP_202_ACCEPTED)
-def retry_asset(
+async def retry_asset(
     asset_id: UUID,
     ingestion_service: Annotated[IngestionService, Depends(get_ingestion_service)],
     file_storage: Annotated[IFileStorage, Depends(get_file_storage)],
@@ -380,7 +380,7 @@ def retry_asset(
     # Re-enqueue a failed asset. No re-upload: the worker re-downloads the source and
     # resumes from the step that failed.
     try:
-        asset = ingestion_service.retry(asset_id)
+        asset = await ingestion_service.retry(asset_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return _to_schema(asset, file_storage)
@@ -388,29 +388,29 @@ def retry_asset(
 
 
 @router.patch("/{asset_id}", response_model=KnowledgeAssetSchema)
-def rename_asset(
+async def rename_asset(
     asset_id: UUID,
     request: RenameKnowledgeAssetRequest,
     db: Annotated[Session, Depends(get_db)],
     file_storage: Annotated[IFileStorage, Depends(get_file_storage)],
 ) -> KnowledgeAssetSchema:
     try:
-        asset = KnowledgeAssetRepository(db).rename(asset_id, request.title)
+        asset = await KnowledgeAssetRepository(db).rename(asset_id, request.title)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return _to_schema(asset, file_storage)
 
 
 @router.delete("/{asset_id}", status_code=204)
-def delete_asset(
+async def delete_asset(
     asset_id: UUID,
     db: Annotated[Session, Depends(get_db)],
     file_storage: Annotated[IFileStorage, Depends(get_file_storage)],
 ) -> None:
     repo = KnowledgeAssetRepository(db)
-    asset = repo.get(asset_id)
+    asset = await repo.get(asset_id)
     if asset is None:
         raise HTTPException(status_code=404, detail="KnowledgeAsset not found")
     if asset.storage_key:
-        file_storage.delete(asset.storage_key)
-    repo.delete(asset_id)
+        await file_storage.delete(asset.storage_key)
+    await repo.delete(asset_id)

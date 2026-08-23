@@ -70,7 +70,12 @@ export function useAsk({
         content: "",
         citations: [],
         insufficient_context: false,
-        created_at: askedAt
+        created_at: askedAt,
+        // The pipeline takes a moment before it has a token to show. Starting at
+        // "resolving" means the first thing the user sees is what is happening, rather
+        // than an empty bubble.
+        status: { stage: "resolving" },
+        grounding: null
       };
 
       setConversation((current) => ({
@@ -108,11 +113,18 @@ export function useAsk({
               patchAssistant({ content: streamed });
             },
             onCitations: (citations: Citation[]) => patchAssistant({ citations }),
+            onStatus: (status) => patchAssistant({ status }),
             onDone: (done) =>
               patchAssistant({
                 id: done.message_id,
-                insufficient_context: done.insufficient_context
-              })
+                insufficient_context: done.insufficient_context,
+                // The answer is complete, so there is no stage left to report.
+                status: null
+              }),
+            // Arrives after `done`, on the same connection: the answer is already on
+            // screen and this resolves its badge in place. If the connection ends first
+            // the badge simply never appears, which is why nothing here is required.
+            onVerified: (grounding) => patchAssistant({ grounding })
           },
           controller.signal
         );

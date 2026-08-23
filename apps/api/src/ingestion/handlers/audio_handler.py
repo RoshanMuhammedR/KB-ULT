@@ -40,9 +40,9 @@ class AudioSourceHandler:
         self.file_storage = file_storage
         self.transcriber = transcriber
 
-    def acquire(self, asset: KnowledgeAsset) -> RawContent:
-        data = self.file_storage.download(asset.storage_key)
-        transcript = self.transcriber.transcribe(data, asset.filename)
+    async def acquire(self, asset: KnowledgeAsset) -> RawContent:
+        data = await self.file_storage.download(asset.storage_key)
+        transcript = await self.transcriber.transcribe(data, asset.filename)
         if not transcript.text.strip():
             raise ValueError("No speech could be found in this audio file")
 
@@ -55,7 +55,7 @@ class AudioSourceHandler:
         )
         return RawContent(data=payload, mime="application/json")
 
-    def parse(self, asset: KnowledgeAsset, raw: RawContent) -> KnowledgeAsset:
+    async def parse(self, asset: KnowledgeAsset, raw: RawContent) -> KnowledgeAsset:
         data = raw.data if isinstance(raw.data, str) else raw.data.decode("utf-8")
         payload = json.loads(data)
 
@@ -75,7 +75,7 @@ class AudioSourceHandler:
             full_text = "\n".join(document.page_content for document in documents)
 
         title = self._title(asset.filename)
-        transcript_key = self._store_transcript(asset, title, documents, timestamps_available)
+        transcript_key = await self._store_transcript(asset, title, documents, timestamps_available)
 
         metadata: dict = {
             "filename": asset.filename,
@@ -108,7 +108,7 @@ class AudioSourceHandler:
 
     # --- Transcript file ----------------------------------------------------------
 
-    def _store_transcript(
+    async def _store_transcript(
         self,
         asset: KnowledgeAsset,
         title: str,
@@ -127,7 +127,7 @@ class AudioSourceHandler:
 
         body = self._render_transcript(title, documents, timestamps_available)
         try:
-            self.file_storage.upload(key, body.encode("utf-8"), "text/markdown")
+            await self.file_storage.upload(key, body.encode("utf-8"), "text/markdown")
         except Exception:  # noqa: BLE001 - a missing transcript file must not fail the source
             return None
         return key

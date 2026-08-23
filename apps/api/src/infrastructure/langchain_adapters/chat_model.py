@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Iterator
+from collections.abc import AsyncIterator
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
@@ -29,11 +29,11 @@ class OpenAICompatibleChatAdapter:
         # provider's health, not this instance's.
         self._breaker = get_breaker("chat")
 
-    def generate(self, messages: list[dict[str, str]]) -> str:
-        response = self._breaker.call(self.client.invoke, self._convert(messages))
+    async def generate(self, messages: list[dict[str, str]]) -> str:
+        response = await self._breaker.call_async(self.client.ainvoke, self._convert(messages))
         return str(response.content)
 
-    def stream(self, messages: list[dict[str, str]]) -> Iterator[str]:
+    async def stream(self, messages: list[dict[str, str]]) -> AsyncIterator[str]:
         """Yield the answer in pieces as the model produces them.
 
         `generate` is unchanged and still backs the non-streaming /chat/ask endpoint; this
@@ -42,8 +42,8 @@ class OpenAICompatibleChatAdapter:
         # Only opening the stream goes through the breaker. Once tokens are flowing the
         # provider has demonstrably answered, and a failure mid-answer is a different
         # problem (a dropped connection) from the one the breaker exists to prevent.
-        stream = self._breaker.call(self.client.stream, self._convert(messages))
-        for chunk in stream:
+        stream = await self._breaker.guard_stream(self.client.astream, self._convert(messages))
+        async for chunk in stream:
             text = chunk.content
             if not text:
                 continue

@@ -221,6 +221,19 @@ class ChunkModel(TenantScoped, Base):
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
     text: Mapped[str] = mapped_column(Text, nullable=False)
     metadata_: Mapped[dict] = mapped_column("metadata", JSONB, nullable=False, default=dict)
+    # Small-to-big retrieval: children are embedded and searched, the parent section is what
+    # reaches the prompt. Self-referential, and CASCADE because `replace_for_asset` deletes a
+    # whole asset's chunks in one statement without ordering parents last.
+    parent_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("chunks.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    # What is vectorised: `text` plus a one-line description of its section. Kept separate so
+    # `text` stays exactly what is displayed and cited, and so `fts` — a generated column over
+    # `text` — keeps matching the document's own words rather than our prose about it.
+    embed_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # See ChunkModality. A column rather than a metadata key so the per-modality relevance
+    # floor is a SQL filter instead of a JSONB lookup.
+    modality: Mapped[str] = mapped_column(String(16), nullable=False, server_default="text")
     # Lexical search vector, maintained by Postgres itself (see 0006). `Computed` tells
     # SQLAlchemy to leave it out of INSERTs and UPDATEs, so ingestion never touches it —
     # the column simply follows `text`.

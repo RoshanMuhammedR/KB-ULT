@@ -27,14 +27,14 @@ class PdfSourceHandler:
         self.loader = loader
         self.file_storage = file_storage
 
-    def acquire(self, asset: KnowledgeAsset) -> RawContent:
-        data = self.file_storage.download(asset.storage_key)
+    async def acquire(self, asset: KnowledgeAsset) -> RawContent:
+        data = await self.file_storage.download(asset.storage_key)
         return RawContent(data=data, mime="application/pdf")
 
-    def parse(self, asset: KnowledgeAsset, raw: RawContent) -> KnowledgeAsset:
+    async def parse(self, asset: KnowledgeAsset, raw: RawContent) -> KnowledgeAsset:
         # The loader wants bytes; acquire always hands us bytes for PDF.
         file_data = raw.data if isinstance(raw.data, bytes) else raw.data.encode("utf-8")
-        parsed = self.loader.load(file_data, asset.filename)
+        parsed = await self.loader.load(file_data, asset.filename)
 
         # Turn the loader's page list into one Document per page, each located by page number.
         documents = []

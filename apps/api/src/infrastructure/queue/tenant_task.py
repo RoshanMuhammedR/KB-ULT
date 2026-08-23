@@ -19,7 +19,7 @@ from src.core.tenant_context import reset_tenant_context, set_tenant_context
 
 
 def tenant_task(fn: Callable) -> Callable:
-    def wrapper(**kwargs):
+    async def wrapper(**kwargs):
         # Consume the tenant markers; the task body only sees its own args (e.g. asset_id).
         tenant_id = kwargs.pop("tenant_id", None)
         user_id = kwargs.pop("user_id", None)
@@ -28,9 +28,12 @@ def tenant_task(fn: Callable) -> Callable:
                 f"Task '{getattr(fn, '__name__', 'task')}' was enqueued without "
                 "tenant_id/user_id — refusing to run unscoped"
             )
+        # A task runs as its own asyncio task, which starts from a copy of the context it
+        # was created in — so binding here is visible to everything the body awaits, and
+        # the reset lands in the same context that produced the token.
         tokens = set_tenant_context(UUID(str(tenant_id)), UUID(str(user_id)))
         try:
-            return fn(**kwargs)
+            return await fn(**kwargs)
         finally:
             reset_tenant_context(tokens)
 

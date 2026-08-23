@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Iterator
+from collections.abc import AsyncIterator
 
 from src.domain.entities import Embedding
 from src.infrastructure.langchain_adapters.chat_model import OpenAICompatibleChatAdapter
@@ -18,12 +18,12 @@ class AICreditsEmbeddingProvider:
         self.model = model
         self.expected_dimensions = expected_dimensions
 
-    def embed_texts(self, texts: list[str]) -> list[Embedding]:
-        vectors = self.adapter.embed_texts(texts)
+    async def embed_texts(self, texts: list[str]) -> list[Embedding]:
+        vectors = await self.adapter.embed_texts(texts)
         return [self._to_embedding(vector) for vector in vectors]
 
-    def embed_query(self, text: str) -> list[float]:
-        vector = self.adapter.embed_query(text)
+    async def embed_query(self, text: str) -> list[float]:
+        vector = await self.adapter.embed_query(text)
         self._validate(vector)
         return vector
 
@@ -42,8 +42,11 @@ class AICreditsLLMProvider:
     def __init__(self, adapter: OpenAICompatibleChatAdapter) -> None:
         self.adapter = adapter
 
-    def generate(self, messages: list[dict[str, str]]) -> str:
-        return self.adapter.generate(messages)
+    async def generate(self, messages: list[dict[str, str]]) -> str:
+        return await self.adapter.generate(messages)
 
-    def stream(self, messages: list[dict[str, str]]) -> Iterator[str]:
+    def stream(self, messages: list[dict[str, str]]) -> AsyncIterator[str]:
+        # Not `async def`: an async generator function already returns its iterator, so
+        # forwarding it directly keeps `async for provider.stream(...)` working without an
+        # extra await at every call site.
         return self.adapter.stream(messages)

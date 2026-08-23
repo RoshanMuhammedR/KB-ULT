@@ -20,7 +20,8 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import Callable, TypeVar
+from collections.abc import Awaitable
+from typing import Any, Callable, TypeVar
 
 import structlog
 
@@ -66,6 +67,34 @@ class CircuitBreaker:
             raise
         self._record_success()
         return result
+
+    async def call_async(self, fn: Callable[..., Awaitable[T]], *args, **kwargs) -> T:
+        """Same state machine, for a coroutine. The bookkeeping is sync and cheap enough
+        that the lock is never held across an await — only around the counter updates."""
+        self._check_open()
+        try:
+            result = await fn(*args, **kwargs)
+        except Exception:
+            self._record_failure()
+            raise
+        self._record_success()
+        return result
+
+    async def guard_stream(self, factory: Callable[..., Any], *args, **kwargs) -> Any:
+        """Open a stream through the breaker, counting only the handshake.
+
+        Once tokens are flowing the provider has demonstrably answered; a failure
+        mid-answer is a dropped connection, which is a different problem from the one the
+        breaker exists to prevent.
+        """
+        self._check_open()
+        try:
+            stream = factory(*args, **kwargs)
+        except Exception:
+            self._record_failure()
+            raise
+        self._record_success()
+        return stream
 
     def _check_open(self) -> None:
         with self._lock:

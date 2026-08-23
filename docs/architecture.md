@@ -155,18 +155,25 @@ The queue engine is confined to `infrastructure/queue/`. Verify:
 grep -r "procrastinate" apps/api/src/domain/ apps/api/src/application/
 ```
 
-LangChain is **not** fully confined to an adapter directory, and that is a deliberate, narrow exception rather than drift.
+LangChain is **not** confined to an adapter directory, and the boundary moved deliberately when the query path became agentic.
 
-`langchain_core.documents.Document` is treated as a **shared data type**, the way `uuid.UUID` or `datetime` are: handlers produce them, `KnowledgeAsset` carries them, the chunker consumes them, and the repository mappers serialize them. Adopting the ecosystem's own type instead of a private dict convention is what lets LangChain loaders, splitters and retrievers drop in later without a translation layer at every seam.
+**What LangChain now owns.** Retrieval composition is LangChain end to end: custom `BaseRetriever` subclasses over our repositories, `EnsembleRetriever` for rank fusion, and structured-output chains for query resolution, reranking, sufficiency and grounding. `src/retrieval/langchain/` and `src/application/chat/agentic/` are LangChain code by design, not by drift.
 
-Everything else about LangChain stays behind adapters — the chat model, the embeddings client and the text splitter are all still confined to `infrastructure/langchain_adapters/`, so swapping the splitter or the model client remains a one-file change. What is allowed to spread is the *data type*, not the *machinery*.
+**What it does not own, and why.** `langchain_postgres.PGVector` is deliberately not adopted. It manages its own tables and its own connection, so queries issued through it would never pass the `do_orm_execute` tenant filter and never carry the transaction-local GUC that Postgres RLS reads — silently reducing a two-layer isolation guarantee to none. All data access stays on our own tenant-scoped repositories. That is the one line LangChain does not cross, and it is a correctness boundary rather than a stylistic one.
 
-Verification — `Document` may be imported anywhere, but every other LangChain import must sit in the adapter directory:
+`langchain_core.documents.Document` remains a **shared data type**, the way `uuid.UUID` or `datetime` are: handlers produce them, `KnowledgeAsset` carries them, the chunker consumes them, the retrievers emit them.
+
+Verification — the rule that still holds is about *storage*, not about LangChain generally:
 
 ```bash
-grep -rn --include=*.py "^from langchain\|^import langchain" apps/api/src/ \
-  | grep -v "langchain_core.documents import Document" \
-  | grep -v "src/infrastructure/langchain_adapters/"
+# No LangChain vector store or database adapter is ever imported: every read goes through
+# our repositories, which is what keeps the tenant filter and RLS in the path.
+grep -rn --include=*.py "^from langchain_postgres\|^import langchain_postgres" apps/api/src/
+# Expect: no output. (The name appears once in a comment in retrieval/langchain/
+# retrievers.py, explaining this rule.)
+
+# The domain layer still knows nothing about any framework.
+grep -rn --include=*.py "fastapi\|sqlalchemy\|procrastinate\|langchain_openai" apps/api/src/domain/
 # Expect: no output.
 ```
 

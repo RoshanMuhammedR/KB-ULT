@@ -45,6 +45,11 @@ class Settings(BaseSettings):
     # `400 Model ... does not exist`, which is what every audio upload used to fail on.
     # Verify a replacement against /audio/transcriptions itself, not against /v1/models.
     aicredits_transcription_model: str = "openai/whisper-1"
+    # The small model that does the pipeline's mechanical thinking: query resolution,
+    # relevance grading, reranking, sufficiency, grounding, and the per-section blurb at
+    # ingestion. Separated from the answering model because these run several times per
+    # question and are judged on latency, not prose. Point it at something cheap and fast.
+    aicredits_fast_model: str = "openai/gpt-4o-mini"
     embedding_dimensions: int = 1536
 
     # Ceiling for the multipart upload path, enforced on Content-Length before the body is
@@ -59,8 +64,37 @@ class Settings(BaseSettings):
     # Enforced at upload with a plain-language 400.
     max_audio_upload_bytes: int = 100 * 1024 * 1024
 
-    chunk_size_tokens: int = 800
-    chunk_overlap_tokens: int = 120
+    # 300-600 tokens is the band where a chunk is small enough to match precisely and still
+    # readable on its own. It used to be 800, chosen when a chunk had to serve as both the
+    # retrieval unit and the generation unit; parent expansion means it no longer does.
+    chunk_size_tokens: int = 450
+    chunk_overlap_tokens: int = 70
+    # One model call per section at ingestion, to describe it for embedding. Off means
+    # chunks embed as themselves, which is the pre-enrichment behaviour.
+    enrich_chunks: bool = True
+
+    # --- Agentic retrieval ---
+    # Two hops, not three. A question that survives two well-formed hybrid retrievals is
+    # usually a question the corpus cannot answer, and a third hop buys latency and a more
+    # elaborate wrong answer. Revisit if traces show successful third hops.
+    max_retrieval_hops: int = 2
+    # How many chunks survive reranking and reach the prompt.
+    rerank_top_n: int = 6
+    # The reranker is an LLM call; past this it is costing more than the recall it adds.
+    # On timeout the pipeline falls back to raw fusion order rather than failing.
+    rerank_timeout_seconds: float = 2.5
+    # Relevance floor after reranking, applied per modality: ASR text scores lower than
+    # typed prose at identical usefulness, so holding both to one bar silently drops
+    # transcripts.
+    rerank_relevance_threshold: float = 0.35
+    rerank_asr_relevance_threshold: float = 0.25
+    # Hard ceiling on assembled context. Enforced by dropping the lowest-ranked chunks, so
+    # a generation call can never fail on overflow.
+    context_token_budget: int = 8000
+    # Verify citations before streaming rather than after. Off by default: it adds ~1.5s to
+    # every answer and forces the whole response to be buffered, destroying time-to-first-
+    # token. On for workspaces that would rather wait than be wrong.
+    grounding_blocking: bool = False
     retrieval_top_k: int = 5
     retrieval_score_threshold: float = 0.25
     retrieval_min_context_chunks: int = 2
@@ -101,6 +135,21 @@ class Settings(BaseSettings):
     # No code path uses the cache today (it backed the removed cross-origin handoff). The
     # port and adapter are kept for the next thing that needs one.
     cache_url: str = "redis://localhost:6379/0"
+    # Identical questions are common in a personal knowledge base. 0.97 cosine is close
+    # enough to mean "the same question, differently typed" rather than "a related one".
+    semantic_cache_threshold: float = 0.97
+    semantic_cache_ttl_seconds: int = 3600
+    # How many recent query embeddings to keep per tenant for that comparison. Capped
+    # because each is 1536 floats and the whole point is to be cheaper than a model call.
+    semantic_cache_size: int = 50
+    embedding_cache_ttl_seconds: int = 30 * 24 * 60 * 60
+    rerank_cache_ttl_seconds: int = 3600
+
+    # --- Tracing (Langfuse) ---
+    # Empty keys disable tracing entirely, so local development and CI need no account.
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+    langfuse_host: str = "https://cloud.langfuse.com"
 
     @property
     def cors_origins(self) -> list[str]:

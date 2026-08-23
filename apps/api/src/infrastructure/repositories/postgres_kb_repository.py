@@ -1,6 +1,6 @@
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.tenant_context import current_tenant_id, current_user_id
 from src.domain.entities import KnowledgeBase
@@ -12,15 +12,15 @@ _DEFAULT_NAME = "Default Knowledge Base"
 
 
 class KnowledgeBaseRepository:
-    def __init__(self, db: Session) -> None:
+    def __init__(self, db: AsyncSession) -> None:
         self.db = db
 
-    def get_default(self) -> KnowledgeBase | None:
-        model = self.db.scalar(select(KnowledgeBaseModel).order_by(KnowledgeBaseModel.created_at).limit(1))
+    async def get_default(self) -> KnowledgeBase | None:
+        model = await self.db.scalar(select(KnowledgeBaseModel).order_by(KnowledgeBaseModel.created_at).limit(1))
         return kb_to_domain(model) if model else None
 
-    def ensure_default(self) -> KnowledgeBase:
-        existing = self.get_default()
+    async def ensure_default(self) -> KnowledgeBase:
+        existing = await self.get_default()
         if existing:
             return existing
 
@@ -33,7 +33,7 @@ class KnowledgeBaseRepository:
         # This is a Core INSERT, which the `before_flush` tenant stamper does not see, so
         # tenant_id/user_id are set explicitly here. `current_tenant_id()` fails closed if
         # no tenant is bound, exactly as the listener would.
-        self.db.execute(
+        await self.db.execute(
             pg_insert(KnowledgeBaseModel)
             .values(
                 name=_DEFAULT_NAME,
@@ -43,14 +43,14 @@ class KnowledgeBaseRepository:
             )
             .on_conflict_do_nothing(constraint="uq_knowledge_base_tenant_name")
         )
-        self._commit()
+        await self._commit()
 
-        created = self.get_default()
+        created = await self.get_default()
         if created is None:  # pragma: no cover - the row was just inserted or already there
             raise RuntimeError("Default knowledge base could not be created")
         return created
 
-    def _commit(self) -> None:
+    async def _commit(self) -> None:
         # Commits on its own, unless the caller opened a `unit_of_work` — then this
         # flushes and the enclosing scope owns the single COMMIT. See unit_of_work.py.
-        commit_or_flush(self.db)
+        await commit_or_flush(self.db)

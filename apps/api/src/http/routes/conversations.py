@@ -1,19 +1,18 @@
 from __future__ import annotations
 
-import contextvars
+import asyncio
 import json
-import queue
-import threading
-from queue import Empty
-from typing import Annotated, Iterator
+from contextlib import suppress
+from collections.abc import AsyncIterator
+from typing import Annotated
 from uuid import UUID
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.composition import build_chat_service
+from src.composition import build_agentic_chat_service
 from src.core.config import Settings, get_settings
 from src.core.identity import Identity
 from src.http.dependencies import get_current_identity
@@ -53,7 +52,7 @@ _SSE_HEADERS = {
 }
 
 
-def _message_schema(message) -> MessageSchema:
+async def _message_schema(message) -> MessageSchema:
     return MessageSchema(
         id=message.id,
         role=message.role.value,
@@ -65,11 +64,11 @@ def _message_schema(message) -> MessageSchema:
 
 
 @router.get("", response_model=list[ConversationSummarySchema])
-def list_conversations(
-    db: Annotated[Session, Depends(get_db)],
+async def list_conversations(
+    db: Annotated[AsyncSession, Depends(get_db)],
 ) -> list[ConversationSummarySchema]:
-    kb = KnowledgeBaseRepository(db).ensure_default()
-    rows = ConversationRepository(db).list_for_knowledge_base(kb.id)
+    kb = await KnowledgeBaseRepository(db).ensure_default()
+    rows = await ConversationRepository(db).list_for_knowledge_base(kb.id)
     return [
         ConversationSummarySchema(
             id=conversation.id,
@@ -84,11 +83,11 @@ def list_conversations(
 
 
 @router.get("/{conversation_id}", response_model=ConversationSchema)
-def get_conversation(
+async def get_conversation(
     conversation_id: UUID,
-    db: Annotated[Session, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db)],
 ) -> ConversationSchema:
-    conversation = ConversationRepository(db).get_with_messages(conversation_id)
+    conversation = await ConversationRepository(db).get_with_messages(conversation_id)
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return ConversationSchema(
@@ -101,26 +100,26 @@ def get_conversation(
 
 
 @router.patch("/{conversation_id}", response_model=ConversationSchema)
-def rename_conversation(
+async def rename_conversation(
     conversation_id: UUID,
     request: RenameConversationRequest,
-    db: Annotated[Session, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db)],
 ) -> ConversationSchema:
     repo = ConversationRepository(db)
     try:
-        repo.rename(conversation_id, request.title)
+        await repo.rename(conversation_id, request.title)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return get_conversation(conversation_id, db)
 
 
 @router.delete("/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_conversation(
+async def delete_conversation(
     conversation_id: UUID,
-    db: Annotated[Session, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db)],
 ) -> None:
     try:
-        ConversationRepository(db).delete(conversation_id)
+        await ConversationRepository(db).delete(conversation_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -128,19 +127,19 @@ def delete_conversation(
 @router.delete(
     "/{conversation_id}/messages/{message_id}", status_code=status.HTTP_204_NO_CONTENT
 )
-def delete_message(
+async def delete_message(
     conversation_id: UUID,
     message_id: UUID,
-    db: Annotated[Session, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db)],
 ) -> None:
     try:
-        ConversationRepository(db).delete_message(conversation_id, message_id)
+        await ConversationRepository(db).delete_message(conversation_id, message_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post("/{conversation_id}/messages")
-def ask_in_conversation(
+async def ask_in_conversation(
     conversation_id: str,
     request: AskRequest,
     identity: Annotated[Identity, Depends(get_current_identity)],
@@ -153,21 +152,16 @@ def ask_in_conversation(
     closed out from under the generator, so the generator opens its own `session_scope()`
     instead — the same pattern the ingestion worker uses.
 
-    The generator must **not** bind the tenant context itself. Starlette drives a sync
-    streaming generator through `iterate_in_threadpool`, which runs every `next()` in a
-    fresh `copy_context()`. A token taken on the first frame therefore cannot be reset on
-    the last — `ContextVar.reset` raises "was created in a different Context", out of a
-    `finally` that no `except` here can catch, after the body has already gone out on the
-    wire. The connection then dies without its terminating chunk and the browser reports a
-    network error for an answer that actually succeeded.
-
-    It does not need to bind anything: `TenantContextMiddleware` has already bound
-    tenant/user in the enclosing context, and each frame's `copy_context()` carries that
-    binding in. Reads inside the generator resolve correctly on every frame.
-
-    `identity` is therefore unused in the body, but it is not dead: it keeps this route's
+    `identity` is unused in the body, but it is not dead: it keeps this route's
     authentication assertion at the route itself rather than relying solely on the
     middleware's exempt-path list. Leave it.
+
+    Historical note worth keeping. This body used to be a *sync* generator, which Starlette
+    drove through `iterate_in_threadpool` — one fresh `copy_context()` per frame. Binding a
+    contextvar inside it therefore could not be unbound (`ContextVar.reset` raises across
+    contexts), and the failure surfaced as a dead connection after a fully successful
+    answer. An async generator runs in one task and one context, so that entire class of
+    bug is gone rather than merely avoided.
     """
     question = request.question.strip()
     if not question:
@@ -181,26 +175,29 @@ def ask_in_conversation(
         except ValueError as exc:
             raise HTTPException(status_code=404, detail="Conversation not found") from exc
 
-    def events() -> Iterator[str]:
-        with session_scope() as db:
-            chat_service = build_chat_service(db, settings)
-            frames: queue.Queue[str | object] = queue.Queue()
+    async def events() -> AsyncIterator[str]:
+        async with session_scope() as db:
+            chat_service = build_agentic_chat_service(db, settings)
+            frames: asyncio.Queue[str | object] = asyncio.Queue()
 
-            def produce() -> None:
+            async def produce() -> None:
                 """Drive the answer, pushing each frame to the consumer below."""
                 try:
-                    for event, payload in chat_service.ask_stream(target, question):
-                        frames.put(_frame(event, payload))
+                    async for event, payload in chat_service.ask_stream(target, question):
+                        await frames.put(_frame(event, payload))
                 except ValueError as exc:
                     # A bad conversation id — the only client-caused failure down here.
-                    frames.put(_frame("error", {"message": str(exc)}))
+                    await frames.put(_frame("error", {"message": str(exc)}))
+                except asyncio.CancelledError:
+                    # The client hung up. Nothing to report to a socket that is gone.
+                    raise
                 except Exception as exc:  # noqa: BLE001 - the stream is the only channel left
                     # Headers are long gone by now, so an error can only be delivered as an
                     # event. The turn is persisted only once the answer is complete, so a
                     # failure here really does leave nothing behind — which is what we
-                    # promise.
+                    # promise the client.
                     logger.exception("chat_stream_failed", error=str(exc))
-                    frames.put(
+                    await frames.put(
                         _frame(
                             "error",
                             {
@@ -212,29 +209,19 @@ def ask_in_conversation(
                         )
                     )
                 finally:
-                    frames.put(_STREAM_DONE)
+                    await frames.put(_STREAM_DONE)
 
-            # The answer runs on its own thread so this generator can keep yielding while
-            # it works. Nothing is sent between the request and the first token — retrieval,
-            # a query embedding, and the model's time-to-first-token — which is long enough
-            # for an idle proxy to decide the connection is dead and cut it. Yielding a
-            # comment frame on a timer keeps bytes flowing through that silent window.
-            #
-            # `copy_context()` is what makes this safe: a bare thread starts with EMPTY
-            # contextvars, so the tenant binding would be gone and every scoped query would
-            # fail closed. The copy carries the binding the middleware bound. Note the
-            # inverse of the bug documented above — the problem there was *setting* a
-            # contextvar per frame, not reading an inherited one.
-            context = contextvars.copy_context()
-            worker = threading.Thread(
-                target=lambda: context.run(produce), name="chat-stream", daemon=True
-            )
-            worker.start()
+            # The answer runs as its own task so this generator can keep yielding while it
+            # works. Nothing is sent between the request and the first token — retrieval, a
+            # query embedding, and the model's time-to-first-token — which is long enough
+            # for an idle proxy to decide the connection is dead and cut it. A comment frame
+            # on a timer keeps bytes flowing through that silent window.
+            producer = asyncio.create_task(produce())
             try:
                 while True:
                     try:
-                        item = frames.get(timeout=_HEARTBEAT_SECONDS)
-                    except Empty:
+                        item = await asyncio.wait_for(frames.get(), _HEARTBEAT_SECONDS)
+                    except TimeoutError:
                         # An SSE comment: the browser's parser ignores it, and so does the
                         # hand-rolled reader in the web app (a frame with no `data:` line is
                         # dropped). Its only job is to be bytes on the wire.
@@ -244,9 +231,12 @@ def ask_in_conversation(
                         break
                     yield item  # type: ignore[misc]
             finally:
-                # The producer owns the Session; let it finish before `session_scope` exits
-                # and commits, so the two never touch the session at once.
-                worker.join()
+                # Cancel on client disconnect, then let the task settle before
+                # `session_scope` commits — the producer owns the session, and the two must
+                # never touch it at the same time.
+                producer.cancel()
+                with suppress(asyncio.CancelledError):
+                    await producer
 
     return StreamingResponse(events(), media_type="text/event-stream", headers=_SSE_HEADERS)
 

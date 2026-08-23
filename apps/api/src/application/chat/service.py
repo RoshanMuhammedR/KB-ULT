@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Iterator
+from collections.abc import AsyncIterator
 from uuid import UUID
 
 import structlog
@@ -45,9 +45,9 @@ class ChatService:
 
     # --- One-shot (kept for POST /chat/ask and the smoke path) ---------------------
 
-    def ask(self, question: str) -> dict:
-        knowledge_base = self.kb_repo.ensure_default()
-        results = self._retrieve(question, knowledge_base.id)
+    async def ask(self, question: str) -> dict:
+        knowledge_base = await self.kb_repo.ensure_default()
+        results = await self._retrieve(question, knowledge_base.id)
 
         if len(results) < self.min_context_chunks:
             answer = self.prompt_builder.insufficient_context_answer()
@@ -56,13 +56,15 @@ class ChatService:
 
         messages = self.prompt_builder.build(question, results)
         logger.info("chat_prompt_created", query=question, context_count=len(results))
-        answer = self.llm_provider.generate(messages)
+        answer = await self.llm_provider.generate(messages)
         logger.info("chat_llm_response", query=question, answer_length=len(answer))
         return self._response(answer, results, insufficient=False)
 
     # --- Streaming, conversation-aware --------------------------------------------
 
-    def ask_stream(self, conversation_id: UUID | None, question: str) -> Iterator[tuple[str, object]]:
+    async def ask_stream(
+        self, conversation_id: UUID | None, question: str
+    ) -> AsyncIterator[tuple[str, object]]:
         """Yield `("conversation", id)`, `("delta", str)`, `("citations", list)`, `("done", ids)`.
 
         Neither message is persisted until the answer is complete: the question and the
@@ -78,13 +80,13 @@ class ChatService:
         if self.conversation_repo is None:
             raise RuntimeError("ChatService was built without a conversation repository")
 
-        knowledge_base = self.kb_repo.ensure_default()
-        conversation = self._resolve_conversation(conversation_id, knowledge_base.id, question)
+        knowledge_base = await self.kb_repo.ensure_default()
+        conversation = await self._resolve_conversation(conversation_id, knowledge_base.id, question)
         yield ("conversation", {"id": str(conversation.id), "title": conversation.title})
 
-        history = self.conversation_repo.recent_messages(conversation.id, _HISTORY_TURNS)
+        history = await self.conversation_repo.recent_messages(conversation.id, _HISTORY_TURNS)
 
-        results = self._retrieve(question, knowledge_base.id, history=history)
+        results = await self._retrieve(question, knowledge_base.id, history=history)
         citations = build_citations(results)
 
         if len(results) < self.min_context_chunks:
@@ -92,7 +94,7 @@ class ChatService:
             logger.info("chat_insufficient_context", query=question, result_count=len(results))
             yield ("delta", answer)
             yield ("citations", citations)
-            user_message, assistant = self._persist_turn(
+            user_message, assistant = await self._persist_turn(
                 conversation.id, question, answer, citations, insufficient=True
             )
             yield ("done", self._done(user_message, assistant, insufficient=True))
@@ -102,7 +104,7 @@ class ChatService:
         logger.info("chat_prompt_created", query=question, context_count=len(results))
 
         pieces: list[str] = []
-        for delta in self.llm_provider.stream(messages):
+        async for delta in self.llm_provider.stream(messages):
             pieces.append(delta)
             yield ("delta", delta)
 
@@ -113,14 +115,14 @@ class ChatService:
 
         logger.info("chat_llm_response", query=question, answer_length=len(answer))
         yield ("citations", citations)
-        user_message, assistant = self._persist_turn(
+        user_message, assistant = await self._persist_turn(
             conversation.id, question, answer, citations, insufficient=False
         )
         yield ("done", self._done(user_message, assistant, insufficient=False))
 
     # --- Internals ----------------------------------------------------------------
 
-    def _retrieve(
+    async def _retrieve(
         self,
         question: str,
         knowledge_base_id: UUID,
@@ -134,8 +136,8 @@ class ChatService:
         if previous:
             query = f"{previous}\n{question}"
 
-        query_embedding = self.embedding_provider.embed_query(query)
-        results = self.retriever.retrieve(
+        query_embedding = await self.embedding_provider.embed_query(query)
+        results = await self.retriever.retrieve(
             query_embedding=query_embedding,
             knowledge_base_id=knowledge_base_id,
             top_k=self.top_k,
@@ -166,21 +168,21 @@ class ChatService:
     def _as_turns(history: list[Message]) -> list[dict[str, str]]:
         return [{"role": message.role.value, "content": message.content} for message in history]
 
-    def _resolve_conversation(
+    async def _resolve_conversation(
         self, conversation_id: UUID | None, knowledge_base_id: UUID, question: str
     ) -> Conversation:
         assert self.conversation_repo is not None
         if conversation_id is not None:
-            existing = self.conversation_repo.get(conversation_id)
+            existing = await self.conversation_repo.get(conversation_id)
             if existing is None:
                 raise ValueError("Conversation not found")
             return existing
         # First question in a new thread also names it — no extra model call.
-        return self.conversation_repo.create(
+        return await self.conversation_repo.create(
             Conversation(knowledge_base_id=knowledge_base_id, title=title_from_question(question))
         )
 
-    def _persist_turn(
+    async def _persist_turn(
         self,
         conversation_id: UUID,
         question: str,
@@ -194,10 +196,10 @@ class ChatService:
         thread untouched. Order matters: `created_at` is what the transcript is sorted by.
         """
         assert self.conversation_repo is not None
-        user_message = self.conversation_repo.append_message(
+        user_message = await self.conversation_repo.append_message(
             Message(conversation_id=conversation_id, role=MessageRole.USER, content=question)
         )
-        assistant = self.conversation_repo.append_message(
+        assistant = await self.conversation_repo.append_message(
             Message(
                 conversation_id=conversation_id,
                 role=MessageRole.ASSISTANT,

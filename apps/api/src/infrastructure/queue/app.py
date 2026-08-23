@@ -3,6 +3,14 @@ from __future__ import annotations
 from procrastinate import App, PsycopgConnector
 
 from src.core.config import get_settings
+from src.core.event_loop import configure_event_loop
+from src.core.logging import configure_logging
+
+# The worker process never imports src.main, so it has to set the loop policy itself.
+configure_event_loop()
+# The worker never imports src.main, so without this its logs would fall back to
+# structlog's console renderer instead of the JSON an aggregator can query.
+configure_logging()
 
 
 def _libpq_dsn(sqlalchemy_url: str) -> str:

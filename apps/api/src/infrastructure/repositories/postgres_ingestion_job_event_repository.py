@@ -3,7 +3,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.text import sanitize_text_for_storage
 from src.domain.entities import JobEvent
@@ -20,10 +20,10 @@ class IngestionJobEventRepository:
     persist an event must not break ingestion — so they wrap `append` in try/except.
     """
 
-    def __init__(self, db: Session) -> None:
+    def __init__(self, db: AsyncSession) -> None:
         self.db = db
 
-    def append(self, event: JobEvent) -> JobEvent:
+    async def append(self, event: JobEvent) -> JobEvent:
         model = IngestionJobEventModel(
             id=event.id,
             asset_id=event.asset_id,
@@ -35,28 +35,28 @@ class IngestionJobEventRepository:
             data_=event.data or {},
         )
         self.db.add(model)
-        self._commit()
-        self.db.refresh(model)
+        await self._commit()
+        await self.db.refresh(model)
         return event_to_domain(model)
 
-    def list_for_asset(self, asset_id: UUID, limit: int = 200) -> list[JobEvent]:
-        models = self.db.scalars(
+    async def list_for_asset(self, asset_id: UUID, limit: int = 200) -> list[JobEvent]:
+        models = (await self.db.scalars(
             select(IngestionJobEventModel)
             .where(IngestionJobEventModel.asset_id == asset_id)
             .order_by(IngestionJobEventModel.ts.asc())
             .limit(limit)
-        ).all()
+        )).all()
         return [event_to_domain(model) for model in models]
 
-    def list_for_job(self, job_id: UUID) -> list[JobEvent]:
-        models = self.db.scalars(
+    async def list_for_job(self, job_id: UUID) -> list[JobEvent]:
+        models = (await self.db.scalars(
             select(IngestionJobEventModel)
             .where(IngestionJobEventModel.job_id == job_id)
             .order_by(IngestionJobEventModel.ts.asc())
-        ).all()
+        )).all()
         return [event_to_domain(model) for model in models]
 
-    def _commit(self) -> None:
+    async def _commit(self) -> None:
         # Commits on its own, unless the caller opened a `unit_of_work` — then this
         # flushes and the enclosing scope owns the single COMMIT. See unit_of_work.py.
-        commit_or_flush(self.db)
+        await commit_or_flush(self.db)

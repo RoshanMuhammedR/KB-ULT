@@ -6,7 +6,7 @@ from uuid import UUID
 
 from sqlalchemy import delete, desc, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.exceptions import DuplicateAssetVersionError
 from src.core.text import sanitize_json_for_storage, sanitize_text_for_storage
@@ -17,25 +17,25 @@ from src.infrastructure.repositories.unit_of_work import commit_or_flush
 
 
 class KnowledgeAssetRepository:
-    def __init__(self, db: Session) -> None:
+    def __init__(self, db: AsyncSession) -> None:
         self.db = db
 
-    def list_current(self, knowledge_base_id: UUID) -> list[KnowledgeAsset]:
-        rows = self.db.scalars(
+    async def list_current(self, knowledge_base_id: UUID) -> list[KnowledgeAsset]:
+        rows = (await self.db.scalars(
             select(KnowledgeAssetModel)
             .where(KnowledgeAssetModel.knowledge_base_id == knowledge_base_id)
             .where(KnowledgeAssetModel.superseded_at.is_(None))
             .order_by(desc(KnowledgeAssetModel.created_at))
-        ).all()
+        )).all()
         return [asset_to_domain(row) for row in rows]
 
-    def get(self, asset_id: UUID) -> KnowledgeAsset | None:
+    async def get(self, asset_id: UUID) -> KnowledgeAsset | None:
         # select().where(pk) rather than Session.get(): Session.get() can serve from the
         # identity map and bypasses the tenant auto-filter, so a cross-tenant id would leak.
-        row = self.db.scalar(select(KnowledgeAssetModel).where(KnowledgeAssetModel.id == asset_id))
+        row = await self.db.scalar(select(KnowledgeAssetModel).where(KnowledgeAssetModel.id == asset_id))
         return asset_to_domain(row) if row else None
 
-    def get_many(self, asset_ids: Iterable[UUID]) -> dict[UUID, KnowledgeAsset]:
+    async def get_many(self, asset_ids: Iterable[UUID]) -> dict[UUID, KnowledgeAsset]:
         """Fetch several assets by id in one query, keyed by id.
 
         For list endpoints that need a field from each row's asset: one `IN (...)` instead
@@ -46,17 +46,17 @@ class KnowledgeAssetRepository:
         ids = list(asset_ids)
         if not ids:
             return {}
-        rows = self.db.scalars(
+        rows = (await self.db.scalars(
             select(KnowledgeAssetModel).where(KnowledgeAssetModel.id.in_(ids))
-        ).all()
+        )).all()
         return {row.id: asset_to_domain(row) for row in rows}
 
-    def get_model(self, asset_id: UUID) -> KnowledgeAssetModel | None:
+    async def get_model(self, asset_id: UUID) -> KnowledgeAssetModel | None:
         # Same reason as get(): stay on select() so the tenant filter applies.
-        return self.db.scalar(select(KnowledgeAssetModel).where(KnowledgeAssetModel.id == asset_id))
+        return await self.db.scalar(select(KnowledgeAssetModel).where(KnowledgeAssetModel.id == asset_id))
 
-    def latest_for_filename(self, knowledge_base_id: UUID, filename: str) -> KnowledgeAsset | None:
-        row = self.db.scalar(
+    async def latest_for_filename(self, knowledge_base_id: UUID, filename: str) -> KnowledgeAsset | None:
+        row = await self.db.scalar(
             select(KnowledgeAssetModel)
             .where(KnowledgeAssetModel.knowledge_base_id == knowledge_base_id)
             .where(KnowledgeAssetModel.filename == filename)
@@ -65,7 +65,7 @@ class KnowledgeAssetRepository:
         )
         return asset_to_domain(row) if row else None
 
-    def create_pending(self, asset: KnowledgeAsset) -> KnowledgeAsset:
+    async def create_pending(self, asset: KnowledgeAsset) -> KnowledgeAsset:
         model = KnowledgeAssetModel(
             id=asset.id,
             knowledge_base_id=asset.knowledge_base_id,
@@ -85,7 +85,7 @@ class KnowledgeAssetRepository:
         )
         self.db.add(model)
         try:
-            self._commit()
+            await self._commit()
         except IntegrityError as exc:
             # Two concurrent uploads of the same filename both read the same "latest"
             # version and both computed n+1. The constraint keeps the data correct; this
@@ -96,11 +96,11 @@ class KnowledgeAssetRepository:
                     f"version {asset.version} of this source already exists"
                 ) from exc
             raise
-        self.db.refresh(model)
+        await self.db.refresh(model)
         return asset_to_domain(model)
 
-    def update_from_domain(self, asset: KnowledgeAsset) -> KnowledgeAsset:
-        model = self.get_model(asset.id)
+    async def update_from_domain(self, asset: KnowledgeAsset) -> KnowledgeAsset:
+        model = await self.get_model(asset.id)
         if model is None:
             raise ValueError(f"KnowledgeAsset not found: {asset.id}")
         model.title = self._sanitize_optional_text(asset.title)
@@ -112,39 +112,39 @@ class KnowledgeAssetRepository:
         model.metadata_ = sanitize_json_for_storage(asset.metadata)
         model.documents = self._documents(asset)
         model.superseded_at = asset.superseded_at
-        self._commit()
-        self.db.refresh(model)
+        await self._commit()
+        await self.db.refresh(model)
         return asset_to_domain(model)
 
-    def rename(self, asset_id: UUID, title: str) -> KnowledgeAsset:
-        model = self.get_model(asset_id)
+    async def rename(self, asset_id: UUID, title: str) -> KnowledgeAsset:
+        model = await self.get_model(asset_id)
         if model is None:
             raise ValueError(f"KnowledgeAsset not found: {asset_id}")
         model.title = sanitize_text_for_storage(title)
-        self._commit()
-        self.db.refresh(model)
+        await self._commit()
+        await self.db.refresh(model)
         return asset_to_domain(model)
 
-    def supersede_previous_versions(self, lineage_id: UUID, active_asset_id: UUID) -> None:
-        rows = self.db.scalars(
+    async def supersede_previous_versions(self, lineage_id: UUID, active_asset_id: UUID) -> None:
+        rows = (await self.db.scalars(
             select(KnowledgeAssetModel)
             .where(KnowledgeAssetModel.lineage_id == lineage_id)
             .where(KnowledgeAssetModel.id != active_asset_id)
             .where(KnowledgeAssetModel.superseded_at.is_(None))
-        ).all()
+        )).all()
         now = datetime.now(UTC)
         for row in rows:
             row.superseded_at = now
-        self._commit()
+        await self._commit()
 
-    def delete(self, asset_id: UUID) -> None:
-        self.db.execute(delete(KnowledgeAssetModel).where(KnowledgeAssetModel.id == asset_id))
-        self._commit()
+    async def delete(self, asset_id: UUID) -> None:
+        await self.db.execute(delete(KnowledgeAssetModel).where(KnowledgeAssetModel.id == asset_id))
+        await self._commit()
 
-    def _commit(self) -> None:
+    async def _commit(self) -> None:
         # Commits on its own, unless the caller opened a `unit_of_work` — then this
         # flushes and the enclosing scope owns the single COMMIT. See unit_of_work.py.
-        commit_or_flush(self.db)
+        await commit_or_flush(self.db)
 
     def _sanitize_optional_text(self, value: str | None) -> str | None:
         return sanitize_text_for_storage(value) if value is not None else None

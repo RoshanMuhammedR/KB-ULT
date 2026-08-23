@@ -27,8 +27,8 @@ class OpenAICompatibleEmbeddingsAdapter:
         # working half down with the broken one.
         self._breaker = get_breaker("embeddings")
 
-    def embed_texts(self, texts: list[str]) -> list[list[float]]:
-        return self._breaker.call(self.client.embed_documents, texts)
+    async def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        return await self._breaker.call_async(self.client.aembed_documents, texts)
 
-    def embed_query(self, text: str) -> list[float]:
-        return self._breaker.call(self.client.embed_query, text)
+    async def embed_query(self, text: str) -> list[float]:
+        return await self._breaker.call_async(self.client.aembed_query, text)

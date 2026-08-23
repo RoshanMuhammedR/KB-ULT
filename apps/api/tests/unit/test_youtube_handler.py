@@ -1,4 +1,4 @@
-from unittest import TestCase
+import unittest
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -16,7 +16,7 @@ from src.ingestion.handlers.youtube_handler import TranscriptUnavailable
 from src.ingestion.source_types import identity_for_url, source_type_for_url
 
 
-class SourceTypeForUrlTest(TestCase):
+class SourceTypeForUrlTest(unittest.IsolatedAsyncioTestCase):
     def test_resolves_youtube_url_forms_to_video_id(self) -> None:
         cases = [
             "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
@@ -51,22 +51,22 @@ def _asset() -> KnowledgeAsset:
     )
 
 
-class YouTubeSourceHandlerTest(TestCase):
-    def test_acquire_wraps_transcript_and_title(self) -> None:
+class YouTubeSourceHandlerTest(unittest.IsolatedAsyncioTestCase):
+    async def test_acquire_wraps_transcript_and_title(self) -> None:
         handler = YouTubeSourceHandler(
             transcript_fetcher=lambda vid: [{"text": "hello", "start": 0.0, "duration": 1.0}],
             title_fetcher=lambda url: "My Video",
         )
-        raw = handler.acquire(_asset())
+        raw = await handler.acquire(_asset())
         self.assertEqual(raw.mime, "application/json")
         self.assertIn("My Video", raw.data)
 
-    def test_acquire_raises_clear_error_when_no_transcript(self) -> None:
+    async def test_acquire_raises_clear_error_when_no_transcript(self) -> None:
         handler = YouTubeSourceHandler(transcript_fetcher=lambda vid: [], title_fetcher=lambda url: None)
         with self.assertRaises(ValueError):
-            handler.acquire(_asset())
+            await handler.acquire(_asset())
 
-    def test_parse_builds_timestamp_locator_documents(self) -> None:
+    async def test_parse_builds_timestamp_locator_documents(self) -> None:
         # Two short lines under the coalesce target collapse into one document whose
         # locator is the first line's start time (whole seconds).
         transcript = [
@@ -78,9 +78,9 @@ class YouTubeSourceHandlerTest(TestCase):
             title_fetcher=lambda url: "Parsed Title",
         )
         asset = _asset()
-        raw = handler.acquire(asset)
+        raw = await handler.acquire(asset)
 
-        parsed = handler.parse(asset, raw)
+        parsed = await handler.parse(asset, raw)
 
         self.assertEqual(parsed.status, AssetStatus.EXTRACTING)
         self.assertEqual(parsed.title, "Parsed Title")
@@ -96,7 +96,7 @@ class YouTubeSourceHandlerTest(TestCase):
             ],
         )
 
-    def test_parse_splits_into_windows_past_char_target(self) -> None:
+    async def test_parse_splits_into_windows_past_char_target(self) -> None:
         # Long lines exceed the coalesce target, so each becomes its own document with
         # its own start timestamp.
         long_a = "a" * 400
@@ -110,12 +110,12 @@ class YouTubeSourceHandlerTest(TestCase):
             title_fetcher=lambda url: None,
         )
         asset = _asset()
-        parsed = handler.parse(asset, handler.acquire(asset))
+        parsed = await handler.parse(asset, await handler.acquire(asset))
 
         locators = [doc.metadata["locator"]["value"] for doc in parsed.documents]
         self.assertEqual(locators, [0, 60])
 
-    def test_acquire_passes_through_the_user_facing_message(self) -> None:
+    async def test_acquire_passes_through_the_user_facing_message(self) -> None:
         # A TranscriptUnavailable already carries a message written for a reader, so
         # `acquire` must not bury it behind the generic "Could not fetch..." prefix.
         def blocked(video_id: str) -> list[dict]:
@@ -123,7 +123,7 @@ class YouTubeSourceHandlerTest(TestCase):
 
         handler = YouTubeSourceHandler(transcript_fetcher=blocked, title_fetcher=lambda url: None)
         with self.assertRaises(ValueError) as caught:
-            handler.acquire(_asset())
+            await handler.acquire(_asset())
         self.assertEqual(str(caught.exception), "YouTube is blocking transcript requests")
 
 
@@ -179,7 +179,7 @@ class _FakeApi:
         return self._result
 
 
-class TranscriptFetcherTest(TestCase):
+class TranscriptFetcherTest(unittest.IsolatedAsyncioTestCase):
     def _fetch(self, api: _FakeApi) -> list[dict]:
         with patch("src.ingestion.handlers.youtube_handler._build_api", return_value=api):
             return build_transcript_fetcher()("dQw4w9WgXcQ")

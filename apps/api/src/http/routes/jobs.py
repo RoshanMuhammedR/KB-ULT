@@ -14,12 +14,12 @@ router = APIRouter(prefix="/jobs", tags=["jobs"])
 
 
 @router.get("", response_model=list[JobSummarySchema])
-def list_jobs(db: Annotated[Session, Depends(get_db)]) -> list[JobSummarySchema]:
+async def list_jobs(db: Annotated[Session, Depends(get_db)]) -> list[JobSummarySchema]:
     # Recent ingestion jobs for the monitoring dashboard, each joined to its asset's
     # filename. The filenames come back in ONE query rather than one per job: the row count
     # is bounded by `list_recent`, but an N+1 that is small today is still an N+1.
-    jobs = IngestionJobRepository(db).list_recent()
-    assets = KnowledgeAssetRepository(db).get_many(job.asset_id for job in jobs if job.asset_id)
+    jobs = await IngestionJobRepository(db).list_recent()
+    assets = await KnowledgeAssetRepository(db).get_many(job.asset_id for job in jobs if job.asset_id)
     return [
         JobSummarySchema(
             id=job.id,

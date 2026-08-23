@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import io
 from typing import Callable
 
@@ -66,18 +67,19 @@ class PptxSourceHandler:
         self.file_storage = file_storage
         self.deck_reader = deck_reader
 
-    def acquire(self, asset: KnowledgeAsset) -> RawContent:
-        data = self.file_storage.download(asset.storage_key)
+    async def acquire(self, asset: KnowledgeAsset) -> RawContent:
+        data = await self.file_storage.download(asset.storage_key)
         return RawContent(
             data=data,
             mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
         )
 
-    def parse(self, asset: KnowledgeAsset, raw: RawContent) -> KnowledgeAsset:
+    async def parse(self, asset: KnowledgeAsset, raw: RawContent) -> KnowledgeAsset:
         data = raw.data if isinstance(raw.data, bytes) else raw.data.encode("utf-8")
 
         try:
-            slides = self.deck_reader(data)
+            # python-pptx walks the whole deck in Python; keep it off the loop.
+            slides = await asyncio.to_thread(self.deck_reader, data)
         except ValueError:
             raise
         except Exception as exc:  # noqa: BLE001 - normalize any reader error to a clear message

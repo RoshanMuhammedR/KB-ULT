@@ -7,7 +7,7 @@ from src.domain.entities import Chunk, Embedding, KnowledgeAsset, RetrievalResul
 
 
 class IVectorStore(Protocol):
-    def upsert_embeddings(
+    async def upsert_embeddings(
         self,
         asset: KnowledgeAsset,
         chunks: list[Chunk],
@@ -15,7 +15,7 @@ class IVectorStore(Protocol):
     ) -> None:
         """Persist embeddings for an asset version."""
 
-    def search_dense(
+    async def search_dense(
         self,
         query_embedding: list[float],
         knowledge_base_id: UUID,
@@ -28,7 +28,7 @@ class IVectorStore(Protocol):
         over-fetch and still end up with a full set of results that all clear the bar.
         """
 
-    def search_lexical(
+    async def search_lexical(
         self,
         query_embedding: list[float],
         query_text: str,

@@ -10,10 +10,10 @@ router = APIRouter(prefix="/knowledge-bases", tags=["knowledge-bases"])
 
 
 @router.get("/default", response_model=KnowledgeBaseSchema)
-def get_default_knowledge_base(
+async def get_default_knowledge_base(
     service: Annotated[KnowledgeBaseService, Depends(get_knowledge_base_service)],
 ) -> KnowledgeBaseSchema:
-    kb = service.get_default()
+    kb = await service.get_default()
     return KnowledgeBaseSchema(
         id=kb.id,
         name=kb.name,

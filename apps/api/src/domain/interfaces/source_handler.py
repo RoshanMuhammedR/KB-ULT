@@ -17,7 +17,7 @@ class ISourceHandler(Protocol):
     and `infrastructure/`; nothing here imports FastAPI/SQLAlchemy/Procrastinate.
     """
 
-    def acquire(self, asset: KnowledgeAsset) -> RawContent:
+    async def acquire(self, asset: KnowledgeAsset) -> RawContent:
         """Fetch the raw source content for an asset.
 
         For PDF this downloads the uploaded bytes from object storage; for a URL
@@ -25,7 +25,7 @@ class ISourceHandler(Protocol):
         can be skipped on a retry that already got past extraction.
         """
 
-    def parse(self, asset: KnowledgeAsset, raw: RawContent) -> KnowledgeAsset:
+    async def parse(self, asset: KnowledgeAsset, raw: RawContent) -> KnowledgeAsset:
         """Normalize raw content into an extracted `KnowledgeAsset`.
 
         Populates `text_content` and `documents`: one LangChain `Document` per natural

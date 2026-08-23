@@ -100,7 +100,7 @@ class AuthService:
 
     # --- Registration ------------------------------------------------------------
 
-    def register(self, email: str, password: str, name: str | None = None) -> AuthTokens:
+    async def register(self, email: str, password: str, name: str | None = None) -> AuthTokens:
         """Create a workspace AND its owner user atomically; either both land or neither.
 
         `name` labels the workspace (and the user); it is optional and defaults to the
@@ -115,10 +115,10 @@ class AuthService:
 
         with system_scope():
             try:
-                tenant = self.tenant_repo.create(
+                tenant = await self.tenant_repo.create(
                     Tenant(name=display_name, status=TenantStatus.ACTIVE)
                 )
-                user = self.user_repo.create(
+                user = await self.user_repo.create(
                     User(
                         tenant_id=tenant.id,
                         email=email,
@@ -127,18 +127,18 @@ class AuthService:
                         status=UserStatus.ACTIVE,
                     )
                 )
-                tokens = self._issue(user)
-                self.uow.commit()
+                tokens = await self._issue(user)
+                await self.uow.commit()
                 return tokens
             except Exception:
                 # Any failure (email taken, user insert, token store) rolls back BOTH the
                 # tenant and the user — no orphan tenant.
-                self.uow.rollback()
+                await self.uow.rollback()
                 raise
 
     # --- Login -------------------------------------------------------------------
 
-    def login(self, email: str, password: str) -> AuthTokens:
+    async def login(self, email: str, password: str) -> AuthTokens:
         """Resolve the user by email, verify the password, issue tokens.
 
         Anti-enumeration: every failure path returns the same generic
@@ -149,7 +149,7 @@ class AuthService:
         email = _normalize_email(email)
 
         with system_scope():
-            user = self.user_repo.get_by_email(email)
+            user = await self.user_repo.get_by_email(email)
             if user is None:
                 self._deny("user_not_found")
             if not user.password_hash:
@@ -161,23 +161,23 @@ class AuthService:
             if user.status is not UserStatus.ACTIVE:
                 self._deny("user_not_active", user_id=str(user.id), status=str(user.status))
 
-            tenant = self.tenant_repo.get(user.tenant_id)
+            tenant = await self.tenant_repo.get(user.tenant_id)
             if tenant is None:
                 self._deny("tenant_not_found", user_id=str(user.id))
             if tenant.status is not TenantStatus.ACTIVE:
                 self._deny("tenant_not_active", tenant_id=str(tenant.id), status=str(tenant.status))
 
             try:
-                tokens = self._issue(user)
-                self.uow.commit()
+                tokens = await self._issue(user)
+                await self.uow.commit()
                 return tokens
             except Exception:
-                self.uow.rollback()
+                await self.uow.rollback()
                 raise
 
     # --- Google sign-in ----------------------------------------------------------
 
-    def sign_in_with_google(self, id_token: str) -> AuthTokens:
+    async def sign_in_with_google(self, id_token: str) -> AuthTokens:
         """Sign in (or register) with a verified Google ID token.
 
         One door, three cases: a returning Google user, a password user signing in with
@@ -198,18 +198,18 @@ class AuthService:
         email = _normalize_email(identity.email)
 
         with system_scope():
-            user = self.user_repo.get_by_google_sub(identity.subject)
+            user = await self.user_repo.get_by_google_sub(identity.subject)
 
             if user is None:
-                existing = self.user_repo.get_by_email(email)
+                existing = await self.user_repo.get_by_email(email)
                 if existing is not None:
-                    user = self.user_repo.link_google(existing.id, identity.subject)
+                    user = await self.user_repo.link_google(existing.id, identity.subject)
                     logger.info("google_account_linked", user_id=str(user.id))
 
             if user is not None:
                 if user.status is not UserStatus.ACTIVE:
                     self._deny("user_not_active", user_id=str(user.id), status=str(user.status))
-                tenant = self.tenant_repo.get(user.tenant_id)
+                tenant = await self.tenant_repo.get(user.tenant_id)
                 if tenant is None:
                     self._deny("tenant_not_found", user_id=str(user.id))
                 if tenant.status is not TenantStatus.ACTIVE:
@@ -217,20 +217,20 @@ class AuthService:
                         "tenant_not_active", tenant_id=str(tenant.id), status=str(tenant.status)
                     )
                 try:
-                    tokens = self._issue(user)
-                    self.uow.commit()
+                    tokens = await self._issue(user)
+                    await self.uow.commit()
                     return tokens
                 except Exception:
-                    self.uow.rollback()
+                    await self.uow.rollback()
                     raise
 
             # New account. Same atomicity as `register`: tenant and user both land, or neither.
             display_name = identity.name or _default_workspace_name(email)
             try:
-                tenant = self.tenant_repo.create(
+                tenant = await self.tenant_repo.create(
                     Tenant(name=display_name, status=TenantStatus.ACTIVE)
                 )
-                created = self.user_repo.create(
+                created = await self.user_repo.create(
                     User(
                         tenant_id=tenant.id,
                         email=email,
@@ -241,17 +241,17 @@ class AuthService:
                         email_verified_at=datetime.now(timezone.utc),
                     )
                 )
-                tokens = self._issue(created)
-                self.uow.commit()
+                tokens = await self._issue(created)
+                await self.uow.commit()
                 logger.info("google_account_created", user_id=str(created.id))
                 return tokens
             except Exception:
-                self.uow.rollback()
+                await self.uow.rollback()
                 raise
 
     # --- Refresh / logout --------------------------------------------------------
 
-    def refresh(self, raw_refresh: str) -> AuthTokens:
+    async def refresh(self, raw_refresh: str) -> AuthTokens:
         """Rotate a refresh token: revoke the presented one, issue a new one in its family.
 
         Presenting an already-revoked token is treated as theft: the whole family is
@@ -260,49 +260,49 @@ class AuthService:
         token_hash = _hash_refresh(raw_refresh)
         with system_scope():
             try:
-                record = self.refresh_repo.get_by_hash(token_hash)
+                record = await self.refresh_repo.get_by_hash(token_hash)
                 if record is None:
                     raise TokenError("Unknown refresh token")
                 if record.revoked_at is not None:
-                    self.refresh_repo.revoke_family(record.family_id)
-                    self.uow.commit()
+                    await self.refresh_repo.revoke_family(record.family_id)
+                    await self.uow.commit()
                     logger.warning("refresh_token_reuse", family_id=str(record.family_id))
                     raise TokenError("Refresh token reuse detected")
                 if record.expires_at <= datetime.now(timezone.utc):
                     raise TokenError("Refresh token expired")
 
-                user = self.user_repo.get(record.user_id)
+                user = await self.user_repo.get(record.user_id)
                 if user is None or user.status is not UserStatus.ACTIVE:
                     raise TokenError("User is no longer active")
 
-                self.refresh_repo.revoke(record.id)
-                tokens = self._issue(user, family_id=record.family_id)
-                self.uow.commit()
+                await self.refresh_repo.revoke(record.id)
+                tokens = await self._issue(user, family_id=record.family_id)
+                await self.uow.commit()
                 return tokens
             except Exception:
-                self.uow.rollback()
+                await self.uow.rollback()
                 raise
 
-    def logout(self, raw_refresh: str) -> None:
+    async def logout(self, raw_refresh: str) -> None:
         """Revoke the whole family the presented refresh token belongs to (idempotent)."""
         token_hash = _hash_refresh(raw_refresh)
         with system_scope():
-            record = self.refresh_repo.get_by_hash(token_hash)
+            record = await self.refresh_repo.get_by_hash(token_hash)
             if record is not None:
-                self.refresh_repo.revoke_family(record.family_id)
-            self.uow.commit()
+                await self.refresh_repo.revoke_family(record.family_id)
+            await self.uow.commit()
 
     # --- Profile -----------------------------------------------------------------
 
-    def me(self, user_id: UUID, tenant_id: UUID) -> UserProfile:
+    async def me(self, user_id: UUID, tenant_id: UUID) -> UserProfile:
         """Resolve the current identity into a display profile for the account area.
 
         Tenants/users are read pre-filter (they are the root of tenancy) under system_scope;
         the ids come from the caller's already-verified access token.
         """
         with system_scope():
-            user = self.user_repo.get(user_id)
-            tenant = self.tenant_repo.get(tenant_id)
+            user = await self.user_repo.get(user_id)
+            tenant = await self.tenant_repo.get(tenant_id)
             if user is None or tenant is None:
                 raise TokenError("Identity no longer exists")
             return UserProfile(
@@ -315,10 +315,10 @@ class AuthService:
 
     # --- Helpers -----------------------------------------------------------------
 
-    def _issue(self, user: User, family_id: UUID | None = None) -> AuthTokens:
+    async def _issue(self, user: User, family_id: UUID | None = None) -> AuthTokens:
         access_token, expires_in = self.token_service.issue_access_token(user.id, user.tenant_id)
         raw_refresh = secrets.token_urlsafe(48)
-        self.refresh_repo.create(
+        await self.refresh_repo.create(
             RefreshToken(
                 user_id=user.id,
                 tenant_id=user.tenant_id,

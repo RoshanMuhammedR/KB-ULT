@@ -1,5 +1,5 @@
-from unittest import TestCase
-from unittest.mock import Mock
+import unittest
+from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 from src.domain.entities import AssetStatus, KnowledgeAsset, SourceType
@@ -7,7 +7,7 @@ from src.ingestion.handlers import MarkdownSourceHandler
 from src.ingestion.source_types import source_type_for_filename
 
 
-class SourceTypeForMarkdownTest(TestCase):
+class SourceTypeForMarkdownTest(unittest.IsolatedAsyncioTestCase):
     def test_resolves_markdown_extensions(self) -> None:
         self.assertIs(source_type_for_filename("notes.md"), SourceType.MARKDOWN)
         self.assertIs(source_type_for_filename("NOTES.MARKDOWN"), SourceType.MARKDOWN)
@@ -27,46 +27,49 @@ def _asset(filename: str = "field-notes.md") -> KnowledgeAsset:
 
 
 def _handler(body: str) -> tuple[MarkdownSourceHandler, Mock]:
-    storage = Mock()
+    storage = AsyncMock()
     storage.download.return_value = body.encode("utf-8")
     return MarkdownSourceHandler(storage), storage
 
 
-class MarkdownSourceHandlerTest(TestCase):
-    def test_acquire_reads_bytes_from_storage(self) -> None:
+class MarkdownSourceHandlerTest(unittest.IsolatedAsyncioTestCase):
+    async def test_acquire_reads_bytes_from_storage(self) -> None:
         handler, storage = _handler("# Title\n\nBody.")
         asset = _asset()
 
-        raw = handler.acquire(asset)
+        raw = await handler.acquire(asset)
 
         storage.download.assert_called_once_with(asset.storage_key)
         self.assertEqual(raw.mime, "text/markdown")
 
-    def test_parse_splits_on_headings_into_section_locators(self) -> None:
+    async def test_parse_splits_on_headings_into_section_locators(self) -> None:
         handler, _ = _handler(
             "# Field notes\n\nOpening paragraph.\n\n## Method\n\nWe measured twice.\n"
         )
         asset = _asset()
 
-        parsed = handler.parse(asset, handler.acquire(asset))
+        parsed = await handler.parse(asset, await handler.acquire(asset))
 
         self.assertEqual(parsed.status, AssetStatus.EXTRACTING)
         self.assertEqual(parsed.title, "Field notes")
+        # The locator is the full path to the section, not just its own title. Half the
+        # headings in a real document are called "Overview" or "Method"; on their own they
+        # locate nothing, and that string is what a chunk carries into its embedding.
         locators = [document.metadata["locator"] for document in parsed.documents]
         self.assertEqual(
             locators,
             [
                 {"type": "section", "value": "Field notes"},
-                {"type": "section", "value": "Method"},
+                {"type": "section", "value": "Field notes > Method"},
             ],
         )
         self.assertIn("We measured twice.", parsed.documents[1].page_content)
 
-    def test_text_before_the_first_heading_becomes_an_introduction(self) -> None:
+    async def test_text_before_the_first_heading_becomes_an_introduction(self) -> None:
         handler, _ = _handler("Stray preamble text.\n\n# Later heading\n\nBody.\n")
         asset = _asset()
 
-        parsed = handler.parse(asset, handler.acquire(asset))
+        parsed = await handler.parse(asset, await handler.acquire(asset))
 
         first = parsed.documents[0]
         self.assertEqual(
@@ -76,19 +79,19 @@ class MarkdownSourceHandlerTest(TestCase):
         # The title still comes from the first real heading, not the preamble.
         self.assertEqual(parsed.title, "Later heading")
 
-    def test_title_falls_back_to_the_filename_stem(self) -> None:
+    async def test_title_falls_back_to_the_filename_stem(self) -> None:
         handler, _ = _handler("Just a paragraph, no headings at all.\n")
         asset = _asset("meeting-notes.md")
 
-        parsed = handler.parse(asset, handler.acquire(asset))
+        parsed = await handler.parse(asset, await handler.acquire(asset))
 
         self.assertEqual(parsed.title, "meeting-notes")
 
-    def test_empty_file_fails_with_a_plain_language_error(self) -> None:
+    async def test_empty_file_fails_with_a_plain_language_error(self) -> None:
         handler, _ = _handler("   \n\n  \n")
         asset = _asset()
 
         with self.assertRaises(ValueError) as caught:
-            handler.parse(asset, handler.acquire(asset))
+            await handler.parse(asset, await handler.acquire(asset))
 
         self.assertIn("no readable text", str(caught.exception))

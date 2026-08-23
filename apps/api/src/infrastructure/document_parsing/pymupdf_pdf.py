@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from src.core.text import sanitize_text_for_storage
@@ -22,7 +23,12 @@ class PyMuPDF4LLMAdapter:
     growing this one.
     """
 
-    def load(self, file_data: bytes, filename: str) -> dict[str, Any]:
+    async def load(self, file_data: bytes, filename: str) -> dict[str, Any]:
+        """Parse a PDF to markdown. Runs in a worker thread: PyMuPDF is CPU-bound C code
+        and a 200-page document would otherwise hold the event loop for seconds."""
+        return await asyncio.to_thread(self._load_sync, file_data, filename)
+
+    def _load_sync(self, file_data: bytes, filename: str) -> dict[str, Any]:
         import pymupdf
         import pymupdf4llm
 

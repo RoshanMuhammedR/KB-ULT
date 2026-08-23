@@ -129,7 +129,7 @@ class RLSNotEnforcedError(RuntimeError):
     """
 
 
-def assert_rls_enforced(engine, *, required: bool) -> None:
+async def assert_rls_enforced(engine, *, required: bool) -> None:
     """Check that the ORM's role does NOT bypass RLS, and say so loudly when it does.
 
     RLS is the second of the two isolation layers, and it is the silent one: superusers
@@ -141,11 +141,12 @@ def assert_rls_enforced(engine, *, required: bool) -> None:
     boot), false locally so ``docker compose up`` works without provisioning the ``kb_app``
     role first. Either way the finding is logged, so a dormant backstop is never invisible.
     """
-    with engine.connect() as connection:
-        row = connection.exec_driver_sql(
+    async with engine.connect() as connection:
+        result = await connection.exec_driver_sql(
             "SELECT current_user, rolsuper, rolbypassrls "
             "FROM pg_roles WHERE rolname = current_user"
-        ).first()
+        )
+        row = result.first()
 
     if row is None:  # pragma: no cover - the connected role always exists in pg_roles
         logger.warning("rls_role_check_inconclusive")
@@ -167,15 +168,22 @@ def assert_rls_enforced(engine, *, required: bool) -> None:
     logger.warning("rls_dormant", db_role=role, detail=detail)
 
 
-def register_tenant_guards(session_factory) -> None:
-    """Attach the filter + stamp + RLS-GUC listeners to a sessionmaker.
+def register_tenant_guards(session_class) -> None:
+    """Attach the filter + stamp + RLS-GUC listeners to a Session class.
 
-    Registered once against the shared ``SessionLocal`` so both the HTTP path and the
-    worker path enforce isolation identically. Idempotent.
+    Registered once against the sync Session class that backs every ``AsyncSession``, so
+    the HTTP path and the worker path enforce isolation identically. Idempotent.
+
+    **Why a sync class under asyncio.** ORM events are defined on the sync `Session`;
+    `AsyncSession` drives one inside a greenlet. `after_begin` therefore hands us a real
+    `Connection` and `exec_driver_sql` on it is translated to an await at the driver
+    boundary — which is what makes a transaction-local `SET` possible at all here. The
+    alternative (issuing the `SET` from the caller) would be one more thing every query
+    path has to remember, and forgetting it fails open.
     """
-    if not event.contains(session_factory, "do_orm_execute", _on_do_orm_execute):
-        event.listen(session_factory, "do_orm_execute", _on_do_orm_execute)
-    if not event.contains(session_factory, "before_flush", _on_before_flush):
-        event.listen(session_factory, "before_flush", _on_before_flush)
-    if not event.contains(session_factory, "after_begin", _on_after_begin):
-        event.listen(session_factory, "after_begin", _on_after_begin)
+    if not event.contains(session_class, "do_orm_execute", _on_do_orm_execute):
+        event.listen(session_class, "do_orm_execute", _on_do_orm_execute)
+    if not event.contains(session_class, "before_flush", _on_before_flush):
+        event.listen(session_class, "before_flush", _on_before_flush)
+    if not event.contains(session_class, "after_begin", _on_after_begin):
+        event.listen(session_class, "after_begin", _on_after_begin)

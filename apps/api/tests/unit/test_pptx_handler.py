@@ -1,5 +1,5 @@
-from unittest import TestCase
-from unittest.mock import Mock
+import unittest
+from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 from src.domain.entities import AssetStatus, KnowledgeAsset, SourceType
@@ -7,7 +7,7 @@ from src.ingestion.handlers import PptxSourceHandler
 from src.ingestion.source_types import source_type_for_filename
 
 
-class SourceTypeForPptxTest(TestCase):
+class SourceTypeForPptxTest(unittest.IsolatedAsyncioTestCase):
     def test_resolves_pptx_extension(self) -> None:
         self.assertIs(source_type_for_filename("deck.pptx"), SourceType.PPTX)
 
@@ -26,14 +26,14 @@ def _asset(filename: str = "kickoff.pptx") -> KnowledgeAsset:
 
 
 def _handler(slides, filename: str = "kickoff.pptx") -> PptxSourceHandler:
-    storage = Mock()
+    storage = AsyncMock()
     storage.download.return_value = b"fake-pptx-bytes"
     # The deck reader is a constructor seam, so no python-pptx or real file is needed.
     return PptxSourceHandler(storage, deck_reader=lambda data: slides)
 
 
-class PptxSourceHandlerTest(TestCase):
-    def test_parse_emits_one_document_per_slide_with_slide_locators(self) -> None:
+class PptxSourceHandlerTest(unittest.IsolatedAsyncioTestCase):
+    async def test_parse_emits_one_document_per_slide_with_slide_locators(self) -> None:
         handler = _handler(
             [
                 {"number": 1, "title": "Kickoff", "lines": ["Kickoff", "Q3 plan"], "notes": ""},
@@ -42,7 +42,7 @@ class PptxSourceHandlerTest(TestCase):
         )
         asset = _asset()
 
-        parsed = handler.parse(asset, handler.acquire(asset))
+        parsed = await handler.parse(asset, await handler.acquire(asset))
 
         self.assertEqual(parsed.status, AssetStatus.EXTRACTING)
         self.assertEqual(parsed.title, "Kickoff")
@@ -57,17 +57,17 @@ class PptxSourceHandlerTest(TestCase):
             [{"number": 1, "title": "Kickoff"}, {"number": 2, "title": "Risks"}],
         )
 
-    def test_speaker_notes_are_included_in_the_slide_document(self) -> None:
+    async def test_speaker_notes_are_included_in_the_slide_document(self) -> None:
         handler = _handler(
             [{"number": 1, "title": "Kickoff", "lines": ["Kickoff"], "notes": "Mention the budget"}]
         )
         asset = _asset()
 
-        parsed = handler.parse(asset, handler.acquire(asset))
+        parsed = await handler.parse(asset, await handler.acquire(asset))
 
         self.assertIn("Mention the budget", parsed.documents[0].page_content)
 
-    def test_slides_with_no_text_are_skipped_but_still_counted(self) -> None:
+    async def test_slides_with_no_text_are_skipped_but_still_counted(self) -> None:
         handler = _handler(
             [
                 {"number": 1, "title": "", "lines": [], "notes": ""},
@@ -76,32 +76,32 @@ class PptxSourceHandlerTest(TestCase):
         )
         asset = _asset()
 
-        parsed = handler.parse(asset, handler.acquire(asset))
+        parsed = await handler.parse(asset, await handler.acquire(asset))
 
         self.assertEqual(len(parsed.documents), 1)
         self.assertEqual(parsed.documents[0].metadata["locator"]["value"], 2)
         self.assertEqual(parsed.metadata["slide_count"], 2)
 
-    def test_empty_deck_fails_into_the_retry_path(self) -> None:
+    async def test_empty_deck_fails_into_the_retry_path(self) -> None:
         handler = _handler([])
         asset = _asset()
 
         with self.assertRaises(ValueError) as caught:
-            handler.parse(asset, handler.acquire(asset))
+            await handler.parse(asset, await handler.acquire(asset))
 
         self.assertIn("no slides", str(caught.exception))
 
-    def test_deck_with_no_readable_text_fails(self) -> None:
+    async def test_deck_with_no_readable_text_fails(self) -> None:
         handler = _handler([{"number": 1, "title": "", "lines": [], "notes": ""}])
         asset = _asset()
 
         with self.assertRaises(ValueError) as caught:
-            handler.parse(asset, handler.acquire(asset))
+            await handler.parse(asset, await handler.acquire(asset))
 
         self.assertIn("no readable text", str(caught.exception))
 
-    def test_unreadable_file_is_normalized_to_a_plain_language_error(self) -> None:
-        storage = Mock()
+    async def test_unreadable_file_is_normalized_to_a_plain_language_error(self) -> None:
+        storage = AsyncMock()
         storage.download.return_value = b"not-a-deck"
 
         def explode(data: bytes):
@@ -111,16 +111,16 @@ class PptxSourceHandlerTest(TestCase):
         asset = _asset()
 
         with self.assertRaises(ValueError) as caught:
-            handler.parse(asset, handler.acquire(asset))
+            await handler.parse(asset, await handler.acquire(asset))
 
         self.assertIn("could not be opened", str(caught.exception))
 
-    def test_title_falls_back_to_the_filename_stem(self) -> None:
+    async def test_title_falls_back_to_the_filename_stem(self) -> None:
         handler = _handler(
             [{"number": 1, "title": "", "lines": ["Just body text"], "notes": ""}],
         )
         asset = _asset("board-review.pptx")
 
-        parsed = handler.parse(asset, handler.acquire(asset))
+        parsed = await handler.parse(asset, await handler.acquire(asset))
 
         self.assertEqual(parsed.title, "board-review")

@@ -26,7 +26,7 @@ from src.http.schemas.auth import (
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
-def _to_token_response(tokens: AuthTokens) -> TokenResponse:
+async def _to_token_response(tokens: AuthTokens) -> TokenResponse:
     return TokenResponse(
         access_token=tokens.access_token,
         refresh_token=tokens.refresh_token,
@@ -36,13 +36,13 @@ def _to_token_response(tokens: AuthTokens) -> TokenResponse:
 
 
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
-def register(
+async def register(
     request: RegisterRequest,
     auth_service: Annotated[AuthService, Depends(get_auth_service)],
 ) -> TokenResponse:
     # Creates the workspace and its owner user atomically, then auto-logs-in (returns tokens).
     try:
-        tokens = auth_service.register(
+        tokens = await auth_service.register(
             email=request.email,
             password=request.password,
             name=request.name,
@@ -55,21 +55,21 @@ def register(
 
 
 @router.post("/login", response_model=TokenResponse)
-def login(
+async def login(
     request: LoginRequest,
     auth_service: Annotated[AuthService, Depends(get_auth_service)],
 ) -> TokenResponse:
     # Generic 401 on any failure (unknown email, bad password, inactive user/workspace) — the
     # specific reason is logged server-side only, to avoid account enumeration.
     try:
-        tokens = auth_service.login(email=request.email, password=request.password)
+        tokens = await auth_service.login(email=request.email, password=request.password)
     except InvalidCredentialsError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
     return _to_token_response(tokens)
 
 
 @router.post("/google", response_model=TokenResponse)
-def google_sign_in(
+async def google_sign_in(
     request: GoogleSignInRequest,
     auth_service: Annotated[AuthService, Depends(get_auth_service)],
     settings: Annotated[Settings, Depends(get_settings)],
@@ -83,42 +83,42 @@ def google_sign_in(
             detail="Google sign-in is not configured on this server",
         )
     try:
-        tokens = auth_service.sign_in_with_google(request.id_token)
+        tokens = await auth_service.sign_in_with_google(request.id_token)
     except InvalidCredentialsError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
     return _to_token_response(tokens)
 
 
 @router.post("/refresh", response_model=TokenResponse)
-def refresh(
+async def refresh(
     request: RefreshRequest,
     auth_service: Annotated[AuthService, Depends(get_auth_service)],
 ) -> TokenResponse:
     try:
-        tokens = auth_service.refresh(request.refresh_token)
+        tokens = await auth_service.refresh(request.refresh_token)
     except TokenError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
     return _to_token_response(tokens)
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
-def logout(
+async def logout(
     request: LogoutRequest,
     auth_service: Annotated[AuthService, Depends(get_auth_service)],
 ) -> None:
     # Idempotent: revokes the refresh-token family. Access tokens remain valid until they
     # expire (~15 min) — the deliberate tradeoff of stateless access tokens.
-    auth_service.logout(request.refresh_token)
+    await auth_service.logout(request.refresh_token)
 
 
 @router.get("/me", response_model=MeResponse)
-def me(
+async def me(
     identity: Annotated[Identity, Depends(get_current_identity)],
     auth_service: Annotated[AuthService, Depends(get_auth_service)],
 ) -> MeResponse:
     # Resolves the authenticated identity into a display profile for the account area.
     try:
-        profile = auth_service.me(user_id=identity.user_id, tenant_id=identity.tenant_id)
+        profile = await auth_service.me(user_id=identity.user_id, tenant_id=identity.tenant_id)
     except TokenError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
     return MeResponse(

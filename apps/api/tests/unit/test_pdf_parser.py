@@ -1,6 +1,6 @@
 from types import SimpleNamespace
-from unittest import TestCase
-from unittest.mock import Mock
+import unittest
+from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 from langchain_core.documents import Document
@@ -9,7 +9,7 @@ from src.domain.entities import AssetStatus, KnowledgeAsset, RawContent
 from src.ingestion.handlers import PdfSourceHandler
 
 
-class PdfSourceHandlerTest(TestCase):
+class PdfSourceHandlerTest(unittest.IsolatedAsyncioTestCase):
     def _asset(self) -> KnowledgeAsset:
         return KnowledgeAsset(
             id=uuid4(),
@@ -23,30 +23,31 @@ class PdfSourceHandlerTest(TestCase):
             metadata={"content_type": "application/pdf"},
         )
 
-    def test_acquire_downloads_bytes_from_storage(self) -> None:
-        file_storage = Mock()
+    async def test_acquire_downloads_bytes_from_storage(self) -> None:
+        file_storage = AsyncMock()
         file_storage.download.return_value = b"%PDF"
         handler = PdfSourceHandler(loader=Mock(), file_storage=file_storage)
 
-        raw = handler.acquire(self._asset())
+        raw = await handler.acquire(self._asset())
 
         self.assertEqual(raw.data, b"%PDF")
         file_storage.download.assert_called_once_with("user/asset/sample.pdf")
 
-    def test_parse_builds_markdown_and_documents(self) -> None:
-        loader = SimpleNamespace(
-            load=lambda file_data, filename: {
+    async def test_parse_builds_markdown_and_documents(self) -> None:
+        async def _load(file_data, filename):
+            return {
                 "markdown": "# Heading\n\n| A | B |",
                 "title": "Parsed Title",
                 # The loader returns pages; the handler turns them into Documents.
                 "pages": [{"page_number": 3, "text": "# Heading\x00"}],
                 "metadata": {"status": "success", "errors": 0, "page_count": 1},
             }
-        )
+
+        loader = SimpleNamespace(load=_load)
         handler = PdfSourceHandler(loader=loader, file_storage=Mock())
         asset = self._asset()
 
-        parsed = handler.parse(asset, RawContent(data=b"%PDF", mime="application/pdf"))
+        parsed = await handler.parse(asset, RawContent(data=b"%PDF", mime="application/pdf"))
 
         self.assertEqual(parsed.id, asset.id)
         self.assertEqual(parsed.status, AssetStatus.EXTRACTING)

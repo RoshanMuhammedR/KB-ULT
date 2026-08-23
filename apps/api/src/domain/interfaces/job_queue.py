@@ -12,7 +12,7 @@ class IJobQueue(Protocol):
     different queue engine (Celery/Redis, ...) should only replace that adapter.
     """
 
-    def enqueue_ingestion(self, asset_id: UUID, tenant_id: UUID, user_id: UUID) -> None:
+    async def enqueue_ingestion(self, asset_id: UUID, tenant_id: UUID, user_id: UUID) -> None:
         """Schedule the ingestion pipeline for an already-persisted asset.
 
         Only ids travel through the queue — never the file bytes. `tenant_id`/`user_id`

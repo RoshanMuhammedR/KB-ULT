@@ -37,7 +37,7 @@ class Retriever:
         self.candidate_multiplier = max(1, candidate_multiplier)
         self.rrf_k = rrf_k
 
-    def retrieve(
+    async def retrieve(
         self,
         query_embedding: list[float],
         knowledge_base_id: UUID,
@@ -50,11 +50,11 @@ class Retriever:
         # and 3rd by the other is still visible to be promoted.
         limit = top_k * self.candidate_multiplier
 
-        dense = self.vector_store.search_dense(
+        dense = await self.vector_store.search_dense(
             query_embedding, knowledge_base_id, limit, threshold
         )
         lexical = (
-            self.vector_store.search_lexical(query_embedding, query_text, knowledge_base_id, limit)
+            await self.vector_store.search_lexical(query_embedding, query_text, knowledge_base_id, limit)
             if query_text.strip()
             else []
         )

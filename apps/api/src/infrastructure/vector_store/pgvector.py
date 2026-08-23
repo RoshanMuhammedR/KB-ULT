@@ -4,7 +4,7 @@ from uuid import UUID
 
 import structlog
 from sqlalchemy.exc import ProgrammingError
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.domain.entities import Chunk, Embedding, KnowledgeAsset, RetrievalResult
 from src.infrastructure.repositories.mappers import asset_to_domain, chunk_to_domain
@@ -14,31 +14,31 @@ logger = structlog.get_logger(__name__)
 
 
 class PgVectorStore:
-    def __init__(self, db: Session) -> None:
+    def __init__(self, db: AsyncSession) -> None:
         self.embedding_repo = EmbeddingRepository(db)
 
-    def upsert_embeddings(
+    async def upsert_embeddings(
         self,
         asset: KnowledgeAsset,
         chunks: list[Chunk],
         embeddings: list[Embedding],
     ) -> None:
-        self.embedding_repo.replace_for_chunks(chunks, embeddings)
+        await self.embedding_repo.replace_for_chunks(chunks, embeddings)
 
-    def search_dense(
+    async def search_dense(
         self,
         query_embedding: list[float],
         knowledge_base_id: UUID,
         limit: int,
         threshold: float,
     ) -> list[RetrievalResult]:
-        rows = self.embedding_repo.query_ready_chunks(query_embedding, knowledge_base_id, limit)
+        rows = await self.embedding_repo.query_ready_chunks(query_embedding, knowledge_base_id, limit)
         # The threshold now filters a candidate pool rather than an already-truncated list, so
         # a marginal match no longer costs a result slot — it is simply replaced by the next
         # candidate down.
         return [self._to_result(row) for row in rows if row[2] >= threshold]
 
-    def search_lexical(
+    async def search_lexical(
         self,
         query_embedding: list[float],
         query_text: str,
@@ -46,7 +46,7 @@ class PgVectorStore:
         limit: int,
     ) -> list[RetrievalResult]:
         try:
-            rows = self.embedding_repo.query_ready_chunks_lexical(
+            rows = await self.embedding_repo.query_ready_chunks_lexical(
                 query_embedding, query_text, knowledge_base_id, limit
             )
         except ProgrammingError:

@@ -1,7 +1,7 @@
 import sys
 from types import SimpleNamespace
-from unittest import TestCase
-from unittest.mock import Mock
+import unittest
+from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 # structlog is an optional import in this test environment, matching the other service tests.
@@ -51,9 +51,9 @@ def _user(**overrides) -> User:
 
 
 def _build_service(verifier: _StubVerifier, **overrides) -> tuple[AuthService, dict]:
-    tenant_repo = Mock()
-    user_repo = Mock()
-    refresh_repo = Mock()
+    tenant_repo = AsyncMock()
+    user_repo = AsyncMock()
+    refresh_repo = AsyncMock()
     token_service = Mock()
 
     tenant_repo.get.return_value = Tenant(name="Dana", status=TenantStatus.ACTIVE)
@@ -77,18 +77,19 @@ def _build_service(verifier: _StubVerifier, **overrides) -> tuple[AuthService, d
         refresh_repo=mocks["refresh_repo"],
         password_hasher=Mock(),
         token_service=mocks["token_service"],
-        unit_of_work=Mock(),
+        # commit/rollback are coroutines now (the Session is an AsyncSession)
+        unit_of_work=AsyncMock(),
         refresh_ttl_seconds=3600,
         google_verifier=verifier,
     )
     return service, mocks
 
 
-class GoogleSignInTest(TestCase):
-    def test_new_email_creates_a_tenant_and_a_passwordless_user(self) -> None:
+class GoogleSignInTest(unittest.IsolatedAsyncioTestCase):
+    async def test_new_email_creates_a_tenant_and_a_passwordless_user(self) -> None:
         service, mocks = _build_service(_StubVerifier(_identity()))
 
-        tokens = service.sign_in_with_google("id-token")
+        tokens = await service.sign_in_with_google("id-token")
 
         self.assertEqual(tokens.access_token, "access-token")
         mocks["tenant_repo"].create.assert_called_once()
@@ -99,18 +100,18 @@ class GoogleSignInTest(TestCase):
         # Google already verified the address, so the account starts verified.
         self.assertIsNotNone(created.email_verified_at)
 
-    def test_returning_google_user_is_resolved_by_subject(self) -> None:
+    async def test_returning_google_user_is_resolved_by_subject(self) -> None:
         existing = _user(google_sub="google-sub-123", password_hash=None)
         service, mocks = _build_service(_StubVerifier(_identity()))
         mocks["user_repo"].get_by_google_sub.return_value = existing
 
-        service.sign_in_with_google("id-token")
+        await service.sign_in_with_google("id-token")
 
         mocks["user_repo"].create.assert_not_called()
         mocks["tenant_repo"].create.assert_not_called()
         mocks["user_repo"].link_google.assert_not_called()
 
-    def test_existing_password_account_is_linked_not_duplicated(self) -> None:
+    async def test_existing_password_account_is_linked_not_duplicated(self) -> None:
         existing = _user()
         service, mocks = _build_service(_StubVerifier(_identity()))
         mocks["user_repo"].get_by_google_sub.return_value = None
@@ -119,58 +120,58 @@ class GoogleSignInTest(TestCase):
             google_sub="google-sub-123", tenant_id=existing.tenant_id
         )
 
-        service.sign_in_with_google("id-token")
+        await service.sign_in_with_google("id-token")
 
         mocks["user_repo"].link_google.assert_called_once_with(existing.id, "google-sub-123")
         # One account, one library — no second tenant is created.
         mocks["tenant_repo"].create.assert_not_called()
         mocks["user_repo"].create.assert_not_called()
 
-    def test_unverified_google_email_is_refused(self) -> None:
+    async def test_unverified_google_email_is_refused(self) -> None:
         # The check that makes linking-by-email safe in the first place.
         service, mocks = _build_service(_StubVerifier(_identity(email_verified=False)))
 
         with self.assertRaises(InvalidCredentialsError):
-            service.sign_in_with_google("id-token")
+            await service.sign_in_with_google("id-token")
 
         mocks["user_repo"].create.assert_not_called()
         mocks["user_repo"].link_google.assert_not_called()
 
-    def test_inactive_user_is_denied_generically(self) -> None:
+    async def test_inactive_user_is_denied_generically(self) -> None:
         service, mocks = _build_service(_StubVerifier(_identity()))
         mocks["user_repo"].get_by_google_sub.return_value = _user(
             google_sub="google-sub-123", status=UserStatus.SUSPENDED
         )
 
         with self.assertRaises(InvalidCredentialsError):
-            service.sign_in_with_google("id-token")
+            await service.sign_in_with_google("id-token")
 
-    def test_inactive_tenant_is_denied_generically(self) -> None:
+    async def test_inactive_tenant_is_denied_generically(self) -> None:
         service, mocks = _build_service(_StubVerifier(_identity()))
         mocks["user_repo"].get_by_google_sub.return_value = _user(google_sub="google-sub-123")
         mocks["tenant_repo"].get.return_value = Tenant(name="Dana", status=TenantStatus.SUSPENDED)
 
         with self.assertRaises(InvalidCredentialsError):
-            service.sign_in_with_google("id-token")
+            await service.sign_in_with_google("id-token")
 
-    def test_an_invalid_token_surfaces_as_the_same_generic_error(self) -> None:
+    async def test_an_invalid_token_surfaces_as_the_same_generic_error(self) -> None:
         service, _ = _build_service(
             _StubVerifier(error=InvalidCredentialsError("Invalid credentials or inactive account"))
         )
 
         with self.assertRaises(InvalidCredentialsError):
-            service.sign_in_with_google("tampered-token")
+            await service.sign_in_with_google("tampered-token")
 
-    def test_google_sign_in_without_a_verifier_is_refused(self) -> None:
+    async def test_google_sign_in_without_a_verifier_is_refused(self) -> None:
         service, _ = _build_service(_StubVerifier(_identity()))
         service.google_verifier = None
 
         with self.assertRaises(InvalidCredentialsError):
-            service.sign_in_with_google("id-token")
+            await service.sign_in_with_google("id-token")
 
 
-class PasswordLoginAgainstGoogleAccountTest(TestCase):
-    def test_password_login_on_a_passwordless_account_is_generically_denied(self) -> None:
+class PasswordLoginAgainstGoogleAccountTest(unittest.IsolatedAsyncioTestCase):
+    async def test_password_login_on_a_passwordless_account_is_generically_denied(self) -> None:
         # Must be indistinguishable from a wrong password: no account enumeration, and no
         # hint about how the account was created.
         service, mocks = _build_service(_StubVerifier(_identity()))
@@ -179,6 +180,6 @@ class PasswordLoginAgainstGoogleAccountTest(TestCase):
         )
 
         with self.assertRaises(InvalidCredentialsError) as caught:
-            service.login(email="dana@example.com", password="whatever-they-typed")
+            await service.login(email="dana@example.com", password="whatever-they-typed")
 
         self.assertIn("Invalid credentials", str(caught.exception))

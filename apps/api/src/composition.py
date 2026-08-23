@@ -12,7 +12,7 @@ already-opened `Session` (request-scoped in HTTP, worker-scoped in the worker) p
 
 from __future__ import annotations
 
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.application.auth import AuthService
 from src.application.chat.prompt_builder import PromptBuilder
@@ -35,7 +35,7 @@ from src.infrastructure.auth import (
     GoogleIdTokenVerifier,
     JwtTokenService,
 )
-from src.infrastructure.cache import RedisCache
+from src.infrastructure.cache import EmbeddingCache, RedisCache
 from src.infrastructure.document_parsing import PyMuPDF4LLMAdapter
 from src.infrastructure.langchain_adapters.chat_model import OpenAICompatibleChatAdapter
 from src.infrastructure.langchain_adapters.embeddings import OpenAICompatibleEmbeddingsAdapter
@@ -63,7 +63,15 @@ from src.ingestion.handlers import (
     build_transcript_fetcher,
 )
 from src.ingestion.registry import SourceHandlerRegistry
-from src.processing.chunking import RecursiveKnowledgeAssetChunker
+from src.application.chat.agentic import (
+    AgenticChatService,
+    ContextAssembler,
+    GroundingChecker,
+    RetrievalLoop,
+)
+from src.processing.chunking import StructureAwareChunker
+from src.retrieval.langchain.query import QueryResolver, QueryRewriter, SufficiencyChecker
+from src.retrieval.langchain.rerank import ScoringReranker
 from src.retrieval.retriever import Retriever
 
 
@@ -83,7 +91,7 @@ def build_cache(settings: Settings) -> ICache:
     return _cache
 
 
-def build_job_queue(db: Session | None = None) -> IJobQueue:
+def build_job_queue(db: AsyncAsyncSession | None = None) -> IJobQueue:
     # Imported lazily so importing the composition root doesn't drag in Procrastinate
     # (and its DB connector) for callers that only need, say, the chat service.
     from src.infrastructure.queue import ProcrastinateJobQueue, TransactionalProcrastinateJobQueue
@@ -143,7 +151,34 @@ def _build_embedding_provider(settings: Settings) -> AICreditsEmbeddingProvider:
     )
 
 
-def build_ingestion_service(db: Session, settings: Settings) -> IngestionService:
+def _build_chat_adapter(settings: Settings, model: str) -> OpenAICompatibleChatAdapter:
+    """One chat adapter for a named model. `.client` is the raw LangChain model, which is
+    what the pipeline's structured-output steps need; the wrapper is what the domain uses."""
+    return OpenAICompatibleChatAdapter(
+        api_key=settings.aicredits_api_key,
+        base_url=settings.aicredits_base_url,
+        model=model,
+    )
+
+
+def _build_fast_llm(settings: Settings) -> AICreditsLLMProvider:
+    """The small model used for the pipeline's mechanical steps.
+
+    Query resolution, relevance grading, reranking, sufficiency, grounding and the
+    per-section blurb all run several times per question and are judged on latency rather
+    than prose quality. Keeping them on a separate setting means the answering model can be
+    upgraded without multiplying the cost of everything around it.
+    """
+    return AICreditsLLMProvider(
+        OpenAICompatibleChatAdapter(
+            api_key=settings.aicredits_api_key,
+            base_url=settings.aicredits_base_url,
+            model=settings.aicredits_fast_model,
+        )
+    )
+
+
+def build_ingestion_service(db: AsyncSession, settings: Settings) -> IngestionService:
     # Assembles the full ingestion graph: repositories (asset/chunk/job/job-event),
     # source-handler registry, chunker, embedder, vector store, object storage, and the
     # job queue. File storage is shared with the handlers so acquisition and upload use
@@ -156,8 +191,12 @@ def build_ingestion_service(db: Session, settings: Settings) -> IngestionService
         job_repo=IngestionJobRepository(db),
         job_event_repo=IngestionJobEventRepository(db),
         source_handler_registry=_build_source_handler_registry(file_storage, settings),
-        chunker=RecursiveKnowledgeAssetChunker(
-            RecursiveSplitterAdapter(settings.chunk_size_tokens, settings.chunk_overlap_tokens)
+        chunker=StructureAwareChunker(
+            RecursiveSplitterAdapter(settings.chunk_size_tokens, settings.chunk_overlap_tokens),
+            # The describing model, not the answering one: a one-sentence blurb per section
+            # is exactly the work a small model does well and a large one overcharges for.
+            llm_provider=_build_fast_llm(settings),
+            enrich=settings.enrich_chunks,
         ),
         embedding_provider=_build_embedding_provider(settings),
         vector_store=PgVectorStore(db),
@@ -168,7 +207,7 @@ def build_ingestion_service(db: Session, settings: Settings) -> IngestionService
     )
 
 
-def build_chat_service(db: Session, settings: Settings) -> ChatService:
+def build_chat_service(db: AsyncSession, settings: Settings) -> ChatService:
     llm_provider = AICreditsLLMProvider(
         OpenAICompatibleChatAdapter(
             api_key=settings.aicredits_api_key,
@@ -193,7 +232,60 @@ def build_chat_service(db: Session, settings: Settings) -> ChatService:
     )
 
 
-def build_knowledge_base_service(db: Session) -> KnowledgeBaseService:
+def build_agentic_chat_service(db: AsyncSession, settings: Settings) -> AgenticChatService:
+    """Assemble the agentic query pipeline.
+
+    Two models, deliberately: the answering model writes the prose a user reads, and the
+    fast model does everything else — resolving the query, scoring candidates, judging
+    sufficiency, checking grounding. Those run several times per question and are judged on
+    latency, so paying answer-model prices for them would multiply the cost of a question
+    without improving a word of the output.
+    """
+    answering = _build_chat_adapter(settings, settings.aicredits_chat_model).client
+    fast = _build_chat_adapter(settings, settings.aicredits_fast_model).client
+
+    vector_store = PgVectorStore(db)
+    chunk_repo = ChunkRepository(db)
+
+    return AgenticChatService(
+        kb_repo=KnowledgeBaseRepository(db),
+        conversation_repo=ConversationRepository(db),
+        chunk_repo=chunk_repo,
+        loop=RetrievalLoop(
+            vector_store=vector_store,
+            # Query embeddings go through the cache: a repeated question is common in a
+            # personal knowledge base, and the vector for a given string never changes.
+            embedding_provider=EmbeddingCache(
+                _build_embedding_provider(settings),
+                build_cache(settings),
+                model=settings.aicredits_embedding_model,
+                ttl_seconds=settings.embedding_cache_ttl_seconds,
+            ),
+            reranker=ScoringReranker(
+                fast,
+                top_n=settings.rerank_top_n,
+                threshold=settings.rerank_relevance_threshold,
+                asr_threshold=settings.rerank_asr_relevance_threshold,
+                timeout_seconds=settings.rerank_timeout_seconds,
+            ),
+            rewriter=QueryRewriter(fast),
+            sufficiency=SufficiencyChecker(fast, min_chunks=settings.retrieval_min_context_chunks),
+            max_hops=settings.max_retrieval_hops,
+            # Both arms over-fetch so fusion has something to promote and the reranker has
+            # a pool to judge rather than an already-truncated list.
+            candidate_limit=settings.retrieval_top_k * settings.retrieval_candidate_multiplier,
+            threshold=settings.retrieval_score_threshold,
+            rrf_k=settings.retrieval_rrf_k,
+        ),
+        resolver=QueryResolver(fast),
+        assembler=ContextAssembler(chunk_repo, token_budget=settings.context_token_budget),
+        grounding=GroundingChecker(fast),
+        llm_provider=AICreditsLLMProvider(_build_chat_adapter(settings, settings.aicredits_chat_model)),
+        grounding_blocking=settings.grounding_blocking,
+    )
+
+
+def build_knowledge_base_service(db: AsyncSession) -> KnowledgeBaseService:
     return KnowledgeBaseService(KnowledgeBaseRepository(db))
 
 
@@ -226,7 +318,7 @@ def build_google_verifier(settings: Settings) -> GoogleIdTokenVerifier:
     return _google_verifier
 
 
-def build_auth_service(db: Session, settings: Settings) -> AuthService:
+def build_auth_service(db: AsyncSession, settings: Settings) -> AuthService:
     # The request/worker Session doubles as the IUnitOfWork so registration's tenant+user
     # inserts commit atomically.
     return AuthService(

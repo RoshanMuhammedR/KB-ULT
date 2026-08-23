@@ -1,8 +1,8 @@
-from contextlib import contextmanager
+from contextlib import asynccontextmanager
 import sys
 from types import SimpleNamespace
-from unittest import TestCase
-from unittest.mock import Mock
+import unittest
+from unittest.mock import AsyncMock, Mock
 from uuid import UUID, uuid4
 
 sys.modules.setdefault("structlog", SimpleNamespace(get_logger=lambda *_: Mock()))
@@ -29,7 +29,7 @@ class FakeJobQueue:
         self.enqueued: list[UUID] = []
         self.tenant_ids: list[UUID] = []
 
-    def enqueue_ingestion(self, asset_id: UUID, tenant_id: UUID, user_id: UUID) -> None:
+    async def enqueue_ingestion(self, asset_id: UUID, tenant_id: UUID, user_id: UUID) -> None:
         self.enqueued.append(asset_id)
         self.tenant_ids.append(tenant_id)
 
@@ -37,28 +37,28 @@ class FakeJobQueue:
 class NullAtomicScope:
     """Stand-in for the real transaction scope: runs the block, owns no transaction."""
 
-    @contextmanager
-    def atomic(self):
+    @asynccontextmanager
+    async def atomic(self):
         yield
 
 
 def _build_service(**overrides):
     """Assemble an IngestionService with mocks, overridable per test."""
-    kb_repo = Mock()
+    kb_repo = AsyncMock()
     kb_repo.ensure_default.return_value = KnowledgeBase(id=uuid4())
-    asset_repo = Mock()
+    asset_repo = AsyncMock()
     asset_repo.latest_for_filename.return_value = None
     asset_repo.create_pending.side_effect = lambda asset: asset
     asset_repo.update_from_domain.side_effect = lambda asset: asset
 
-    job_repo = Mock()
+    job_repo = AsyncMock()
     job_repo.create.side_effect = lambda job: job
     job_repo.latest_for_asset.return_value = IngestionJob(id=uuid4())
 
-    job_event_repo = Mock()
+    job_event_repo = AsyncMock()
     job_event_repo.append.side_effect = lambda event: event
 
-    chunk_repo = Mock()
+    chunk_repo = AsyncMock()
     chunk_repo.replace_for_asset.side_effect = lambda _, chunks: chunks
 
     # The source handler owns acquire (download) + parse (extract -> documents).
@@ -78,12 +78,18 @@ def _build_service(**overrides):
     source_handler_registry = Mock()
     source_handler_registry.get.return_value = handler
 
-    chunker = Mock()
-    chunker.chunk.return_value = [Chunk(text="hello")]
-    embedder = Mock()
+    chunker = AsyncMock()
+    # A parent and its child, which is the shape the pipeline now expects: only the child
+    # is embedded, and the parent is what expands into the prompt.
+    parent = Chunk(text="hello", chunk_index=0)
+    chunker.chunk.return_value = [
+        parent,
+        Chunk(text="hello", chunk_index=1, parent_id=parent.id),
+    ]
+    embedder = AsyncMock()
     embedder.embed_texts.return_value = [Embedding(vector=[0.1], model="m", dimensions=1)]
-    vector_store = Mock()
-    file_storage = Mock()
+    vector_store = AsyncMock()
+    file_storage = AsyncMock()
     file_storage.upload.side_effect = lambda key, file_data, content_type: key
     file_storage.download.return_value = b"pdf"
 
@@ -109,8 +115,8 @@ def _build_service(**overrides):
     return IngestionService(**kwargs), kwargs
 
 
-class EnqueueIngestionTest(TestCase):
-    def test_uploads_and_enqueues_without_running_pipeline(self) -> None:
+class EnqueueIngestionTest(unittest.IsolatedAsyncioTestCase):
+    async def test_uploads_and_enqueues_without_running_pipeline(self) -> None:
         service, deps = _build_service()
 
         # Enqueue reads the current tenant/user (set by the HTTP middleware in prod) to
@@ -118,7 +124,7 @@ class EnqueueIngestionTest(TestCase):
         tenant_id, user_id = uuid4(), uuid4()
         tokens = set_tenant_context(tenant_id, user_id)
         try:
-            asset = service.enqueue_ingestion(b"pdf", "../ My File.pdf ", "application/pdf")
+            asset = await service.enqueue_ingestion(b"pdf", "../ My File.pdf ", "application/pdf")
         finally:
             reset_tenant_context(tokens)
 
@@ -141,8 +147,8 @@ class EnqueueIngestionTest(TestCase):
         self.assertEqual(deps["job_queue"].tenant_ids, [tenant_id])
 
 
-class ProcessIngestionTest(TestCase):
-    def test_acquires_source_and_runs_pipeline_to_ready(self) -> None:
+class ProcessIngestionTest(unittest.IsolatedAsyncioTestCase):
+    async def test_acquires_source_and_runs_pipeline_to_ready(self) -> None:
         asset_id = uuid4()
         queued = KnowledgeAsset(
             id=asset_id,
@@ -153,13 +159,13 @@ class ProcessIngestionTest(TestCase):
             status=AssetStatus.QUEUED,
             metadata={"content_type": "application/pdf"},
         )
-        asset_repo = Mock()
+        asset_repo = AsyncMock()
         asset_repo.get.return_value = queued
         asset_repo.create_pending.side_effect = lambda asset: asset
         asset_repo.update_from_domain.side_effect = lambda asset: asset
         service, deps = _build_service(asset_repo=asset_repo)
 
-        result = service.process_ingestion(asset_id)
+        result = await service.process_ingestion(asset_id)
 
         self.assertEqual(result.status, AssetStatus.READY)
         # Worker sources content via the handler (never from the queue payload).

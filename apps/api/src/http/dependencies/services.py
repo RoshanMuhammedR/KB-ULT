@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import Depends, HTTPException, Request, status
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.application.auth import AuthService
 from src.application.chat.service import ChatService
@@ -28,7 +28,7 @@ from src.infrastructure.database.session import get_db
 # cached `Settings` to the shared builders in src/composition.py. The worker uses the
 # same builders with a worker-scoped session, so both paths wire up identically.
 
-DbSession = Annotated[Session, Depends(get_db)]
+DbSession = Annotated[AsyncSession, Depends(get_db)]
 AppSettings = Annotated[Settings, Depends(get_settings)]
 
 
