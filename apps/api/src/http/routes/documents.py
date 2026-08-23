@@ -39,7 +39,7 @@ from src.http.schemas.jobs import JobEventSchema
 router = APIRouter(prefix="/documents", tags=["documents"])
 
 
-async def _megabytes(size_bytes: int) -> int:
+def _megabytes(size_bytes: int) -> int:
     return round(size_bytes / (1024 * 1024))
 
 
@@ -127,7 +127,7 @@ async def list_assets(
     counts = await ChunkRepository(db).count_by_asset([asset.id for asset in assets])
     # No `file_storage`: the library list renders names and statuses, not file contents, so
     # it needs no signed URLs. Clicking through to a source calls /download for one.
-    return [_to_schema(asset, passage_count=counts.get(asset.id, 0)) for asset in assets]
+    return [await _to_schema(asset, passage_count=counts.get(asset.id, 0)) for asset in assets]
 
 
 @router.get("/{asset_id}", response_model=KnowledgeAssetSchema)
@@ -143,7 +143,7 @@ async def get_asset(
         raise HTTPException(status_code=404, detail="KnowledgeAsset not found")
     job = await IngestionJobRepository(db).latest_for_asset(asset_id)
     counts = await ChunkRepository(db).count_by_asset([asset.id])
-    return _to_schema(asset, file_storage, job, passage_count=counts.get(asset.id, 0))
+    return await _to_schema(asset, file_storage, job, passage_count=counts.get(asset.id, 0))
 
 
 @router.get("/{asset_id}/download")
@@ -306,7 +306,7 @@ async def upload_document(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return _to_schema(asset, file_storage)
+    return await _to_schema(asset, file_storage)
 
 
 @router.post("/upload-url", response_model=UploadUrlResponse)
@@ -353,7 +353,7 @@ async def complete_upload(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return _to_schema(asset, file_storage)
+    return await _to_schema(asset, file_storage)
 
 
 @router.post("/ingest-url", response_model=KnowledgeAssetSchema, status_code=status.HTTP_202_ACCEPTED)
@@ -368,7 +368,7 @@ async def ingest_url(
         asset = await ingestion_service.enqueue_url(request.url)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return _to_schema(asset, file_storage)
+    return await _to_schema(asset, file_storage)
 
 
 @router.post("/{asset_id}/retry", response_model=KnowledgeAssetSchema, status_code=status.HTTP_202_ACCEPTED)
@@ -383,7 +383,7 @@ async def retry_asset(
         asset = await ingestion_service.retry(asset_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return _to_schema(asset, file_storage)
+    return await _to_schema(asset, file_storage)
 
 
 
@@ -398,7 +398,7 @@ async def rename_asset(
         asset = await KnowledgeAssetRepository(db).rename(asset_id, request.title)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return _to_schema(asset, file_storage)
+    return await _to_schema(asset, file_storage)
 
 
 @router.delete("/{asset_id}", status_code=204)

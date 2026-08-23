@@ -52,7 +52,7 @@ _SSE_HEADERS = {
 }
 
 
-async def _message_schema(message) -> MessageSchema:
+def _message_schema(message) -> MessageSchema:
     return MessageSchema(
         id=message.id,
         role=message.role.value,
@@ -110,7 +110,7 @@ async def rename_conversation(
         await repo.rename(conversation_id, request.title)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return get_conversation(conversation_id, db)
+    return await get_conversation(conversation_id, db)
 
 
 @router.delete("/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)

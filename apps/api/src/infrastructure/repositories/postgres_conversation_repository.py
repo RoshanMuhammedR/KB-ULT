@@ -78,11 +78,11 @@ class ConversationRepository:
         ]
 
     async def get(self, conversation_id: UUID) -> Conversation | None:
-        model = self._model(conversation_id)
+        model = await self._model(conversation_id)
         return conversation_to_domain(model) if model is not None else None
 
     async def get_with_messages(self, conversation_id: UUID) -> Conversation | None:
-        model = self._model(conversation_id)
+        model = await self._model(conversation_id)
         if model is None:
             return None
         messages = (await self.db.scalars(
@@ -136,7 +136,7 @@ class ConversationRepository:
         return conversation_to_domain(model)
 
     async def rename(self, conversation_id: UUID, title: str) -> Conversation:
-        model = self._model(conversation_id)
+        model = await self._model(conversation_id)
         if model is None:
             raise ValueError("Conversation not found")
         cleaned = sanitize_text_for_storage(title).strip()
@@ -148,7 +148,7 @@ class ConversationRepository:
         return conversation_to_domain(model)
 
     async def delete(self, conversation_id: UUID) -> None:
-        model = self._model(conversation_id)
+        model = await self._model(conversation_id)
         if model is None:
             raise ValueError("Conversation not found")
         # Messages go with it via the FK's ON DELETE CASCADE.
@@ -167,7 +167,7 @@ class ConversationRepository:
         self.db.add(model)
 
         # Appending is what "last touched" means, so the thread rises in the list.
-        conversation = self._model(message.conversation_id)
+        conversation = await self._model(message.conversation_id)
         if conversation is not None:
             conversation.updated_at = func.now()
 

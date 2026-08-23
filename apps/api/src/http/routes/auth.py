@@ -26,7 +26,7 @@ from src.http.schemas.auth import (
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
-async def _to_token_response(tokens: AuthTokens) -> TokenResponse:
+def _to_token_response(tokens: AuthTokens) -> TokenResponse:
     return TokenResponse(
         access_token=tokens.access_token,
         refresh_token=tokens.refresh_token,
