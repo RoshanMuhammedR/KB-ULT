@@ -38,6 +38,11 @@ _SYSTEM = (
 
 _USER = "Question: {query}\n\nDocuments:\n{documents}"
 
+# How much of each document the scorer sees. Judging relevance needs the gist, not the
+# whole passage, and sending the whole passage for every candidate is what made this
+# call too slow to finish.
+_SCORE_EXCERPT_CHARS = 400
+
 
 class _ScoredDocument(BaseModel):
     index: int = Field(description="The document's index, exactly as given")
@@ -62,12 +67,14 @@ class ScoringReranker:
         llm,
         *,
         top_n: int,
+        candidate_limit: int,
         threshold: float,
         asr_threshold: float,
         timeout_seconds: float,
     ) -> None:
         self.llm = llm
         self.top_n = top_n
+        self.candidate_limit = candidate_limit
         self.threshold = threshold
         self.asr_threshold = asr_threshold
         self.timeout_seconds = timeout_seconds
@@ -82,15 +89,25 @@ class ScoringReranker:
         if not documents:
             return [], False
 
+        # Only the strongest fusion candidates get an LLM opinion. The retrieval pool is
+        # over-fetched for recall, and scoring all of it built a prompt too large to finish
+        # inside the timeout - so every query paid the full wait and then threw the answer
+        # away. `documents` is left whole for `_fallback`, which still ranks over everything
+        # that was retrieved.
+        pool = sorted(documents, key=lambda d: d.metadata.get(SCORE, 0.0), reverse=True)[
+            : self.candidate_limit
+        ]
+
         try:
             scored = await asyncio.wait_for(
-                self._score(documents, query), timeout=self.timeout_seconds
+                self._score(pool, query), timeout=self.timeout_seconds
             )
         except Exception as exc:  # noqa: BLE001 - timeout, provider outage, bad output: all degrade
             logger.warning(
                 "rerank_degraded",
                 reason=type(exc).__name__,
-                candidates=len(documents),
+                candidates=len(pool),
+                retrieved=len(documents),
                 timeout_seconds=self.timeout_seconds,
             )
             return self._fallback(documents), True
@@ -98,7 +115,8 @@ class ScoringReranker:
         kept = [document for document in scored if self._passes(document)]
         logger.info(
             "rerank_complete",
-            candidates=len(documents),
+            candidates=len(pool),
+            retrieved=len(documents),
             scored=len(scored),
             kept=len(kept),
             dropped_below_threshold=len(scored) - len(kept),
@@ -110,7 +128,8 @@ class ScoringReranker:
 
     async def _score(self, documents: list[Document], query: str) -> list[Document]:
         listing = "\n\n".join(
-            f"[{i}] {document.page_content[:1200]}" for i, document in enumerate(documents)
+            f"[{i}] {document.page_content[:_SCORE_EXCERPT_CHARS]}"
+            for i, document in enumerate(documents)
         )
         structured = self.llm.with_structured_output(_Ranking)
         ranking: _Ranking = await structured.ainvoke(

@@ -316,6 +316,9 @@ class MessageModel(TenantScoped, Base):
     role: Mapped[str] = mapped_column(String(16), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     citations: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    # How the answer was reached: the loop's hop-by-hop record. Nullable because answers
+    # written before 0010 genuinely have none, and because only the assistant turn has one.
+    trace: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     insufficient_context: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 

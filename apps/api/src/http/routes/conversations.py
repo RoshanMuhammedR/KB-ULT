@@ -58,6 +58,7 @@ def _message_schema(message) -> MessageSchema:
         role=message.role.value,
         content=message.content,
         citations=message.citations,
+        trace=message.trace,
         insufficient_context=message.insufficient_context,
         created_at=message.created_at,
     )

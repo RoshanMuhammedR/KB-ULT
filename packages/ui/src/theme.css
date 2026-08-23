@@ -235,6 +235,26 @@
   animation: saga-caret 1s step-end infinite;
 }
 
+/*
+ * The streaming caret for rendered markdown.
+ *
+ * The plain-text answer could simply append a caret character to the last paragraph, but
+ * markdown is parsed as a whole document - appending a glyph to the source would change what
+ * is being parsed, and a caret is not part of the answer. Attaching it to the last rendered
+ * block instead keeps it out of the markdown entirely, and it lands correctly whether that
+ * block turns out to be a paragraph, a list item or a table.
+ */
+@utility prose-streaming {
+  & > *:last-child::after {
+    content: "▌";
+    display: inline-block;
+    width: 0.5ch;
+    margin-left: 0.15ch;
+    color: var(--color-primary);
+    animation: saga-caret 1s step-end infinite;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

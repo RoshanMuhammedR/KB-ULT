@@ -5,6 +5,7 @@
   "main": "src/index.ts",
   "exports": {
     ".": "./src/index.ts",
+    "./markdown": "./src/primitives/markdown.tsx",
     "./theme.css": "./src/theme.css"
   },
   "scripts": {
@@ -14,7 +15,8 @@
   },
   "dependencies": {
     "@kb/shared": "workspace:*",
-    "lucide-react": "^0.575.0"
+    "lucide-react": "^0.575.0",
+    "markdown-to-jsx": "^9.10.2"
   },
   "peerDependencies": {
     "next": ">=15",

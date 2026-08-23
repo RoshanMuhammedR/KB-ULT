@@ -12,6 +12,7 @@ counter shared between concurrent questions is a bug that only appears under loa
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from uuid import UUID
 
@@ -39,6 +40,19 @@ class HopRecord:
     sufficient: bool
     missing: str = ""
 
+    def to_wire(self) -> dict:
+        """The shape the client renders and the message row stores."""
+        return {
+            "hop": self.hop,
+            "query": self.query,
+            "strategy": self.strategy,
+            "candidates": self.candidates,
+            "kept": self.kept,
+            "rerank_degraded": self.rerank_degraded,
+            "sufficient": self.sufficient,
+            "missing": self.missing,
+        }
+
 
 @dataclass(slots=True)
 class LoopState:
@@ -58,6 +72,20 @@ class LoopState:
     @property
     def found_anything(self) -> bool:
         return bool(self.documents)
+
+    def to_wire(self) -> dict:
+        """How the answer was reached, for the trace panel and the eval harness.
+
+        Carries the resolved query and every hop, but never the passages themselves - the
+        citations already ship those, and duplicating them would double the size of a row
+        that is written on every single answer.
+        """
+        return {
+            "resolved_query": self.resolved_query,
+            "hops": [hop.to_wire() for hop in self.hops],
+            "exit_reason": self.exit_reason,
+            "degraded": self.degraded,
+        }
 
 
 class RetrievalLoop:
@@ -97,13 +125,21 @@ class RetrievalLoop:
         self.threshold = threshold
         self.rrf_k = rrf_k
 
-    async def run(
+    async def stream(
         self,
         state: LoopState,
         knowledge_base_id: UUID,
         *,
         keywords: str = "",
-    ) -> LoopState:
+    ) -> AsyncIterator[tuple[str, dict]]:
+        """Run the hops, yielding a status frame at each phase boundary.
+
+        A generator rather than a coroutine because this is the longest part of answering a
+        question - two retrievals, two rerank calls and two grading calls - and reporting it
+        as one opaque "searching" left the user watching a spinner for seconds with no idea
+        whether anything was happening. `state` is mutated in place, so the caller still has
+        the finished LoopState once this is drained.
+        """
         query = state.resolved_query
         # The lexical arm wants distinctive terms, not a sentence: `websearch_to_tsquery`
         # ANDs what it is given, so a full conversational question usually matches nothing.
@@ -113,7 +149,17 @@ class RetrievalLoop:
 
         while state.hop_count < self.max_hops:
             hop = state.hop_count + 1
-            documents, degraded = await self._retrieve(query, lexical_query, knowledge_base_id)
+            yield (
+                "status",
+                {"stage": "searching", "hop": hop, "of": self.max_hops, "strategy": strategy},
+            )
+            candidates = await self._fetch(query, lexical_query, knowledge_base_id)
+
+            yield (
+                "status",
+                {"stage": "ranking", "hop": hop, "of": self.max_hops, "candidates": len(candidates)},
+            )
+            documents, degraded = await self.reranker.compress(candidates, query)
             state.degraded = state.degraded or degraded
 
             self._merge(state, documents)
@@ -123,6 +169,10 @@ class RetrievalLoop:
             else:
                 consecutive_empty = 0
 
+            yield (
+                "status",
+                {"stage": "grading", "hop": hop, "of": self.max_hops, "kept": len(state.documents)},
+            )
             verdict = await self.sufficiency.check(
                 state.question, [d.page_content for d in state.documents]
             )
@@ -157,6 +207,10 @@ class RetrievalLoop:
             query, strategy = await self.rewriter.rewrite(query)
             lexical_query = query
             logger.info("retrieval_rewrite", hop=hop, strategy=strategy, query=query)
+            yield (
+                "status",
+                {"stage": "rewriting", "hop": hop + 1, "of": self.max_hops, "strategy": strategy},
+            )
 
         if not state.exit_reason:
             state.exit_reason = "max_hops"
@@ -170,11 +224,10 @@ class RetrievalLoop:
             documents=len(state.documents),
             degraded=state.degraded,
         )
-        return state
 
-    async def _retrieve(
+    async def _fetch(
         self, query: str, lexical_query: str, knowledge_base_id: UUID
-    ) -> tuple[list[Document], bool]:
+    ) -> list[Document]:
         embedding = await self.embedding_provider.embed_query(query)
         retriever = build_hybrid_retriever(
             self.vector_store,
@@ -187,8 +240,9 @@ class RetrievalLoop:
         # The ensemble passes one query string to both arms, but the arms want different
         # things — a sentence for the embedding, keywords for `websearch_to_tsquery`. The
         # dense arm already has its vector, so the string it receives is unused.
-        candidates = await retriever.ainvoke(lexical_query, config={"callbacks": tracing.callbacks()})
-        return await self.reranker.compress(candidates, query)
+        # Reranking is deliberately *not* done here: the caller yields a status frame
+        # between retrieval and ranking, which it cannot do if the two are one await.
+        return await retriever.ainvoke(lexical_query, config={"callbacks": tracing.callbacks()})
 
     @staticmethod
     def _merge(state: LoopState, documents: list[Document]) -> None:

@@ -264,6 +264,7 @@ def build_agentic_chat_service(db: AsyncSession, settings: Settings) -> AgenticC
             reranker=ScoringReranker(
                 fast,
                 top_n=settings.rerank_top_n,
+                candidate_limit=settings.rerank_candidate_limit,
                 threshold=settings.rerank_relevance_threshold,
                 asr_threshold=settings.rerank_asr_relevance_threshold,
                 timeout_seconds=settings.rerank_timeout_seconds,

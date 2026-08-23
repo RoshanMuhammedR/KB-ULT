@@ -12,6 +12,7 @@ class MessageSchema(BaseModel):
     role: str
     content: str
     citations: list[dict[str, Any]]
+    trace: dict[str, Any] | None = None
     insufficient_context: bool
     created_at: datetime | None
 

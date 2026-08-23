@@ -80,6 +80,12 @@ class Settings(BaseSettings):
     max_retrieval_hops: int = 2
     # How many chunks survive reranking and reach the prompt.
     rerank_top_n: int = 6
+    # How many of the fused candidates are worth an LLM opinion. The retrieval pool is
+    # deliberately over-fetched for recall, but scoring all of it produced a ~9k-token
+    # prompt that never finished inside the timeout - so every query paid the full wait
+    # and then discarded the result. The weakest fusion candidates were never going to
+    # survive the relevance floor anyway.
+    rerank_candidate_limit: int = 12
     # The reranker is an LLM call; past this it is costing more than the recall it adds.
     # On timeout the pipeline falls back to raw fusion order rather than failing.
     rerank_timeout_seconds: float = 2.5

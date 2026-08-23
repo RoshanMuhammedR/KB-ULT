@@ -29,6 +29,7 @@ class Message:
     content: str
     id: UUID = field(default_factory=uuid4)
     citations: list[dict[str, Any]] = field(default_factory=list)
+    trace: dict[str, Any] | None = None
     insufficient_context: bool = False
     created_at: datetime | None = None
 

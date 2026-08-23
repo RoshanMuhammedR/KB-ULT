@@ -13,7 +13,7 @@ import type {
   TokenResponse,
   UploadUrlResponse
 } from "@/types/api";
-import type { AnswerStatus, GroundingReport } from "@/types/api";
+import type { AnswerStatus, AnswerTrace, GroundingReport } from "@/types/api";
 import { clearSession, getAccessToken, getRefreshToken, getSession, saveSession } from "@/lib/auth";
 
 // Same-origin in production (Caddy routes /api/* to FastAPI); an absolute URL in dev, where
@@ -270,7 +270,11 @@ export type StreamHandlers = {
   onConversation?: (conversation: { id: string; title: string }) => void;
   onDelta?: (text: string) => void;
   onCitations?: (citations: Citation[]) => void;
-  onDone?: (done: { message_id: string; insufficient_context: boolean }) => void;
+  onDone?: (done: {
+    message_id: string;
+    insufficient_context: boolean;
+    trace?: AnswerTrace | null;
+  }) => void;
   /** Progress through the pipeline, before any token exists to show. */
   onStatus?: (status: AnswerStatus) => void;
   /** Arrives after `done`; the answer is already complete and displayed. */
@@ -376,7 +380,9 @@ function dispatchFrame(frame: string, handlers: StreamHandlers): void {
       handlers.onCitations?.(payload as Citation[]);
       break;
     case "done":
-      handlers.onDone?.(payload as { message_id: string; insufficient_context: boolean });
+      handlers.onDone?.(
+        payload as { message_id: string; insufficient_context: boolean; trace?: AnswerTrace | null }
+      );
       break;
     case "status":
       handlers.onStatus?.(payload as AnswerStatus);

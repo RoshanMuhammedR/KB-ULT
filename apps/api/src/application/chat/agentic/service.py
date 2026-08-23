@@ -113,9 +113,9 @@ class AgenticChatService:
         yield ("status", {"stage": "resolving"})
         resolved = await self.resolver.resolve(question, turns)
 
-        yield ("status", {"stage": "searching"})
         state = LoopState(question=question, resolved_query=resolved.query)
-        await self.loop.run(state, knowledge_base.id, keywords=resolved.keywords)
+        async for event in self.loop.stream(state, knowledge_base.id, keywords=resolved.keywords):
+            yield event
 
         if not state.found_anything:
             async for event in self._answer_not_found(conversation, question, state):
@@ -140,6 +140,10 @@ class AgenticChatService:
             complete=state.exit_reason == "sufficient",
         )
 
+        # The answering model's own time-to-first-token is the last silent stretch. Without
+        # this the UI sits on "Reading N passages" while it waits, which reads as a stall.
+        yield ("status", {"stage": "generating"})
+
         pieces: list[str] = []
         async for delta in self.llm_provider.stream(messages):
             pieces.append(delta)
@@ -155,7 +159,12 @@ class AgenticChatService:
             report = await self.grounding.check(answer, assembled.citations)
 
         user_message, assistant = await self._persist_turn(
-            conversation.id, question, answer, assembled.wire_citations, insufficient=False
+            conversation.id,
+            question,
+            answer,
+            assembled.wire_citations,
+            insufficient=False,
+            trace=state.to_wire(),
         )
         yield ("done", self._done(user_message, assistant, insufficient=False, state=state))
 
@@ -192,7 +201,7 @@ class AgenticChatService:
         yield ("delta", answer)
         yield ("citations", [])
         user_message, assistant = await self._persist_turn(
-            conversation.id, question, answer, [], insufficient=True
+            conversation.id, question, answer, [], insufficient=True, trace=state.to_wire()
         )
         yield ("done", self._done(user_message, assistant, insufficient=True, state=state))
 
@@ -211,7 +220,9 @@ class AgenticChatService:
             raise ValueError("Conversation not found")
         return conversation
 
-    async def _persist_turn(self, conversation_id, question, answer, citations, *, insufficient):
+    async def _persist_turn(
+        self, conversation_id, question, answer, citations, *, insufficient, trace=None
+    ):
         from src.domain.entities import Message
 
         user_message = await self.conversation_repo.append_message(
@@ -223,6 +234,7 @@ class AgenticChatService:
                 role=MessageRole.ASSISTANT,
                 content=answer,
                 citations=citations,
+                trace=trace,
                 insufficient_context=insufficient,
             )
         )
@@ -239,4 +251,7 @@ class AgenticChatService:
             # without re-deriving it from a trace.
             "hops": state.hop_count,
             "exit_reason": state.exit_reason,
+            # The full hop-by-hop record, so the client can show how the answer was reached
+            # without a second request and without re-deriving it from a Langfuse trace.
+            "trace": state.to_wire(),
         }

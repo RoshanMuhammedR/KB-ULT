@@ -81,6 +81,8 @@ export type Message = {
   status?: AnswerStatus | null;
   /** Set once the post-answer grounding check reports back. */
   grounding?: GroundingReport | null;
+  /** How this answer was reached. Absent on answers written before the trace existed. */
+  trace?: AnswerTrace | null;
 };
 
 // List view — enough to recognise a thread without loading it.
@@ -166,12 +168,53 @@ export type UploadUrlResponse = {
   content_type: string;
 };
 /** What the pipeline is doing during the seconds before the first token. */
-export type AnswerStage = "resolving" | "searching" | "reading";
+export type AnswerStage =
+  | "resolving"
+  | "searching"
+  | "ranking"
+  | "grading"
+  | "rewriting"
+  | "reading"
+  | "generating";
 
 export type AnswerStatus = {
   stage: AnswerStage;
   /** Present on "reading": how many passages the answer is being written from. */
   sources?: number;
+  /** Which retrieval hop this is, and the cap it is counting towards. */
+  hop?: number;
+  of?: number;
+  /** How the query for this hop was produced: "initial", "broaden", "decompose", "hyde". */
+  strategy?: string;
+  /** Present on "ranking": how many candidates came back from retrieval. */
+  candidates?: number;
+  /** Present on "grading": how many passages have accumulated across hops so far. */
+  kept?: number;
+};
+
+/** One retrieval hop, as the loop recorded it. */
+export type TraceHop = {
+  hop: number;
+  query: string;
+  strategy: string;
+  candidates: number;
+  kept: number;
+  rerank_degraded: boolean;
+  sufficient: boolean;
+  missing: string;
+};
+
+/**
+ * How an answer was reached. Arrives on `done` and is stored with the message, so the panel
+ * survives a reload rather than existing only for the tab that watched it stream.
+ */
+export type AnswerTrace = {
+  resolved_query: string;
+  hops: TraceHop[];
+  /** "sufficient" | "max_hops" | "nothing_found" */
+  exit_reason: string;
+  /** True when reranking could not be reached and fusion order was used instead. */
+  degraded: boolean;
 };
 
 /**

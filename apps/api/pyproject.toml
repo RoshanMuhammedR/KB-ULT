@@ -7,6 +7,10 @@ dependencies = [
   "boto3>=1.35.90",
   "fastapi>=0.115.6",
   "httpx>=0.27",
+  # The langfuse<->langchain bridge imports `langchain` itself purely to branch on
+  # `langchain.__version__`; without the meta-package installed it raises ModuleNotFoundError
+  # and tracing silently disables itself. Everything it actually uses lives in langchain-core.
+  "langchain>=1.0",
   "langchain-classic>=1.0.8",
   "langchain-community>=0.3.14",
   "langchain-openai>=0.2.14",

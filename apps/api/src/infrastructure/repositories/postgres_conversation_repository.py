@@ -162,6 +162,7 @@ class ConversationRepository:
             role=MessageRole(message.role).value,
             content=sanitize_text_for_storage(message.content),
             citations=message.citations or [],
+            trace=message.trace,
             insufficient_context=message.insufficient_context,
         )
         self.db.add(model)

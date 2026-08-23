@@ -118,6 +118,7 @@ export function useAsk({
               patchAssistant({
                 id: done.message_id,
                 insufficient_context: done.insufficient_context,
+                trace: done.trace ?? null,
                 // The answer is complete, so there is no stage left to report.
                 status: null
               }),

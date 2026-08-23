@@ -27,13 +27,17 @@ import {
   SourceIcon,
   cn
 } from "@kb/ui";
+// Its own entry point: the markdown parser should load with the chat, not with the app.
+import { Prose } from "@kb/ui/markdown";
 import type {
   AnswerStatus,
+  AnswerTrace,
   Citation,
   Conversation,
   ConversationSummary,
   GroundingReport,
-  Message
+  Message,
+  TraceHop
 } from "@/types/api";
 import { useConversationsStore } from "@/stores/conversations-store";
 import { useSourcesStore } from "@/stores/sources-store";
@@ -359,14 +363,7 @@ export function MessageBlock({
               <Skeleton className="w-2/3" />
             </div>
           ) : (
-            message.content.split("\n\n").map((paragraph, index, all) => (
-              <p key={index}>
-                {paragraph}
-                {streaming && index === all.length - 1 ? (
-                  <span className="stream-caret text-primary">▌</span>
-                ) : null}
-              </p>
-            ))
+            <Prose streaming={streaming}>{message.content}</Prose>
           )}
         </div>
       )}
@@ -378,6 +375,10 @@ export function MessageBlock({
           conversationId={conversationId}
           grounding={message.grounding}
         />
+      ) : null}
+
+      {!streaming ? (
+        <AnswerTracePanel trace={message.trace} grounding={message.grounding} />
       ) : null}
 
       {!streaming ? (
@@ -434,22 +435,154 @@ function SmallAction({
  * The answer takes a few seconds — retrieval, judging, possibly a second hop — and silence
  * is the failure mode users actually notice. Naming the stage turns a wait into progress.
  */
+/**
+ * What the agent is doing, right now.
+ *
+ * The loop reports every phase boundary rather than one flat "searching", because the
+ * retrieval loop is the longest stretch of answering a question and a label that does not
+ * change for five seconds reads as a hang. Hop numbers only appear on a second pass — saying
+ * "hop 1 of 2" on the common single-hop path is noise, not information.
+ */
 function AnswerProgress({ status }: { status?: AnswerStatus | null }) {
   if (!status) return null;
 
-  const label =
-    status.stage === "resolving"
-      ? "Understanding the question"
-      : status.stage === "searching"
-        ? "Searching your sources"
-        : status.sources
-          ? `Reading ${status.sources} passage${status.sources === 1 ? "" : "s"}`
-          : "Reading your sources";
+  const rerun = (status.hop ?? 1) > 1;
+  const label = describeStage(status, rerun);
+  const hops = rerun ? ` (hop ${status.hop} of ${status.of})` : "";
 
   return (
     <p aria-live="polite" className="text-[13px] text-muted-foreground">
-      {label}…
+      {label}
+      {hops}…
     </p>
+  );
+}
+
+function describeStage(status: AnswerStatus, rerun: boolean): string {
+  switch (status.stage) {
+    case "resolving":
+      return "Understanding the question";
+    case "searching":
+      return rerun ? "Searching again" : "Searching your sources";
+    case "ranking":
+      return status.candidates
+        ? `Weighing ${status.candidates} passages`
+        : "Weighing what came back";
+    case "grading":
+      return "Checking that's enough to answer";
+    case "rewriting":
+      return `Rephrasing the search${status.strategy ? ` — ${strategyLabel(status.strategy)}` : ""}`;
+    case "generating":
+      return "Writing the answer";
+    case "reading":
+      return status.sources
+        ? `Reading ${status.sources} passage${status.sources === 1 ? "" : "s"}`
+        : "Reading your sources";
+  }
+}
+
+/** The loop's internal strategy names, in words a reader of the UI would use. */
+function strategyLabel(strategy: string): string {
+  switch (strategy) {
+    case "initial":
+      return "first attempt";
+    case "broaden":
+      return "broadened";
+    case "decompose":
+      return "split into parts";
+    case "hyde":
+      return "searching by example answer";
+    default:
+      return strategy;
+  }
+}
+
+
+/**
+ * How the answer was reached, collapsed by default.
+ *
+ * Persisted with the message rather than held in the tab that watched it stream, so it is
+ * still here after a reload. Answers written before the trace existed simply have none, and
+ * this renders nothing for them rather than an empty shell.
+ */
+function AnswerTracePanel({
+  trace,
+  grounding
+}: {
+  trace?: AnswerTrace | null;
+  grounding?: GroundingReport | null;
+}) {
+  const [open, setOpen] = useState(false);
+  if (!trace || trace.hops.length === 0) return null;
+
+  const hops = trace.hops.length;
+  const summary = `${hops} ${hops === 1 ? "search" : "searches"}${
+    trace.degraded ? " · ranking unavailable" : ""
+  }`;
+
+  return (
+    <div className="text-[13px]">
+      <button
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+        aria-expanded={open}
+        className="flex items-center gap-1 text-muted-foreground transition-colors hover:text-foreground"
+      >
+        <ChevronRight
+          className={cn("size-3 transition-transform", open && "rotate-90")}
+          aria-hidden
+        />
+        How this answer was found
+        <span className="text-muted-foreground/70">· {summary}</span>
+      </button>
+
+      {open ? (
+        <ol className="mt-2 space-y-1.5 border-l border-border pl-3 text-muted-foreground">
+          <TraceRow label="Understood" detail={trace.resolved_query} />
+          {trace.hops.map((hop) => (
+            <TraceHopRows key={hop.hop} hop={hop} multiple={hops > 1} />
+          ))}
+          {grounding && grounding.checked > 0 ? (
+            <TraceRow
+              label="Verified"
+              detail={`${grounding.supported} of ${grounding.checked} cited claims supported by their passage`}
+            />
+          ) : null}
+        </ol>
+      ) : null}
+    </div>
+  );
+}
+
+function TraceHopRows({ hop, multiple }: { hop: TraceHop; multiple: boolean }) {
+  return (
+    <>
+      <TraceRow
+        label={multiple ? `Search ${hop.hop}` : "Searched"}
+        detail={`${strategyLabel(hop.strategy)} · ${hop.candidates} found, ${hop.kept} kept${
+          hop.rerank_degraded ? " · ranked by score only" : ""
+        }`}
+      />
+      <TraceRow
+        label="Judged"
+        detail={
+          hop.sufficient
+            ? "enough to answer"
+            : hop.missing
+              ? `not enough — missing ${hop.missing}`
+              : "not enough"
+        }
+      />
+    </>
+  );
+}
+
+function TraceRow({ label, detail }: { label: string; detail: string }) {
+  return (
+    <li className="flex gap-2">
+      <span className="shrink-0 font-medium text-foreground/70">{label}</span>
+      <span className="min-w-0 break-words">{detail}</span>
+    </li>
   );
 }
 
