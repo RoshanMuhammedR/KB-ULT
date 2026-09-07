@@ -65,6 +65,9 @@ class AgenticChatService:
         llm_provider,
         grounding_blocking: bool = False,
         signal_repo=None,
+        memory_service=None,
+        memory_queue=None,
+        memory_distill_every_n_turns: int = 3,
     ) -> None:
         self.kb_repo = kb_repo
         self.conversation_repo = conversation_repo
@@ -76,6 +79,11 @@ class AgenticChatService:
         self.llm_provider = llm_provider
         self.grounding_blocking = grounding_blocking
         self.signal_repo = signal_repo
+        # Both None disables memory entirely, which is how `memory_enabled = False` is
+        # expressed — at the composition seam, not as a flag checked in here.
+        self.memory_service = memory_service
+        self.memory_queue = memory_queue
+        self.memory_distill_every_n_turns = memory_distill_every_n_turns
 
     async def ask_stream(
         self, conversation_id: UUID | None, question: str
@@ -116,7 +124,17 @@ class AgenticChatService:
         yield ("status", {"stage": "resolving"})
         resolved = await self.resolver.resolve(question, turns)
 
-        state = LoopState(question=question, resolved_query=resolved.query)
+        # Right after resolution, where `resolved.keywords` is the distinctive terms this
+        # question is actually about — the same input the lexical retrieval arm gets.
+        memories = []
+        if self.memory_service is not None:
+            memories = await self.memory_service.recall(knowledge_base.id, resolved.keywords)
+
+        state = LoopState(
+            question=question,
+            resolved_query=resolved.query,
+            memories_used=len(memories),
+        )
         async for event in self.loop.stream(state, knowledge_base.id, keywords=resolved.keywords):
             yield event
 
@@ -141,6 +159,7 @@ class AgenticChatService:
             # `max_hops` means the loop ran out of attempts with context it never judged
             # sufficient — the answer should say so rather than imply completeness.
             complete=state.exit_reason == "sufficient",
+            memories=[memory.content for memory in memories] or None,
         )
 
         # The answering model's own time-to-first-token is the last silent stretch. Without
@@ -187,6 +206,9 @@ class AgenticChatService:
                 logger.warning("grounding_persist_failed", message_id=str(assistant.id))
 
         await self._record_signals(report, assembled.citations)
+        await self._maybe_distil(
+            knowledge_base.id, question, answer, conversation.id, assistant.id, len(history)
+        )
         yield ("verified", report.to_wire())
 
     # --- terminal paths -------------------------------------------------------------
@@ -256,6 +278,41 @@ class AgenticChatService:
             )
         )
         return user_message, assistant
+
+    async def _maybe_distil(
+        self, knowledge_base_id, question, answer, conversation_id, message_id, history_length
+    ) -> None:
+        """Hand this exchange to the background distiller, if it is worth the model call.
+
+        Two of the three gates are structural rather than checked here: this is only reached
+        on the successful path, so a fallback and an `insufficient_context` answer have both
+        already returned above and can never be distilled. Neither contains anything the
+        workspace said about itself. The gate that is checked is the turn counter, which
+        keeps this to one call per few exchanges — a table that gains a row a week does not
+        deserve a model call per question.
+
+        Deferred, never awaited inline: it is a second model call, and the answer is already
+        finished. Nothing here can fail the stream.
+        """
+        if self.memory_queue is None or not self.memory_distill_every_n_turns:
+            return
+        if history_length % self.memory_distill_every_n_turns:
+            return
+
+        try:
+            from src.core.tenant_context import current_tenant_id, current_user_id
+
+            await self.memory_queue.enqueue_distillation(
+                knowledge_base_id,
+                current_tenant_id(),
+                current_user_id(),
+                question=question,
+                answer=answer,
+                conversation_id=conversation_id,
+                message_id=message_id,
+            )
+        except Exception:  # noqa: BLE001 - a worker that is down must not break answering
+            logger.warning("memory_distill_enqueue_failed")
 
     async def _record_signals(self, report, citations) -> None:
         """Attribute the answer's outcome back to the passages it was written from.

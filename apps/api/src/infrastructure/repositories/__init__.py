@@ -12,6 +12,7 @@ from src.infrastructure.repositories.postgres_ingestion_job_event_repository imp
 )
 from src.infrastructure.repositories.postgres_ingestion_job_repository import IngestionJobRepository
 from src.infrastructure.repositories.postgres_kb_repository import KnowledgeBaseRepository
+from src.infrastructure.repositories.postgres_memory_repository import MemoryRepository
 from src.infrastructure.repositories.postgres_message_feedback_repository import (
     MessageFeedbackRepository,
 )
@@ -25,6 +26,7 @@ __all__ = [
     "IngestionJobRepository",
     "KnowledgeAssetRepository",
     "KnowledgeBaseRepository",
+    "MemoryRepository",
     "MessageFeedbackRepository",
     "RefreshTokenRepository",
     "TenantRepository",

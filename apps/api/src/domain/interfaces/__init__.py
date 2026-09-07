@@ -1,10 +1,11 @@
 from src.domain.interfaces.chunker import IChunker
 from src.domain.interfaces.embedder import IEmbedder
 from src.domain.interfaces.file_storage import IFileStorage
-from src.domain.interfaces.job_queue import IJobQueue
+from src.domain.interfaces.job_queue import IJobQueue, IMemoryQueue
 from src.domain.interfaces.llm import ILLMProvider
 from src.domain.interfaces.repositories import (
     IChunkRepository,
+    IChunkSignalRepository,
     IDocumentRepository,
     IEmbeddingRepository,
     IIngestionJobEventRepository,
@@ -30,7 +31,9 @@ __all__ = [
     "IEmbeddingRepository",
     "IIngestionJobEventRepository",
     "IIngestionJobRepository",
+    "IChunkSignalRepository",
     "IJobQueue",
+    "IMemoryQueue",
     "IKnowledgeBaseRepository",
     "ILLMProvider",
     "ISourceHandler",

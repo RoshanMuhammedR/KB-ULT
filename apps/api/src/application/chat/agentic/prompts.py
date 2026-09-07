@@ -55,22 +55,51 @@ def answer_system_prompt(*, complete: bool) -> str:
     return ANSWER_SYSTEM if complete else ANSWER_SYSTEM + INCOMPLETE_CONTEXT_RULE
 
 
+_MEMORY_RULE = (
+    "Below are things this workspace has told you in past conversations. They are "
+    "background only: never cite them, never present them as coming from a source, and if "
+    "anything here conflicts with the retrieved context, THE RETRIEVED CONTEXT IS CORRECT "
+    "and these are out of date."
+)
+
+
+def _memory_block(memories: list[str]) -> str:
+    """Remembered facts, as their own labelled block.
+
+    The last clause of `_MEMORY_RULE` is the load-bearing one. Memories are older than the
+    corpus and unsourced; the documents are the ground truth this product promises. Without
+    an explicit precedence rule a stale remembered fact would compete on equal footing with
+    a passage the user can actually open and read.
+    """
+    listing = "\n".join(f"- {memory}" for memory in memories)
+    return f"{_MEMORY_RULE}\n\n<memory>\n{listing}\n</memory>"
+
+
 def build_messages(
     question: str,
     context_blocks: list[str],
     history: list[dict[str, str]] | None = None,
     *,
     complete: bool = True,
+    memories: list[str] | None = None,
 ) -> list[dict[str, str]]:
-    """system → history → (context + question).
+    """system → memory → history → (context + question).
 
     The context rides with the current question rather than in its own turn: it is the
     evidence for *this* question, and a separate turn would make it look like something the
     user said in the conversation.
+
+    Memories go in as a system turn after the prompt and before the history, so they read as
+    standing background rather than as something said in this thread. They are deliberately
+    *not* part of `context_blocks`: those are numbered and become citations, and a citation
+    must point at a passage in an uploaded source — there would be nothing for the grounding
+    check to verify against, no locator for the citation UI, and `find_by_cited_asset` would
+    start returning rows pointing at no asset.
     """
     context = "\n\n".join(context_blocks)
     return [
         {"role": "system", "content": answer_system_prompt(complete=complete)},
+        *([{"role": "system", "content": _memory_block(memories)}] if memories else []),
         *(history or []),
         {
             "role": "user",

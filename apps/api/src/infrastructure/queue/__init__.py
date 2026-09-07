@@ -5,7 +5,12 @@
 # code imports it from the submodule directly, so no package-level re-export is needed.
 from src.infrastructure.queue.procrastinate_queue import (
     ProcrastinateJobQueue,
+    ProcrastinateMemoryQueue,
     TransactionalProcrastinateJobQueue,
 )
 
-__all__ = ["ProcrastinateJobQueue", "TransactionalProcrastinateJobQueue"]
+__all__ = [
+    "ProcrastinateJobQueue",
+    "ProcrastinateMemoryQueue",
+    "TransactionalProcrastinateJobQueue",
+]

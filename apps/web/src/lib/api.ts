@@ -13,7 +13,13 @@ import type {
   TokenResponse,
   UploadUrlResponse
 } from "@/types/api";
-import type { AnswerStatus, AnswerTrace, GroundingReport, Rating } from "@/types/api";
+import type {
+  AnswerStatus,
+  AnswerTrace,
+  GroundingReport,
+  Rating,
+  WorkspaceMemory
+} from "@/types/api";
 import { clearSession, getAccessToken, getRefreshToken, getSession, saveSession } from "@/lib/auth";
 
 // Same-origin in production (Caddy routes /api/* to FastAPI); an absolute URL in dev, where
@@ -420,3 +426,36 @@ function dispatchFrame(frame: string, handlers: StreamHandlers): void {
 }
 
 export { ApiError };
+
+// ---- Workspace memory ----------------------------------------------------
+
+export function listMemories(includeSuperseded = false): Promise<WorkspaceMemory[]> {
+  return request<WorkspaceMemory[]>(
+    `/memories${includeSuperseded ? "?include_superseded=true" : ""}`
+  );
+}
+
+export function createMemory(content: string): Promise<WorkspaceMemory> {
+  return request<WorkspaceMemory>("/memories", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content })
+  });
+}
+
+export function updateMemory(id: string, content: string): Promise<WorkspaceMemory> {
+  return request<WorkspaceMemory>(`/memories/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content })
+  });
+}
+
+export function deleteMemory(id: string): Promise<void> {
+  return request<void>(`/memories/${id}`, { method: "DELETE" });
+}
+
+/** Clears the whole memory. Destructive and immediate — always confirm before calling. */
+export function forgetAllMemories(): Promise<void> {
+  return request<void>("/memories", { method: "DELETE" });
+}

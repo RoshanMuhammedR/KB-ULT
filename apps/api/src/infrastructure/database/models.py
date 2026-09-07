@@ -392,3 +392,55 @@ class MessageFeedbackModel(TenantScoped, Base):
     updated_at = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
+
+
+class WorkspaceMemoryModel(TenantScoped, Base):
+    """A fact the workspace has stated about itself, outliving the thread it was said in.
+
+    Never a replacement for the four-turn history window — that window carries the literal
+    previous turn, which is what makes pronoun resolution work. These are lossy summaries of
+    things worth keeping past the end of a conversation.
+
+    `superseded_at IS NULL` is what "currently believed" means. A corrected memory is kept
+    rather than deleted, so the history of what the workspace believed stays readable.
+    """
+
+    __tablename__ = "workspace_memories"
+    __table_args__ = (
+        Index(
+            "ix_workspace_memories_active",
+            "knowledge_base_id",
+            "superseded_at",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    knowledge_base_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("knowledge_bases.id", ondelete="CASCADE"), nullable=False
+    )
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    # fact | preference — a string like every other state column here.
+    kind: Mapped[str] = mapped_column(String(16), nullable=False, default="fact")
+    source_conversation_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("conversations.id", ondelete="SET NULL"), nullable=True
+    )
+    source_message_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("messages.id", ondelete="SET NULL"), nullable=True
+    )
+    superseded_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("workspace_memories.id", ondelete="SET NULL"), nullable=True
+    )
+    superseded_at = mapped_column(DateTime(timezone=True), nullable=True)
+    last_used_at = mapped_column(DateTime(timezone=True), nullable=True)
+    # Same mechanism as `chunks.fts`: Postgres maintains it, `Computed` keeps it out of
+    # INSERTs, and nothing in the application ever writes it.
+    fts = mapped_column(
+        TSVECTOR,
+        Computed("to_tsvector('english', content)", persisted=True),
+        nullable=True,
+    )
+    created_at = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )

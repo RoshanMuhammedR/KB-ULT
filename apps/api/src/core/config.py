@@ -137,6 +137,26 @@ class Settings(BaseSettings):
     # asymmetry is what keeps the prior from being a ratchet that only ever goes up.
     feedback_downvote_weight: float = 3.0
 
+    # --- Workspace memory ---
+    # Facts that outlive a thread, injected as background into future prompts. Off by
+    # default: it is the largest and least proven part of the flywheel, and a wrong memory
+    # is worse than no memory because it is applied to questions it has nothing to do with.
+    memory_enabled: bool = False
+    memory_max_injected: int = 5
+    # Memory's own slice of the context, SUBTRACTED from the assembler's budget at the
+    # composition seam rather than added on top — so enabling memory can never push a
+    # previously-fitting answer over the limit.
+    memory_token_budget: int = 400
+    # One distillation per three turns. Every turn would mean a model call per answer for a
+    # table that gains a row a week.
+    memory_distill_every_n_turns: int = 3
+    # Enforced in code after the model returns, never asked for in the prompt: a memory is
+    # injected into every future prompt, so its length is a cost paid forever.
+    memory_max_chars: int = 300
+    memory_max_per_call: int = 3
+    # Jaccard overlap above which a new fact is treated as a restatement of a known one.
+    memory_duplicate_threshold: float = 0.8
+
     filebase_access_key: str = ""
     filebase_secret_key: str = ""
     filebase_bucket_name: str = "kb-rag-new"

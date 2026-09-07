@@ -66,6 +66,10 @@ class LoopState:
     hops: list[HopRecord] = field(default_factory=list)
     exit_reason: str = ""
     degraded: bool = False
+    #: How many remembered facts were put in front of this question. A count, not the facts
+    #: themselves — memory is explicitly never cited, so the trace says it happened without
+    #: making it look like a source.
+    memories_used: int = 0
 
     @property
     def hop_count(self) -> int:
@@ -87,6 +91,7 @@ class LoopState:
             "hops": [hop.to_wire() for hop in self.hops],
             "exit_reason": self.exit_reason,
             "degraded": self.degraded,
+            "memories_used": self.memories_used,
         }
 
 

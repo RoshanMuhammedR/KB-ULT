@@ -623,6 +623,16 @@ function AnswerTracePanel({
       {open ? (
         <ol className="mt-2 space-y-1.5 border-l border-border pl-3 text-muted-foreground">
           <TraceRow label="Understood" detail={trace.resolved_query} />
+          {trace.memories_used ? (
+            // The only place memory surfaces in an answer. It is never a citation — there is
+            // no passage behind it to open — so it is disclosed here and nowhere else.
+            <TraceRow
+              label="Recalled"
+              detail={`${trace.memories_used} ${
+                trace.memories_used === 1 ? "thing" : "things"
+              } from earlier conversations`}
+            />
+          ) : null}
           {trace.hops.map((hop) => (
             <TraceHopRows key={hop.hop} hop={hop} multiple={hops > 1} />
           ))}

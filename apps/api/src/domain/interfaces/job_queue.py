@@ -21,3 +21,28 @@ class IJobQueue(Protocol):
         unscoped). The worker re-reads the source from object storage using the asset's
         storage_key (see IFileStorage.download).
         """
+
+
+class IMemoryQueue(Protocol):
+    """Port for handing memory distillation off to a background worker.
+
+    Separate from `IJobQueue` rather than another method on it, because the two have opposite
+    transactional requirements and sharing a port would invite sharing an adapter. Ingestion
+    needs "the asset exists" and "its job is queued" to be one atomic fact. Distillation needs
+    no such guarantee: if the job is lost the user simply has one fewer remembered fact, and
+    nothing anywhere is left in a broken state.
+    """
+
+    async def enqueue_distillation(
+        self,
+        knowledge_base_id: UUID,
+        tenant_id: UUID,
+        user_id: UUID,
+        *,
+        question: str,
+        answer: str,
+        conversation_id: UUID | None,
+        message_id: UUID | None,
+    ) -> None:
+        """Schedule distillation for one finished exchange. Best-effort by design."""
+        ...
