@@ -13,6 +13,8 @@ import {
   Pencil,
   RefreshCw,
   Search,
+  ThumbsDown,
+  ThumbsUp,
   Trash2
 } from "lucide-react";
 import { formatLocator, relative, time } from "@kb/shared";
@@ -37,8 +39,10 @@ import type {
   ConversationSummary,
   GroundingReport,
   Message,
+  Rating,
   TraceHop
 } from "@/types/api";
+import { clearFeedback, setFeedback } from "@/lib/api";
 import { useConversationsStore } from "@/stores/conversations-store";
 import { useSourcesStore } from "@/stores/sources-store";
 import { toast } from "@/stores/toast-store";
@@ -392,6 +396,13 @@ export function MessageBlock({
               window.setTimeout(() => setCopied(false), 1500);
             }}
           />
+          {conversationId ? (
+            <FeedbackControl
+              conversationId={conversationId}
+              messageId={message.id}
+              value={message.feedback}
+            />
+          ) : null}
           {onDelete ? (
             <SmallAction
               label="Delete message"
@@ -411,21 +422,94 @@ export function MessageBlock({
 function SmallAction({
   label,
   icon: Icon,
-  onClick
+  onClick,
+  active = false,
+  hideLabel = false
 }: {
   label: string;
   icon: typeof Copy;
   onClick: () => void;
+  /** Renders the pressed state, and is announced — this is a toggle, not a link. */
+  active?: boolean;
+  /** Icon-only, with the label kept for screen readers. For actions that come in pairs. */
+  hideLabel?: boolean;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[12px] hover:bg-muted hover:text-foreground"
+      aria-pressed={active}
+      aria-label={hideLabel ? label : undefined}
+      title={hideLabel ? label : undefined}
+      // `cn` here is a naive join with no tailwind-merge, so the active colour has to come
+      // last to win — there is no conflict resolution, only string order.
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[12px] hover:bg-muted hover:text-foreground",
+        active && "text-primary"
+      )}
     >
       <Icon className="size-3.5" aria-hidden />
-      {label}
+      {hideLabel ? null : label}
     </button>
+  );
+}
+
+/**
+ * Thumbs up/down on an answer.
+ *
+ * The only signal in the whole pipeline that does not come from a model grading its own
+ * work — the reranker, the sufficiency grader and the grounding checker are all the same
+ * family of model judging its own output. That makes each click worth more than anything
+ * else recorded about an answer, which is why it is worth surfacing this plainly rather
+ * than hiding it behind a menu.
+ *
+ * Clicking the active rating retracts it. State is optimistic and reverts on failure, the
+ * same way `useAsk` patches messages: a thumb that visibly fails to register reads as a
+ * broken button, and a thumb that lies is worse.
+ */
+function FeedbackControl({
+  conversationId,
+  messageId,
+  value
+}: {
+  conversationId: string;
+  messageId: string;
+  value?: Rating | null;
+}) {
+  const [rating, setRating] = useState<Rating | null>(value ?? null);
+
+  // A reload, or switching threads, replaces the message this control is mounted against.
+  useEffect(() => setRating(value ?? null), [value, messageId]);
+
+  async function vote(next: Rating) {
+    const previous = rating;
+    const retracting = previous === next;
+    setRating(retracting ? null : next);
+    try {
+      if (retracting) await clearFeedback(conversationId, messageId);
+      else await setFeedback(conversationId, messageId, next);
+    } catch {
+      setRating(previous);
+    }
+  }
+
+  return (
+    <>
+      <SmallAction
+        label="Good answer"
+        icon={ThumbsUp}
+        hideLabel
+        active={rating === 1}
+        onClick={() => void vote(1)}
+      />
+      <SmallAction
+        label="Bad answer"
+        icon={ThumbsDown}
+        hideLabel
+        active={rating === -1}
+        onClick={() => void vote(-1)}
+      />
+    </>
   );
 }
 
@@ -539,6 +623,16 @@ function AnswerTracePanel({
       {open ? (
         <ol className="mt-2 space-y-1.5 border-l border-border pl-3 text-muted-foreground">
           <TraceRow label="Understood" detail={trace.resolved_query} />
+          {trace.memories_used ? (
+            // The only place memory surfaces in an answer. It is never a citation — there is
+            // no passage behind it to open — so it is disclosed here and nowhere else.
+            <TraceRow
+              label="Recalled"
+              detail={`${trace.memories_used} ${
+                trace.memories_used === 1 ? "thing" : "things"
+              } from earlier conversations`}
+            />
+          ) : null}
           {trace.hops.map((hop) => (
             <TraceHopRows key={hop.hop} hop={hop} multiple={hops > 1} />
           ))}

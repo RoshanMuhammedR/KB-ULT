@@ -113,6 +113,50 @@ class Settings(BaseSettings):
     # the head of each ranking so one confident-but-wrong arm cannot dominate the other.
     retrieval_rrf_k: int = 60
 
+    # --- Learned relevance prior ---
+    # A bounded nudge to fusion order from what passages have actually done. Off until the
+    # eval harness says it helps on a held-out split: a prior that entrenches looks exactly
+    # like a prior that works if you only measure the questions it has already seen.
+    retrieval_prior_enabled: bool = False
+    # The furthest a passage can move on history alone, in ranks. Expressed in positions
+    # rather than as a weight on the RRF value on purpose: at rrf_k=60 the fusion curve is
+    # nearly flat (rank 0 and rank 5 differ by 0.0012), so a "fraction of one slot" bonus
+    # is not a bound at all and lets a maximal prior take rank 0 from anywhere in the pool.
+    # Three places reorders near-equals and cannot manufacture a top hit.
+    retrieval_prior_max_rank_shift: int = 3
+    # Where the logarithm flattens. At 10 supported citations a passage has essentially all
+    # the standing it will ever get, so "cited 400 times" is not an unremovable pin.
+    retrieval_prior_saturation: int = 10
+    # A passage not cited for a month counts half as much. Corpora go stale; so should the
+    # belief that a passage is the answer to something.
+    retrieval_prior_half_life_days: float = 30.0
+    # A human verdict outweighs the checker's, because it is the only signal in the pipeline
+    # that does not come from a model grading its own work.
+    feedback_upvote_weight: float = 2.0
+    # Higher than the upvote on purpose: being wrong costs more than being right pays. The
+    # asymmetry is what keeps the prior from being a ratchet that only ever goes up.
+    feedback_downvote_weight: float = 3.0
+
+    # --- Workspace memory ---
+    # Facts that outlive a thread, injected as background into future prompts. Off by
+    # default: it is the largest and least proven part of the flywheel, and a wrong memory
+    # is worse than no memory because it is applied to questions it has nothing to do with.
+    memory_enabled: bool = False
+    memory_max_injected: int = 5
+    # Memory's own slice of the context, SUBTRACTED from the assembler's budget at the
+    # composition seam rather than added on top — so enabling memory can never push a
+    # previously-fitting answer over the limit.
+    memory_token_budget: int = 400
+    # One distillation per three turns. Every turn would mean a model call per answer for a
+    # table that gains a row a week.
+    memory_distill_every_n_turns: int = 3
+    # Enforced in code after the model returns, never asked for in the prompt: a memory is
+    # injected into every future prompt, so its length is a cost paid forever.
+    memory_max_chars: int = 300
+    memory_max_per_call: int = 3
+    # Jaccard overlap above which a new fact is treated as a restatement of a known one.
+    memory_duplicate_threshold: float = 0.8
+
     filebase_access_key: str = ""
     filebase_secret_key: str = ""
     filebase_bucket_name: str = "kb-rag-new"

@@ -13,6 +13,7 @@ counter shared between concurrent questions is a bug that only appears under loa
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from contextlib import suppress
 from dataclasses import dataclass, field
 from uuid import UUID
 
@@ -20,6 +21,7 @@ import structlog
 from langchain_core.documents import Document
 
 from src.infrastructure.observability import tracing
+from src.retrieval.langchain.prior import apply_prior
 from src.retrieval.langchain.query import QueryRewriter, SufficiencyChecker
 from src.retrieval.langchain.rerank import ScoringReranker
 from src.retrieval.langchain.retrievers import CHUNK_ID, build_hybrid_retriever
@@ -64,6 +66,10 @@ class LoopState:
     hops: list[HopRecord] = field(default_factory=list)
     exit_reason: str = ""
     degraded: bool = False
+    #: How many remembered facts were put in front of this question. A count, not the facts
+    #: themselves — memory is explicitly never cited, so the trace says it happened without
+    #: making it look like a source.
+    memories_used: int = 0
 
     @property
     def hop_count(self) -> int:
@@ -85,6 +91,7 @@ class LoopState:
             "hops": [hop.to_wire() for hop in self.hops],
             "exit_reason": self.exit_reason,
             "degraded": self.degraded,
+            "memories_used": self.memories_used,
         }
 
 
@@ -114,6 +121,8 @@ class RetrievalLoop:
         candidate_limit: int,
         threshold: float,
         rrf_k: int,
+        signal_repo=None,
+        prior_settings=None,
     ) -> None:
         self.vector_store = vector_store
         self.embedding_provider = embedding_provider
@@ -124,6 +133,11 @@ class RetrievalLoop:
         self.candidate_limit = candidate_limit
         self.threshold = threshold
         self.rrf_k = rrf_k
+        # `None` disables the prior entirely — which is how `retrieval_prior_enabled = False`
+        # is implemented, at the composition seam rather than as a flag threaded through
+        # here. A loop with no signal repository cannot accidentally consult one.
+        self.signal_repo = signal_repo
+        self.prior_settings = prior_settings
 
     async def stream(
         self,
@@ -242,7 +256,47 @@ class RetrievalLoop:
         # dense arm already has its vector, so the string it receives is unused.
         # Reranking is deliberately *not* done here: the caller yields a status frame
         # between retrieval and ranking, which it cannot do if the two are one await.
-        return await retriever.ainvoke(lexical_query, config={"callbacks": tracing.callbacks()})
+        documents = await retriever.ainvoke(
+            lexical_query, config={"callbacks": tracing.callbacks()}
+        )
+        return await self._apply_prior(documents)
+
+    async def _apply_prior(self, documents: list[Document]) -> list[Document]:
+        """Nudge fusion order by what these passages have done before, if that is enabled.
+
+        Between retrieval and reranking, not inside either. Not in the reranker, because it
+        judges text and giving it a database dependency would make a scoring call into an
+        I/O call. Not in the retrievers, because a prior is only defined over documents some
+        arm has already found.
+
+        Every failure here is silent and total: an unavailable signal store leaves the fused
+        order untouched, which is exactly what the answer would have been anyway.
+        """
+        if self.signal_repo is None or not documents:
+            return documents
+
+        chunk_ids = []
+        for document in documents:
+            raw = document.metadata.get(CHUNK_ID)
+            if raw:
+                with suppress(ValueError, AttributeError):
+                    chunk_ids.append(UUID(raw))
+
+        try:
+            priors = await self.signal_repo.priors(chunk_ids)
+        except Exception:  # noqa: BLE001 - the answer was already correct without the prior
+            logger.warning("prior_unavailable", candidates=len(documents))
+            return documents
+
+        return apply_prior(
+            documents,
+            priors,
+            max_shift=self.prior_settings.retrieval_prior_max_rank_shift,
+            saturation=self.prior_settings.retrieval_prior_saturation,
+            half_life_days=self.prior_settings.retrieval_prior_half_life_days,
+            upvote_weight=self.prior_settings.feedback_upvote_weight,
+            downvote_weight=self.prior_settings.feedback_downvote_weight,
+        )
 
     @staticmethod
     def _merge(state: LoopState, documents: list[Document]) -> None:

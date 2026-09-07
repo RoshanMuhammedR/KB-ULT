@@ -6,8 +6,8 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.domain.interfaces import IJobQueue
-from src.infrastructure.queue.tasks import ingest_asset
+from src.domain.interfaces import IJobQueue, IMemoryQueue
+from src.infrastructure.queue.tasks import distill_memory, ingest_asset
 
 
 class ProcrastinateJobQueue(IJobQueue):
@@ -97,4 +97,37 @@ class TransactionalProcrastinateJobQueue(IJobQueue):
                 "priority": _PRIORITY,
                 "args": json.dumps(args),
             },
+        )
+
+
+class ProcrastinateMemoryQueue(IMemoryQueue):
+    """Defers memory distillation on its own connection.
+
+    Uses the non-transactional `defer_async` on purpose, and there is deliberately no
+    transactional variant. `TransactionalProcrastinateJobQueue` exists because an asset
+    without its ingestion job is a user-visible broken state; a lost distillation is
+    invisible and harmless, so paying for atomicity here would buy nothing and would mean a
+    second hand-written copy of Procrastinate's defer SQL. If this ever does need atomicity,
+    the right change is a `task_name` parameter on the existing adapter, not a second one.
+    """
+
+    async def enqueue_distillation(
+        self,
+        knowledge_base_id: UUID,
+        tenant_id: UUID,
+        user_id: UUID,
+        *,
+        question: str,
+        answer: str,
+        conversation_id: UUID | None,
+        message_id: UUID | None,
+    ) -> None:
+        await distill_memory.defer_async(
+            knowledge_base_id=str(knowledge_base_id),
+            tenant_id=str(tenant_id),
+            user_id=str(user_id),
+            question=question,
+            answer=answer,
+            conversation_id=str(conversation_id) if conversation_id else None,
+            message_id=str(message_id) if message_id else None,
         )

@@ -46,12 +46,23 @@ class GroundingReport:
     #: citation number is a different failure from one misreading a passage, and it is the
     #: more alarming of the two.
     invalid_ordinals: list[int] = field(default_factory=list)
+    #: Ordinals that resolved to a real citation, deduplicated, in the order first cited.
+    #:
+    #: Distinct from `checked`, which counts *claims*: one passage cited in three sentences
+    #: is three checks but one citation. Consumers that attribute an outcome back to a
+    #: passage want the latter — otherwise a chattier answer weights the same passage more
+    #: heavily than a terse one, which is a property of the prose, not of the retrieval.
+    cited_ordinals: list[int] = field(default_factory=list)
 
     @property
     def verified(self) -> bool:
         return not self.unsupported_ordinals and not self.invalid_ordinals
 
     def to_wire(self) -> dict:
+        # `cited_ordinals` is deliberately absent: it is a server-side signal used to
+        # attribute an outcome back to a passage, and the client renders nothing from it.
+        # This dict is both the SSE frame and the stored `messages.grounding` column, so
+        # anything added here is paid for on every answer and in every row.
         return {
             "verified": self.verified,
             "checked": self.checked,
@@ -77,6 +88,9 @@ class GroundingChecker:
                 # The answer cited a number that was never offered to it.
                 report.invalid_ordinals.append(ordinal)
                 continue
+
+            if ordinal not in report.cited_ordinals:
+                report.cited_ordinals.append(ordinal)
 
             report.checked += 1
             if await self._supported(claim, citation.document.page_content):

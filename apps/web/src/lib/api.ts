@@ -13,7 +13,13 @@ import type {
   TokenResponse,
   UploadUrlResponse
 } from "@/types/api";
-import type { AnswerStatus, AnswerTrace, GroundingReport } from "@/types/api";
+import type {
+  AnswerStatus,
+  AnswerTrace,
+  GroundingReport,
+  Rating,
+  WorkspaceMemory
+} from "@/types/api";
 import { clearSession, getAccessToken, getRefreshToken, getSession, saveSession } from "@/lib/auth";
 
 // Same-origin in production (Caddy routes /api/* to FastAPI); an absolute URL in dev, where
@@ -265,6 +271,30 @@ export function deleteMessage(conversationId: string, messageId: string): Promis
   });
 }
 
+/**
+ * Record this reader's verdict on an answer.
+ *
+ * PUT, not POST: the verdict is a value that is being set, so sending it twice is the same
+ * as sending it once and changing your mind is the same call with a different body.
+ */
+export function setFeedback(
+  conversationId: string,
+  messageId: string,
+  rating: Rating
+): Promise<{ rating: number | null }> {
+  return request<{ rating: number | null }>(
+    `/conversations/${conversationId}/messages/${messageId}/feedback`,
+    { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rating }) }
+  );
+}
+
+/** Retract a verdict, returning the server's counters to where they were before it. */
+export function clearFeedback(conversationId: string, messageId: string): Promise<void> {
+  return request<void>(`/conversations/${conversationId}/messages/${messageId}/feedback`, {
+    method: "DELETE"
+  });
+}
+
 /** The events `streamAnswer` reports back, mirroring the server's SSE event names. */
 export type StreamHandlers = {
   onConversation?: (conversation: { id: string; title: string }) => void;
@@ -396,3 +426,36 @@ function dispatchFrame(frame: string, handlers: StreamHandlers): void {
 }
 
 export { ApiError };
+
+// ---- Workspace memory ----------------------------------------------------
+
+export function listMemories(includeSuperseded = false): Promise<WorkspaceMemory[]> {
+  return request<WorkspaceMemory[]>(
+    `/memories${includeSuperseded ? "?include_superseded=true" : ""}`
+  );
+}
+
+export function createMemory(content: string): Promise<WorkspaceMemory> {
+  return request<WorkspaceMemory>("/memories", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content })
+  });
+}
+
+export function updateMemory(id: string, content: string): Promise<WorkspaceMemory> {
+  return request<WorkspaceMemory>(`/memories/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content })
+  });
+}
+
+export function deleteMemory(id: string): Promise<void> {
+  return request<void>(`/memories/${id}`, { method: "DELETE" });
+}
+
+/** Clears the whole memory. Destructive and immediate — always confirm before calling. */
+export function forgetAllMemories(): Promise<void> {
+  return request<void>("/memories", { method: "DELETE" });
+}

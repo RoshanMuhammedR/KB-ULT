@@ -30,6 +30,12 @@ class Message:
     id: UUID = field(default_factory=uuid4)
     citations: list[dict[str, Any]] = field(default_factory=list)
     trace: dict[str, Any] | None = None
+    #: The grounding checker's verdict, or None when nothing was checkable — a fallback
+    #: answer, or one with no citation markers. Absent is not the same as unverified.
+    grounding: dict[str, Any] | None = None
+    #: The *current user's* thumb on this answer, or None. Not stored on the message row —
+    #: it lives in `message_feedback`, one row per person, and is joined in on read.
+    feedback: int | None = None
     insufficient_context: bool = False
     created_at: datetime | None = None
 

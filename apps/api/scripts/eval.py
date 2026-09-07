@@ -8,8 +8,19 @@ Every threshold in the pipeline — the hop cap, the relevance floors, the modal
 candidate multiplier — is currently a defensible guess. This is what turns them into
 measurements. Run it before a change and after, and keep the numbers.
 
-    python scripts/eval.py --dataset datasets/golden.json
-    python scripts/eval.py --dataset datasets/golden.json --baseline runs/before.json
+    python scripts/eval.py --dataset scripts/datasets/golden.json --tenant <uuid> --user <uuid>
+    python scripts/eval.py ... --out runs/after.json --baseline runs/before.json
+    python scripts/eval.py ... --fail-under recall_at_k=0.7,grounded_rate=0.9
+
+Two flags exist specifically to judge the learned relevance prior, which cannot be evaluated
+by running the same questions repeatedly — doing that measures how well it memorised them:
+
+    RETRIEVAL_PRIOR_ENABLED=1 python scripts/eval.py ... --warm 3      # shape across passes
+    RETRIEVAL_PRIOR_ENABLED=1 python scripts/eval.py ... --holdout     # does it generalise
+
+Ship the prior only if holdout recall is flat-or-up and `citation_concentration` has not
+risen. Concentration climbing while recall holds is the signature of entrenchment, and it is
+invisible to every other number here.
 
 The dataset is a JSON list. `expected_chunks` may be omitted for cases where the point is
 the *behaviour* rather than a specific passage — an out-of-corpus question that must trigger
@@ -31,6 +42,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import statistics
 import sys
@@ -72,6 +84,13 @@ class CaseResult:
     answer: str = ""
     fell_back: bool = False
     error: str = ""
+    # From the `verified` frame, which arrives after `done`. `verified` stays None when the
+    # answer cited nothing to check — a fallback, or an answer with no citation markers —
+    # which is different from "checked and found unsupported" and must not be averaged in.
+    verified: bool | None = None
+    checked: int = 0
+    supported: int = 0
+    unsupported: int = 0
 
     @property
     def recall(self) -> float | None:
@@ -127,6 +146,17 @@ async def run_case(case: dict[str, Any], tenant_id: str, user_id: str) -> CaseRe
                     result.hops = payload.get("hops", 0)
                     result.exit_reason = payload.get("exit_reason", "")
                     result.fell_back = bool(payload.get("insufficient_context"))
+                elif event == "verified":
+                    # Retrieval recall says the right passage was found; this says the
+                    # answer written from it actually follows from it. A pipeline can
+                    # score perfectly on the first and still be inventing claims.
+                    result.checked = payload.get("checked", 0)
+                    result.supported = payload.get("supported", 0)
+                    result.unsupported = len(payload.get("unsupported", [])) + len(
+                        payload.get("invalid", [])
+                    )
+                    if result.checked:
+                        result.verified = bool(payload.get("verified"))
             result.answer = "".join(answer_parts)
     except Exception as exc:  # noqa: BLE001 - one bad case must not end the run
         result.error = f"{type(exc).__name__}: {exc}"
@@ -151,6 +181,12 @@ def summarise(results: list[CaseResult], cases: list[dict]) -> dict[str, Any]:
     ]
     missed_fallbacks = [r for r in expected_fallbacks if not r.fell_back]
 
+    # Pooled across the run rather than averaged per case: a case with eight claims is
+    # eight chances to be wrong, and averaging per-case rates would let one heavily-cited
+    # bad answer hide behind several lightly-cited good ones.
+    total_checked = sum(r.checked for r in results)
+    total_supported = sum(r.supported for r in results)
+
     return {
         "cases": len(results),
         "errors": sum(1 for r in results if r.error),
@@ -165,12 +201,45 @@ def summarise(results: list[CaseResult], cases: list[dict]) -> dict[str, Any]:
         # avoid, so it is reported on its own rather than folded into an accuracy number.
         "answered_when_it_should_not_have": len(missed_fallbacks),
         "fell_back_when_it_should_not_have": len(unexpected_fallbacks),
+        # Answer quality, as distinct from retrieval quality. None when nothing was
+        # checkable at all, which is a dataset problem rather than a score of zero.
+        "grounded_rate": round(total_supported / total_checked, 4) if total_checked else None,
+        "claims_checked": total_checked,
+        "unsupported_citations": total_checked - total_supported,
+        # The entrenchment tell. A learned prior that is genuinely helping leaves this flat;
+        # one that is collapsing onto a workspace's greatest hits pushes it up while recall
+        # holds steady, which is exactly the case no other metric here would catch.
+        "citation_concentration": _citation_concentration(results),
         "by_kind": {
             kind: _kind_summary([r for r in results if r.kind == kind])
             for kind in KINDS
             if any(r.kind == kind for r in results)
         },
     }
+
+
+def _citation_concentration(results: list[CaseResult]) -> float | None:
+    """Share of all retrievals that went to the busiest 5% of passages.
+
+    A corpus answering a varied question set should spread its citations around. If a small
+    set of passages starts appearing everywhere, retrieval has stopped responding to the
+    question — which is what a prior gone wrong looks like from the outside, and it can
+    happen while recall on already-seen questions stays perfect.
+
+    Computed over retrieved chunks rather than cited ones so it measures what the prior
+    actually reorders, and so it is defined even for a run where nothing was cited.
+    """
+    counts: dict[str, int] = {}
+    for result in results:
+        for chunk_id in result.retrieved:
+            counts[chunk_id] = counts.get(chunk_id, 0) + 1
+    if not counts:
+        return None
+
+    total = sum(counts.values())
+    top_n = max(1, round(len(counts) * 0.05))
+    busiest = sorted(counts.values(), reverse=True)[:top_n]
+    return round(sum(busiest) / total, 4)
 
 
 def _kind_summary(results: list[CaseResult]) -> dict[str, Any]:
@@ -204,6 +273,9 @@ def compare(current: dict, baseline: dict) -> list[str]:
     for metric, higher_is_better in (
         ("recall_at_k", True),
         ("mrr", True),
+        ("grounded_rate", True),
+        ("citation_concentration", False),
+        ("unsupported_citations", False),
         ("p50_latency_ms", False),
         ("p95_latency_ms", False),
         ("answered_when_it_should_not_have", False),
@@ -223,6 +295,85 @@ def compare(current: dict, baseline: dict) -> list[str]:
     return lines
 
 
+def parse_thresholds(raw: str) -> dict[str, float]:
+    """`recall_at_k=0.7,grounded_rate=0.9` -> a dict. Raises on anything malformed.
+
+    Deliberately strict: a typo'd metric name that silently gated on nothing would make a
+    green CI run mean less than no gate at all.
+    """
+    thresholds: dict[str, float] = {}
+    for clause in raw.split(","):
+        clause = clause.strip()
+        if not clause:
+            continue
+        name, _, value = clause.partition("=")
+        if not _:
+            raise ValueError(f"--fail-under expects metric=value, got {clause!r}")
+        thresholds[name.strip()] = float(value)
+    return thresholds
+
+
+def check_thresholds(summary: dict[str, Any], thresholds: dict[str, float]) -> list[str]:
+    """Metrics that came in under their floor, as printable lines.
+
+    A metric that is absent or None fails rather than passes. `grounded_rate` is None when
+    nothing was checkable, and treating "we measured nothing" as "we met the bar" is how a
+    gate quietly stops gating.
+    """
+    failures = []
+    for metric, floor in thresholds.items():
+        if metric not in summary:
+            failures.append(f"  {metric:38} not reported by this run")
+            continue
+        value = summary[metric]
+        if value is None:
+            failures.append(f"  {metric:38} not measured (floor {floor})")
+        elif value < floor:
+            failures.append(f"  {metric:38} {value} < {floor}")
+    return failures
+
+
+def split_holdout(cases: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Halve the dataset into a set that builds signal and a set that is scored on it.
+
+    **This is the measurement that tells the two outcomes apart.** A prior that genuinely
+    helps and a prior that is entrenching look identical on questions it has already seen —
+    both push recall up, because both are learning to return what was returned before. The
+    difference only shows on questions the signal was not built from: real generalisation
+    lifts those too, while entrenchment leaves them flat or drags them down as retrieval
+    collapses toward a handful of well-worn passages.
+
+    Split on a stable hash of the case id rather than on position or `random`, so the same
+    dataset produces the same halves on every run — otherwise a comparison against a saved
+    baseline is comparing two different experiments. Interleaving by index would also
+    correlate the split with dataset order, which tends to group cases by kind.
+    """
+    warm, holdout = [], []
+    for case in cases:
+        digest = hashlib.sha256(str(case["id"]).encode("utf-8")).digest()
+        (warm if digest[0] % 2 else holdout).append(case)
+    return warm, holdout
+
+
+async def run_all(
+    cases: list[dict], tenant_id: str, user_id: str, *, quiet: bool = False
+) -> list[CaseResult]:
+    """Run every case, printing a line each unless asked not to."""
+    results: list[CaseResult] = []
+    for case in cases:
+        result = await run_case(case, tenant_id, user_id)
+        results.append(result)
+        if quiet:
+            continue
+        recall = "-" if result.recall is None else f"{result.recall:.2f}"
+        grounded = "-" if result.verified is None else f"{result.supported}/{result.checked}"
+        status = result.error or (
+            f"{result.exit_reason} hops={result.hops} recall={recall} grounded={grounded}"
+        )
+        print(f"  {result.id:32} {result.latency_ms:7.0f}ms  {status}")
+    return results
+
+
 async def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset", required=True, type=Path)
@@ -230,20 +381,58 @@ async def main() -> int:
     parser.add_argument("--user", required=True, help="User UUID within that tenant")
     parser.add_argument("--out", type=Path, help="Write the summary here for later comparison")
     parser.add_argument("--baseline", type=Path, help="Compare against a previous summary")
+    parser.add_argument(
+        "--warm",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Run the dataset N times first to build up signal, reporting each pass. A "
+        "prior that helps is flat-or-up across passes; one that entrenches rises on pass 2 "
+        "and then falls.",
+    )
+    parser.add_argument(
+        "--holdout",
+        action="store_true",
+        help="Split the dataset in half: build signal on one half, score on the other. The "
+        "only way to tell a prior that generalises from one that has memorised the "
+        "questions its signal came from.",
+    )
+    parser.add_argument(
+        "--fail-under",
+        metavar="METRIC=VALUE,...",
+        help="Exit non-zero if a metric is below its floor, e.g. "
+        "recall_at_k=0.7,grounded_rate=0.9. This is what makes the harness a CI gate "
+        "rather than a report nobody reads.",
+    )
     args = parser.parse_args()
 
+    thresholds = parse_thresholds(args.fail_under) if args.fail_under else {}
+
     cases = json.loads(args.dataset.read_text(encoding="utf-8"))
-    print(f"Running {len(cases)} cases...\n")
 
-    results: list[CaseResult] = []
-    for case in cases:
-        result = await run_case(case, args.tenant, args.user)
-        results.append(result)
-        recall = "-" if result.recall is None else f"{result.recall:.2f}"
-        status = result.error or f"{result.exit_reason} hops={result.hops} recall={recall}"
-        print(f"  {result.id:32} {result.latency_ms:7.0f}ms  {status}")
+    scored_cases = cases
+    if args.holdout:
+        warm_cases, scored_cases = split_holdout(cases)
+        print(f"Holdout: building signal on {len(warm_cases)}, scoring {len(scored_cases)}\n")
+        # The warm half's own numbers are never reported. Its only job is to leave signal in
+        # `chunk_signals`; scoring it would be scoring the questions the prior just learned.
+        await run_all(warm_cases, args.tenant, args.user, quiet=True)
 
-    summary = summarise(results, cases)
+    for pass_number in range(args.warm):
+        print(f"Warming pass {pass_number + 1}/{args.warm}...")
+        warmed = await run_all(scored_cases, args.tenant, args.user, quiet=True)
+        pass_summary = summarise(warmed, scored_cases)
+        # Printed per pass because the *shape* across passes is the signal: rising and then
+        # falling is entrenchment, flat-or-up is a prior doing its job.
+        print(
+            f"  recall={pass_summary['recall_at_k']} mrr={pass_summary['mrr']} "
+            f"concentration={pass_summary['citation_concentration']}\n"
+        )
+
+    print(f"Running {len(scored_cases)} cases...\n")
+    results = await run_all(scored_cases, args.tenant, args.user)
+
+    summary = summarise(results, scored_cases)
     print("\n" + json.dumps(summary, indent=2))
 
     if args.out:
@@ -256,10 +445,16 @@ async def main() -> int:
         for line in compare(summary, json.loads(args.baseline.read_text(encoding="utf-8"))):
             print(line)
 
+    failures = check_thresholds(summary, thresholds)
+    if failures:
+        print("\nBelow threshold:")
+        for line in failures:
+            print(line)
+
     from src.infrastructure.database.session import engine
 
     await engine.dispose()
-    return 1 if summary["errors"] else 0
+    return 1 if summary["errors"] or failures else 0
 
 
 if __name__ == "__main__":

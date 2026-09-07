@@ -5,11 +5,13 @@ import uuid
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Computed,
     DateTime,
     ForeignKey,
     Index,
     Integer,
+    SmallInteger,
     String,
     Text,
     UniqueConstraint,
@@ -319,7 +321,126 @@ class MessageModel(TenantScoped, Base):
     # How the answer was reached: the loop's hop-by-hop record. Nullable because answers
     # written before 0010 genuinely have none, and because only the assistant turn has one.
     trace: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # Whether the answer's citations held up. Written *after* the row is inserted on the
+    # streaming path, because the check runs after `done` to protect time-to-first-token.
+    grounding: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     insufficient_context: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     conversation: Mapped[ConversationModel] = relationship(back_populates="messages")
+
+
+class ChunkSignalModel(TenantScoped, Base):
+    """What a passage has actually done for this workspace, accumulated across answers.
+
+    Rows are created and incremented by a Core `insert().on_conflict_do_update()` — the one
+    write path in this codebase that does not go through the ORM, and therefore the one that
+    must set `tenant_id` by hand. See `postgres_chunk_signal_repository.record`.
+
+    `user_id` is stamped because `TenantScoped` stamps it, and is deliberately never filtered
+    on: whether a passage answers a question well is a property of the corpus, not of whoever
+    happened to ask. Reading it as attribution would turn a shared signal into a per-person
+    filter bubble.
+    """
+
+    __tablename__ = "chunk_signals"
+    __table_args__ = (
+        # The ON CONFLICT target. `tenant_id` is part of it so a wrong hand-written tenant
+        # cannot merge two workspaces' counters — it would collide with nothing and insert.
+        UniqueConstraint("tenant_id", "chunk_id", name="uq_chunk_signal_tenant_chunk"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    chunk_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("chunks.id", ondelete="CASCADE"), nullable=False
+    )
+    # Recorded, but never fed into the prior: being retrieved and cited is exactly what the
+    # prior influences, so letting it feed back would close the loop with no outside signal.
+    cited: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    supported: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    unsupported: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    upvoted: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    downvoted: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_cited_at = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class MessageFeedbackModel(TenantScoped, Base):
+    """One reader's verdict on one answer.
+
+    `rating` is a signed SmallInteger rather than the `String(16)` used for every other state
+    column here. Deliberate: it is summed into a weighted score rather than compared against a
+    name, and storing "up"/"down" would mean mapping strings to numbers on every read. The
+    CHECK keeps the set as closed as an enum would.
+    """
+
+    __tablename__ = "message_feedback"
+    __table_args__ = (
+        CheckConstraint("rating IN (-1, 1)", name="ck_message_feedback_rating"),
+        # One verdict per person per answer. Two people disagreeing is a fact to record.
+        UniqueConstraint("message_id", "user_id", name="uq_message_feedback_message_user"),
+        Index("ix_message_feedback_message_id", "message_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    message_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("messages.id", ondelete="CASCADE"), nullable=False
+    )
+    rating: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class WorkspaceMemoryModel(TenantScoped, Base):
+    """A fact the workspace has stated about itself, outliving the thread it was said in.
+
+    Never a replacement for the four-turn history window — that window carries the literal
+    previous turn, which is what makes pronoun resolution work. These are lossy summaries of
+    things worth keeping past the end of a conversation.
+
+    `superseded_at IS NULL` is what "currently believed" means. A corrected memory is kept
+    rather than deleted, so the history of what the workspace believed stays readable.
+    """
+
+    __tablename__ = "workspace_memories"
+    __table_args__ = (
+        Index(
+            "ix_workspace_memories_active",
+            "knowledge_base_id",
+            "superseded_at",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    knowledge_base_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("knowledge_bases.id", ondelete="CASCADE"), nullable=False
+    )
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    # fact | preference — a string like every other state column here.
+    kind: Mapped[str] = mapped_column(String(16), nullable=False, default="fact")
+    source_conversation_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("conversations.id", ondelete="SET NULL"), nullable=True
+    )
+    source_message_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("messages.id", ondelete="SET NULL"), nullable=True
+    )
+    superseded_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("workspace_memories.id", ondelete="SET NULL"), nullable=True
+    )
+    superseded_at = mapped_column(DateTime(timezone=True), nullable=True)
+    last_used_at = mapped_column(DateTime(timezone=True), nullable=True)
+    # Same mechanism as `chunks.fts`: Postgres maintains it, `Computed` keeps it out of
+    # INSERTs, and nothing in the application ever writes it.
+    fts = mapped_column(
+        TSVECTOR,
+        Computed("to_tsvector('english', content)", persisted=True),
+        nullable=True,
+    )
+    created_at = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )

@@ -15,6 +15,7 @@ from dataclasses import dataclass
 import structlog
 from langchain_core.documents import Document
 
+from src.domain.interfaces.repositories import IChunkRepository
 from src.retrieval.langchain.retrievers import (
     ASSET_ID,
     CHUNK_ID,
@@ -88,7 +89,7 @@ class ContextAssembler:
     loses the lowest-ranked chunk instead, which is a loss you can reason about.
     """
 
-    def __init__(self, chunk_repo, *, token_budget: int) -> None:
+    def __init__(self, chunk_repo: IChunkRepository, *, token_budget: int) -> None:
         self.chunk_repo = chunk_repo
         self.token_budget = token_budget
 

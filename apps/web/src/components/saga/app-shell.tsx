@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState, type ReactNode } from "react";
-import { Library, Menu, MessagesSquare, Moon, Sun, UserRound, X } from "lucide-react";
+import { Brain, Library, Menu, MessagesSquare, Moon, Sun, UserRound, X } from "lucide-react";
 import { Logo, Pill, cn, useTheme } from "@kb/ui";
 import { useAuthStore } from "@/stores/auth-store";
 import { useSourcesStore } from "@/stores/sources-store";
@@ -11,6 +11,7 @@ import { useSourcesStore } from "@/stores/sources-store";
 const links = [
   { href: "/", label: "Ask", icon: MessagesSquare, exact: true },
   { href: "/library", label: "Library", icon: Library, exact: false },
+  { href: "/memory", label: "Memory", icon: Brain, exact: false },
   { href: "/account", label: "Account", icon: UserRound, exact: false }
 ] as const;
 

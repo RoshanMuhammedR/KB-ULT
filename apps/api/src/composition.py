@@ -18,6 +18,7 @@ from src.application.auth import AuthService
 from src.application.chat.prompt_builder import PromptBuilder
 from src.application.chat.service import ChatService
 from src.application.ingestion.service import IngestionService
+from src.application.memory.service import MemoryService
 from src.application.knowledge_base import KnowledgeBaseService
 from src.core.config import Settings
 from src.domain.entities import SourceType
@@ -41,6 +42,8 @@ from src.infrastructure.langchain_adapters.chat_model import OpenAICompatibleCha
 from src.infrastructure.langchain_adapters.embeddings import OpenAICompatibleEmbeddingsAdapter
 from src.infrastructure.langchain_adapters.text_splitter import RecursiveSplitterAdapter
 from src.infrastructure.repositories import (
+    ChunkSignalRepository,
+    MemoryRepository,
     ChunkRepository,
     ConversationRepository,
     IngestionJobEventRepository,
@@ -246,6 +249,11 @@ def build_agentic_chat_service(db: AsyncSession, settings: Settings) -> AgenticC
 
     vector_store = PgVectorStore(db)
     chunk_repo = ChunkRepository(db)
+    # One repository, two roles: the loop reads priors from it before reranking, and the
+    # service writes outcomes back to it after the answer has been graded. Built here so
+    # `retrieval_prior_enabled` is expressed as "the loop has no signal repository" rather
+    # than as a flag the loop has to remember to check.
+    signal_repo = ChunkSignalRepository(db)
 
     return AgenticChatService(
         kb_repo=KnowledgeBaseRepository(db),
@@ -277,12 +285,60 @@ def build_agentic_chat_service(db: AsyncSession, settings: Settings) -> AgenticC
             candidate_limit=settings.retrieval_top_k * settings.retrieval_candidate_multiplier,
             threshold=settings.retrieval_score_threshold,
             rrf_k=settings.retrieval_rrf_k,
+            signal_repo=signal_repo if settings.retrieval_prior_enabled else None,
+            prior_settings=settings,
         ),
         resolver=QueryResolver(fast),
-        assembler=ContextAssembler(chunk_repo, token_budget=settings.context_token_budget),
+        # Memory's budget is SUBTRACTED here rather than added on top, so enabling memory
+        # cannot push a previously-fitting answer over the context limit. The assembler is
+        # deliberately not given the memory repository: it would let a remembered sentence
+        # displace a source passage, which is the wrong priority order.
+        assembler=ContextAssembler(
+            chunk_repo,
+            token_budget=settings.context_token_budget
+            - (settings.memory_token_budget if settings.memory_enabled else 0),
+        ),
         grounding=GroundingChecker(fast),
         llm_provider=AICreditsLLMProvider(_build_chat_adapter(settings, settings.aicredits_chat_model)),
         grounding_blocking=settings.grounding_blocking,
+        # Written to unconditionally, even with the prior disabled: signal has to exist
+        # before it can be evaluated, and a workspace that turns the prior on should not
+        # start from an empty table.
+        signal_repo=signal_repo,
+        memory_service=build_memory_service(db, settings),
+        memory_queue=_memory_queue(settings),
+        memory_distill_every_n_turns=settings.memory_distill_every_n_turns,
+    )
+
+
+def _memory_queue(settings: Settings):
+    """Deferred import, matching `_job_queue` — composition must not import the queue
+    adapter at module scope or the queue adapter's import of tasks cycles back here."""
+    if not settings.memory_enabled:
+        return None
+    from src.infrastructure.queue import ProcrastinateMemoryQueue
+
+    return ProcrastinateMemoryQueue()
+
+
+def build_memory_service(db: AsyncSession, settings: Settings) -> MemoryService | None:
+    """The workspace-memory service, or None when memory is off.
+
+    Returning None rather than a disabled instance is what `memory_enabled = False` means:
+    the collaborator does not exist, so no code path can consult it by mistake. The worker
+    task checks for None too, because a job deferred before the setting was turned off would
+    otherwise run against a service the operator has since disabled.
+    """
+    if not settings.memory_enabled:
+        return None
+    return MemoryService(
+        _build_chat_adapter(settings, settings.aicredits_fast_model).client,
+        MemoryRepository(db),
+        max_injected=settings.memory_max_injected,
+        max_chars=settings.memory_max_chars,
+        max_per_call=settings.memory_max_per_call,
+        duplicate_threshold=settings.memory_duplicate_threshold,
+        token_budget=settings.memory_token_budget,
     )
 
 

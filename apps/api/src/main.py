@@ -25,6 +25,7 @@ from src.http.routes.documents import router as documents_router
 from src.http.routes.health import router as health_router
 from src.http.routes.jobs import router as jobs_router
 from src.http.routes.knowledge_bases import router as knowledge_bases_router
+from src.http.routes.memories import router as memories_router
 from src.infrastructure.database.session import engine
 from src.infrastructure.observability import tracing
 from src.infrastructure.database.tenancy import assert_rls_enforced
@@ -96,3 +97,4 @@ app.include_router(jobs_router)
 app.include_router(chat_router)
 app.include_router(conversations_router)
 app.include_router(knowledge_bases_router)
+app.include_router(memories_router)

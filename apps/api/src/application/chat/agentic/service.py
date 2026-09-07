@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from contextlib import suppress
 from uuid import UUID
 
 import structlog
@@ -33,7 +34,7 @@ from src.application.chat.agentic.prompts import (
     build_messages,
 )
 from src.application.chat.titles import title_from_question
-from src.domain.entities import Conversation, MessageRole
+from src.domain.entities import ChunkSignalEvent, Conversation, MessageRole
 from src.retrieval.langchain.query import QueryResolver, needs_retrieval
 
 logger = structlog.get_logger(__name__)
@@ -63,6 +64,10 @@ class AgenticChatService:
         grounding: GroundingChecker,
         llm_provider,
         grounding_blocking: bool = False,
+        signal_repo=None,
+        memory_service=None,
+        memory_queue=None,
+        memory_distill_every_n_turns: int = 3,
     ) -> None:
         self.kb_repo = kb_repo
         self.conversation_repo = conversation_repo
@@ -73,6 +78,12 @@ class AgenticChatService:
         self.grounding = grounding
         self.llm_provider = llm_provider
         self.grounding_blocking = grounding_blocking
+        self.signal_repo = signal_repo
+        # Both None disables memory entirely, which is how `memory_enabled = False` is
+        # expressed — at the composition seam, not as a flag checked in here.
+        self.memory_service = memory_service
+        self.memory_queue = memory_queue
+        self.memory_distill_every_n_turns = memory_distill_every_n_turns
 
     async def ask_stream(
         self, conversation_id: UUID | None, question: str
@@ -113,7 +124,17 @@ class AgenticChatService:
         yield ("status", {"stage": "resolving"})
         resolved = await self.resolver.resolve(question, turns)
 
-        state = LoopState(question=question, resolved_query=resolved.query)
+        # Right after resolution, where `resolved.keywords` is the distinctive terms this
+        # question is actually about — the same input the lexical retrieval arm gets.
+        memories = []
+        if self.memory_service is not None:
+            memories = await self.memory_service.recall(knowledge_base.id, resolved.keywords)
+
+        state = LoopState(
+            question=question,
+            resolved_query=resolved.query,
+            memories_used=len(memories),
+        )
         async for event in self.loop.stream(state, knowledge_base.id, keywords=resolved.keywords):
             yield event
 
@@ -138,6 +159,7 @@ class AgenticChatService:
             # `max_hops` means the loop ran out of attempts with context it never judged
             # sufficient — the answer should say so rather than imply completeness.
             complete=state.exit_reason == "sufficient",
+            memories=[memory.content for memory in memories] or None,
         )
 
         # The answering model's own time-to-first-token is the last silent stretch. Without
@@ -165,6 +187,9 @@ class AgenticChatService:
             assembled.wire_citations,
             insufficient=False,
             trace=state.to_wire(),
+            # Blocking mode already has the verdict, so it goes in on the INSERT and needs
+            # no second write. The streaming path below fills it in afterwards.
+            grounding=report.to_wire() if report else None,
         )
         yield ("done", self._done(user_message, assistant, insufficient=False, state=state))
 
@@ -172,6 +197,18 @@ class AgenticChatService:
         # place when this arrives, and simply never shows one if the connection ended first.
         if report is None:
             report = await self.grounding.check(answer, assembled.citations)
+            # Persist before yielding: the check has already been paid for, and a client
+            # that hangs up between these two lines should still keep the result. The
+            # reverse order would lose it exactly when the user is most likely to reload.
+            try:
+                await self.conversation_repo.set_grounding(assistant.id, report.to_wire())
+            except Exception:  # noqa: BLE001 - a badge that failed to save is not a failed answer
+                logger.warning("grounding_persist_failed", message_id=str(assistant.id))
+
+        await self._record_signals(report, assembled.citations)
+        await self._maybe_distil(
+            knowledge_base.id, question, answer, conversation.id, assistant.id, len(history)
+        )
         yield ("verified", report.to_wire())
 
     # --- terminal paths -------------------------------------------------------------
@@ -221,7 +258,8 @@ class AgenticChatService:
         return conversation
 
     async def _persist_turn(
-        self, conversation_id, question, answer, citations, *, insufficient, trace=None
+        self, conversation_id, question, answer, citations, *, insufficient, trace=None,
+        grounding=None,
     ):
         from src.domain.entities import Message
 
@@ -235,10 +273,85 @@ class AgenticChatService:
                 content=answer,
                 citations=citations,
                 trace=trace,
+                grounding=grounding,
                 insufficient_context=insufficient,
             )
         )
         return user_message, assistant
+
+    async def _maybe_distil(
+        self, knowledge_base_id, question, answer, conversation_id, message_id, history_length
+    ) -> None:
+        """Hand this exchange to the background distiller, if it is worth the model call.
+
+        Two of the three gates are structural rather than checked here: this is only reached
+        on the successful path, so a fallback and an `insufficient_context` answer have both
+        already returned above and can never be distilled. Neither contains anything the
+        workspace said about itself. The gate that is checked is the turn counter, which
+        keeps this to one call per few exchanges — a table that gains a row a week does not
+        deserve a model call per question.
+
+        Deferred, never awaited inline: it is a second model call, and the answer is already
+        finished. Nothing here can fail the stream.
+        """
+        if self.memory_queue is None or not self.memory_distill_every_n_turns:
+            return
+        if history_length % self.memory_distill_every_n_turns:
+            return
+
+        try:
+            from src.core.tenant_context import current_tenant_id, current_user_id
+
+            await self.memory_queue.enqueue_distillation(
+                knowledge_base_id,
+                current_tenant_id(),
+                current_user_id(),
+                question=question,
+                answer=answer,
+                conversation_id=conversation_id,
+                message_id=message_id,
+            )
+        except Exception:  # noqa: BLE001 - a worker that is down must not break answering
+            logger.warning("memory_distill_enqueue_failed")
+
+    async def _record_signals(self, report, citations) -> None:
+        """Attribute the answer's outcome back to the passages it was written from.
+
+        Here rather than in the retrieval loop, for two reasons that both matter. It needs
+        the grounding verdict, which does not exist until after the answer. And it must
+        record the citations that *reached the answer*, not the retrieval pool — rewarding
+        everything retrieved would reward being retrieved, which is the thing the prior
+        influences, closing the loop with no signal from outside it.
+
+        Ordinal N is `citations[N-1]`. Invalid ordinals resolve to no citation and are
+        skipped; a fallback answer cites nothing and so produces no signal at all, which is
+        correct — the reader is looking at the absence of an answer.
+        """
+        if self.signal_repo is None or not report.cited_ordinals:
+            return
+
+        unsupported = set(report.unsupported_ordinals)
+        events = []
+        for ordinal in report.cited_ordinals:
+            if not 1 <= ordinal <= len(citations):
+                continue
+            chunk_id = citations[ordinal - 1].chunk_id
+            if not chunk_id:
+                continue
+            with suppress(ValueError, AttributeError):
+                events.append(
+                    ChunkSignalEvent(
+                        chunk_id=UUID(chunk_id),
+                        cited=1,
+                        supported=0 if ordinal in unsupported else 1,
+                        unsupported=1 if ordinal in unsupported else 0,
+                    )
+                )
+
+        try:
+            await self.signal_repo.record(events)
+        except Exception:  # noqa: BLE001 - the answer is already written, streamed and stored
+            logger.warning("signal_record_failed", events=len(events))
 
     @staticmethod
     def _done(user_message, assistant, *, insufficient: bool, state: LoopState) -> dict:

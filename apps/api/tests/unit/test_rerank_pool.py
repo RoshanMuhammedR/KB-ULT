@@ -68,13 +68,41 @@ class RerankPoolTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(recorder["scored"], 12)
 
-    async def test_scores_the_highest_fusion_scores_not_an_arbitrary_slice(self):
+    async def test_pool_preserves_fusion_order(self):
+        """The list arrives fused; the pool is its head.
+
+        This test previously asserted the opposite — that the pool was re-sorted by `SCORE`
+        — which is the defect it was written to protect. `EnsembleRetriever` returns
+        documents already ordered by `Σ weight / (rank + c)` and never writes that score to
+        metadata, so position is the only record of fusion and `SCORE` is just raw cosine.
+        Re-sorting looked like a safety net and was actually the bug.
+        """
         recorder = {}
-        docs = list(reversed(_docs(30)))  # weakest first, so order cannot be relied on
+        docs = list(reversed(_docs(30)))  # ascending cosine: fusion order != SCORE order
         await _build(recorder).compress(docs, "q")
 
-        # Document "0" carries the top fusion score and must be in the scored pool.
-        self.assertIn("[0] 0", recorder["prompt"])
+        # "29" leads the fused list and carries the *lowest* cosine. Under the old sort it
+        # was dropped from the pool entirely; under fusion order it is scored first.
+        self.assertIn("[0] 29", recorder["prompt"])
+        # And the document with the best cosine but the worst fusion rank stays out.
+        self.assertNotIn("[11] 0", recorder["prompt"])
+
+    async def test_a_lexical_only_hit_reaches_the_pool(self):
+        """The case the defect made unreachable, and the reason the lexical arm exists.
+
+        An exact-identifier match is often a poor embedding neighbour: the lexical arm ranks
+        it first, so RRF places it high, but its cosine is near the bottom. Sorting the pool
+        by cosine meant that whenever the dense arm returned `candidate_limit` documents —
+        which it does on any non-trivial corpus — such a hit could never be judged.
+        """
+        recorder = {}
+        # Fused first by RRF, last by cosine: found brilliantly by one arm only.
+        lexical_only = Document(
+            page_content="ERR_CONN_REFUSED" + "x" * 5000, metadata={SCORE: 0.01}
+        )
+        await _build(recorder).compress([lexical_only, *_docs(30)], "q")
+
+        self.assertIn("ERR_CONN_REFUSED", recorder["prompt"])
 
     async def test_each_document_is_truncated_for_scoring(self):
         recorder = {}
@@ -85,14 +113,18 @@ class RerankPoolTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_degraded_path_still_ranks_over_everything_retrieved(self):
         recorder = {}
-        documents = _docs(30)
+        # Reversed so fusion order and cosine order disagree: passing this by accident is
+        # not possible.
+        documents = list(reversed(_docs(30)))
         kept, degraded = await _build(recorder, fail=True).compress(documents, "q")
 
         self.assertTrue(degraded)
         # The fallback keeps top_n // 2, chosen from the full retrieved set - the pool cut is
         # only about what the LLM sees, and must not narrow what degradation can fall back on.
         self.assertEqual(len(kept), 3)
-        self.assertEqual(kept[0].metadata[SCORE], max(d.metadata[SCORE] for d in documents))
+        # Fusion order, not cosine order. With no judge, fusion rank is the only signal
+        # left, so this is where discarding it would hurt most.
+        self.assertEqual(kept, documents[:3])
 
     async def test_empty_input_short_circuits(self):
         recorder = {}

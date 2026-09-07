@@ -4,6 +4,7 @@ import { getSession, saveSession, subscribeToSession } from "@/lib/auth";
 import * as api from "@/lib/api";
 import { useAuthStore } from "@/stores/auth-store";
 import { useConversationsStore } from "@/stores/conversations-store";
+import { useMemoriesStore } from "@/stores/memories-store";
 import { useSourcesStore } from "@/stores/sources-store";
 
 let started = false;
@@ -32,6 +33,7 @@ export function initClientStores(): void {
     if (!session && had) {
       useSourcesStore.getState().reset(); // reset() calls stopAll()
       useConversationsStore.getState().reset();
+      useMemoriesStore.getState().reset();
     }
   });
 

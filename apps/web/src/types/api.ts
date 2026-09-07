@@ -83,7 +83,12 @@ export type Message = {
   grounding?: GroundingReport | null;
   /** How this answer was reached. Absent on answers written before the trace existed. */
   trace?: AnswerTrace | null;
+  /** This reader's own thumb. Per-user, so it is never shared across a workspace. */
+  feedback?: Rating | null;
 };
+
+/** A reader's verdict. Signed because the server sums it, not because it is a scale. */
+export type Rating = 1 | -1;
 
 // List view — enough to recognise a thread without loading it.
 export type ConversationSummary = {
@@ -215,6 +220,12 @@ export type AnswerTrace = {
   exit_reason: string;
   /** True when reranking could not be reached and fusion order was used instead. */
   degraded: boolean;
+  /**
+   * How many remembered facts were put in front of this question. A count, never the facts:
+   * memory is explicitly not citable, so the trace says it happened without dressing it up
+   * as a source. Absent on answers written before memory existed.
+   */
+  memories_used?: number;
 };
 
 /**
@@ -230,4 +241,18 @@ export type GroundingReport = {
   unsupported: number[];
   /** Ordinals the answer cited that were never offered to it. */
   invalid: number[];
+};
+
+// ---- Workspace memory ----------------------------------------------------
+/** A fact the workspace has stated about itself, injected as background into future answers. */
+export type WorkspaceMemory = {
+  id: string;
+  content: string;
+  kind: "fact" | "preference";
+  /** Where it was learned. Null when added by hand, or when the source thread was deleted. */
+  source_conversation_id: string | null;
+  /** Set once corrected. The old memory is kept so "why did it think that?" has an answer. */
+  superseded_at: string | null;
+  last_used_at: string | null;
+  created_at: string | null;
 };

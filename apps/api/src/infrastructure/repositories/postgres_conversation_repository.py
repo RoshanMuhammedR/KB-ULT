@@ -90,7 +90,21 @@ class ConversationRepository:
             .where(MessageModel.conversation_id == conversation_id)
             .order_by(MessageModel.created_at.asc())
         )).all()
-        return conversation_to_domain(model, list(messages))
+        conversation = conversation_to_domain(model, list(messages))
+
+        # One statement for the whole thread, not one per message — the same batching
+        # `list_for_knowledge_base` does for its counts. Feedback is per-user, so it cannot
+        # be a column on the message and has to be joined in here.
+        from src.infrastructure.repositories.postgres_message_feedback_repository import (
+            MessageFeedbackRepository,
+        )
+
+        ratings = await MessageFeedbackRepository(self.db).ratings_for(
+            [message.id for message in conversation.messages]
+        )
+        for message in conversation.messages:
+            message.feedback = ratings.get(message.id)
+        return conversation
 
     async def recent_messages(self, conversation_id: UUID, limit: int) -> list[Message]:
         """The tail of a thread, oldest-first — what follow-up questions are built from."""
@@ -163,6 +177,7 @@ class ConversationRepository:
             content=sanitize_text_for_storage(message.content),
             citations=message.citations or [],
             trace=message.trace,
+            grounding=message.grounding,
             insufficient_context=message.insufficient_context,
         )
         self.db.add(model)
@@ -175,6 +190,25 @@ class ConversationRepository:
         await self._commit()
         await self.db.refresh(model)
         return message_to_domain(model)
+
+    async def set_grounding(self, message_id: UUID, grounding: dict) -> None:
+        """Attach the grounding verdict to an already-written answer.
+
+        A separate write rather than part of `append_message` because the check runs after
+        the answer has streamed — deliberately, so verification does not delay
+        time-to-first-token. See `grounding.py`.
+
+        A missing row is not an error: the user can delete a conversation while its answer
+        is still being verified, and losing the badge for a message that no longer exists is
+        the correct outcome, not something to raise over.
+        """
+        model = (await self.db.scalars(
+            select(MessageModel).where(MessageModel.id == message_id)
+        )).first()
+        if model is None:
+            return
+        model.grounding = grounding
+        await self._commit()
 
     async def delete_message(self, conversation_id: UUID, message_id: UUID) -> None:
         model = (await self.db.scalars(
