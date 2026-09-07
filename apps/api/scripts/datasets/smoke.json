@@ -1,0 +1,34 @@
+[
+  {
+    "id": "build-tool",
+    "question": "What build tool does the AI Trip Planner use, and why was it chosen?",
+    "kind": "single_hop",
+    "expected_chunks": ["e75c5702-7eac-40ca-b43c-d34117e6ddad"],
+    "reference_answer": "Vite 7, for its native-ESM dev server and near-instant HMR.",
+    "expect_fallback": false
+  },
+  {
+    "id": "frontend-framework",
+    "question": "Which frontend framework is used and what was the reasoning?",
+    "kind": "single_hop",
+    "expected_chunks": ["67c7d4bf-330f-49ed-bbe5-081a5b9963ff"],
+    "reference_answer": "React 18, because the UI is heavily stateful and cross-linked.",
+    "expect_fallback": false
+  },
+  {
+    "id": "konnectify-exact",
+    "question": "Konnectify",
+    "kind": "exact_identifier",
+    "expected_chunks": ["d5936450-c66a-4bb6-bd79-5acf058feff9"],
+    "reference_answer": "A no-code SaaS iPaaS platform where full-stack features were built.",
+    "expect_fallback": false
+  },
+  {
+    "id": "not-in-corpus",
+    "question": "What is the company's parental leave policy in Belgium?",
+    "kind": "out_of_corpus",
+    "expected_chunks": [],
+    "reference_answer": "Not in the library.",
+    "expect_fallback": true
+  }
+]
