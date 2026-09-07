@@ -90,7 +90,21 @@ class ConversationRepository:
             .where(MessageModel.conversation_id == conversation_id)
             .order_by(MessageModel.created_at.asc())
         )).all()
-        return conversation_to_domain(model, list(messages))
+        conversation = conversation_to_domain(model, list(messages))
+
+        # One statement for the whole thread, not one per message — the same batching
+        # `list_for_knowledge_base` does for its counts. Feedback is per-user, so it cannot
+        # be a column on the message and has to be joined in here.
+        from src.infrastructure.repositories.postgres_message_feedback_repository import (
+            MessageFeedbackRepository,
+        )
+
+        ratings = await MessageFeedbackRepository(self.db).ratings_for(
+            [message.id for message in conversation.messages]
+        )
+        for message in conversation.messages:
+            message.feedback = ratings.get(message.id)
+        return conversation
 
     async def recent_messages(self, conversation_id: UUID, limit: int) -> list[Message]:
         """The tail of a thread, oldest-first — what follow-up questions are built from."""

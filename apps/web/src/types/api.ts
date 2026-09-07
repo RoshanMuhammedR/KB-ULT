@@ -83,7 +83,12 @@ export type Message = {
   grounding?: GroundingReport | null;
   /** How this answer was reached. Absent on answers written before the trace existed. */
   trace?: AnswerTrace | null;
+  /** This reader's own thumb. Per-user, so it is never shared across a workspace. */
+  feedback?: Rating | null;
 };
+
+/** A reader's verdict. Signed because the server sums it, not because it is a scale. */
+export type Rating = 1 | -1;
 
 // List view — enough to recognise a thread without loading it.
 export type ConversationSummary = {

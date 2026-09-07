@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -14,6 +14,7 @@ class MessageSchema(BaseModel):
     citations: list[dict[str, Any]]
     trace: dict[str, Any] | None = None
     grounding: dict[str, Any] | None = None
+    feedback: int | None = None
     insufficient_context: bool
     created_at: datetime | None
 
@@ -43,3 +44,13 @@ class RenameConversationRequest(BaseModel):
 
 class AskRequest(BaseModel):
     question: str
+
+
+class FeedbackRequest(BaseModel):
+    """`Literal[-1, 1]` so anything else is a 422 from validation, before the handler runs."""
+
+    rating: Literal[-1, 1]
+
+
+class FeedbackSchema(BaseModel):
+    rating: int | None = None

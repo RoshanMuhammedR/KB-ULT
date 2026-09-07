@@ -13,7 +13,7 @@ import type {
   TokenResponse,
   UploadUrlResponse
 } from "@/types/api";
-import type { AnswerStatus, AnswerTrace, GroundingReport } from "@/types/api";
+import type { AnswerStatus, AnswerTrace, GroundingReport, Rating } from "@/types/api";
 import { clearSession, getAccessToken, getRefreshToken, getSession, saveSession } from "@/lib/auth";
 
 // Same-origin in production (Caddy routes /api/* to FastAPI); an absolute URL in dev, where
@@ -261,6 +261,30 @@ export function deleteConversation(conversationId: string): Promise<void> {
 
 export function deleteMessage(conversationId: string, messageId: string): Promise<void> {
   return request<void>(`/conversations/${conversationId}/messages/${messageId}`, {
+    method: "DELETE"
+  });
+}
+
+/**
+ * Record this reader's verdict on an answer.
+ *
+ * PUT, not POST: the verdict is a value that is being set, so sending it twice is the same
+ * as sending it once and changing your mind is the same call with a different body.
+ */
+export function setFeedback(
+  conversationId: string,
+  messageId: string,
+  rating: Rating
+): Promise<{ rating: number | null }> {
+  return request<{ rating: number | null }>(
+    `/conversations/${conversationId}/messages/${messageId}/feedback`,
+    { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rating }) }
+  );
+}
+
+/** Retract a verdict, returning the server's counters to where they were before it. */
+export function clearFeedback(conversationId: string, messageId: string): Promise<void> {
+  return request<void>(`/conversations/${conversationId}/messages/${messageId}/feedback`, {
     method: "DELETE"
   });
 }

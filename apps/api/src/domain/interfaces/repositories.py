@@ -3,7 +3,14 @@ from __future__ import annotations
 from typing import Protocol
 from uuid import UUID
 
-from src.domain.entities import Chunk, Embedding, KnowledgeAsset, KnowledgeBase
+from src.domain.entities import (
+    Chunk,
+    ChunkSignal,
+    ChunkSignalEvent,
+    Embedding,
+    KnowledgeAsset,
+    KnowledgeBase,
+)
 from src.domain.entities.ingestion_job import IngestionJob
 from src.domain.entities.job_event import JobEvent
 from src.domain.entities.refresh_token import RefreshToken
@@ -150,4 +157,23 @@ class IChunkRepository(Protocol):
 
 class IEmbeddingRepository(Protocol):
     async def replace_for_chunks(self, chunks: list[Chunk], embeddings: list[Embedding]) -> None:
+        ...
+
+
+class IChunkSignalRepository(Protocol):
+    """Accumulated per-passage outcomes, behind the learned relevance prior."""
+
+    async def record(self, events: list[ChunkSignalEvent]) -> None:
+        """Fold one answer's outcomes into the counters. Increments, not absolute values."""
+        ...
+
+    async def apply_feedback(
+        self, chunk_ids: list[UUID], *, previous: int | None, current: int | None
+    ) -> None:
+        """Move vote counters by the difference between two verdicts, so a change of mind
+        is exactly reversible."""
+        ...
+
+    async def priors(self, chunk_ids: list[UUID]) -> dict[str, ChunkSignal]:
+        """Signals for a retrieval pool, keyed by `str(chunk_id)` to match Document metadata."""
         ...

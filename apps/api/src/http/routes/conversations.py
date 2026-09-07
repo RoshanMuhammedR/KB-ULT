@@ -20,11 +20,19 @@ from src.http.schemas.conversations import (
     AskRequest,
     ConversationSchema,
     ConversationSummarySchema,
+    FeedbackRequest,
+    FeedbackSchema,
     MessageSchema,
     RenameConversationRequest,
 )
 from src.infrastructure.database.session import get_db, session_scope
-from src.infrastructure.repositories import ConversationRepository, KnowledgeBaseRepository
+from src.domain.entities import MessageRole
+from src.infrastructure.repositories import (
+    ChunkSignalRepository,
+    ConversationRepository,
+    KnowledgeBaseRepository,
+    MessageFeedbackRepository,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -60,6 +68,7 @@ def _message_schema(message) -> MessageSchema:
         citations=message.citations,
         trace=message.trace,
         grounding=message.grounding,
+        feedback=message.feedback,
         insufficient_context=message.insufficient_context,
         created_at=message.created_at,
     )
@@ -138,6 +147,97 @@ async def delete_message(
         await ConversationRepository(db).delete_message(conversation_id, message_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+async def _assistant_message(db: AsyncSession, conversation_id: UUID, message_id: UUID):
+    """The assistant message this feedback is about, or the right HTTP error.
+
+    Filters on *both* ids, like `delete_message`, so a message id from another conversation
+    is a 404 rather than a successful write to someone else's thread. A message in another
+    tenant is also a 404 and never a 403: the tenant filter makes it invisible, and saying
+    "forbidden" would confirm that an id exists.
+    """
+    conversation = await ConversationRepository(db).get_with_messages(conversation_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    message = next((m for m in conversation.messages if m.id == message_id), None)
+    if message is None:
+        raise HTTPException(status_code=404, detail="Message not found")
+    if message.role != MessageRole.ASSISTANT:
+        # Rating your own question is meaningless, and letting it through would record a
+        # verdict against no citations at all.
+        raise HTTPException(
+            status_code=422, detail="Only an assistant message can be rated"
+        )
+    return message
+
+
+def _cited_chunk_ids(message) -> list[UUID]:
+    """The passages an answer was built from — what a thumb is really a verdict on.
+
+    A fallback answer cites nothing and therefore moves no counters, which is correct: the
+    reader is rating the absence of an answer, not any passage's contribution to one.
+    """
+    ids = []
+    for citation in message.citations or []:
+        raw = citation.get("chunk_id")
+        if not raw:
+            continue
+        with suppress(ValueError, AttributeError):
+            ids.append(UUID(raw))
+    return ids
+
+
+@router.put("/{conversation_id}/messages/{message_id}/feedback")
+async def set_feedback(
+    conversation_id: UUID,
+    message_id: UUID,
+    request: FeedbackRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> FeedbackSchema:
+    """Record this reader's verdict on an answer.
+
+    PUT rather than POST because the operation is "this user's verdict is now X", which is
+    idempotent by definition — changing your mind is the same call with a different body,
+    not a second resource. `rating` is a `Literal[-1, 1]`, so an out-of-range value is a 422
+    from validation before this handler runs.
+    """
+    message = await _assistant_message(db, conversation_id, message_id)
+
+    # The reader's click is the durable thing. It is committed first and on its own, so a
+    # failure in the derived counters below can never cost the user their vote.
+    previous = await MessageFeedbackRepository(db).set(message_id, request.rating)
+
+    try:
+        await ChunkSignalRepository(db).apply_feedback(
+            _cited_chunk_ids(message), previous=previous, current=request.rating
+        )
+    except Exception:  # noqa: BLE001 - a counter that did not move must not fail a 200
+        logger.warning("signal_write_failed", message_id=str(message_id))
+
+    return FeedbackSchema(rating=request.rating)
+
+
+@router.delete(
+    "/{conversation_id}/messages/{message_id}/feedback",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def clear_feedback(
+    conversation_id: UUID,
+    message_id: UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> None:
+    """Retract a verdict, returning the counters to exactly where they were before it."""
+    message = await _assistant_message(db, conversation_id, message_id)
+    previous = await MessageFeedbackRepository(db).clear(message_id)
+
+    try:
+        await ChunkSignalRepository(db).apply_feedback(
+            _cited_chunk_ids(message), previous=previous, current=None
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning("signal_write_failed", message_id=str(message_id))
 
 
 @router.post("/{conversation_id}/messages")
