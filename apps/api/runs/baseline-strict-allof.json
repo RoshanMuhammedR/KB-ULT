@@ -1,0 +1,56 @@
+{
+  "cases": 33,
+  "errors": 0,
+  "recall_at_k": 0.74,
+  "mrr": 0.7333,
+  "p50_latency_ms": 14392,
+  "p95_latency_ms": 22675,
+  "mean_hops": 1.45,
+  "hop_distribution": {
+    "1": 18,
+    "2": 15
+  },
+  "exit_reasons": {
+    "max_hops": 10,
+    "nothing_found": 3,
+    "sufficient": 20
+  },
+  "answered_when_it_should_not_have": 2,
+  "fell_back_when_it_should_not_have": 0,
+  "grounded_rate": 0.8387,
+  "claims_checked": 31,
+  "unsupported_citations": 5,
+  "citation_concentration": 0.0989,
+  "by_kind": {
+    "single_hop": {
+      "cases": 7,
+      "recall": 0.7143,
+      "p95_latency_ms": 20713
+    },
+    "multi_hop": {
+      "cases": 5,
+      "recall": 0.4,
+      "p95_latency_ms": 19381
+    },
+    "exact_identifier": {
+      "cases": 10,
+      "recall": 0.85,
+      "p95_latency_ms": 34451
+    },
+    "out_of_corpus": {
+      "cases": 5,
+      "recall": null,
+      "p95_latency_ms": 17619
+    },
+    "follow_up": {
+      "cases": 3,
+      "recall": 1.0,
+      "p95_latency_ms": 14392
+    },
+    "injection": {
+      "cases": 3,
+      "recall": null,
+      "p95_latency_ms": 20967
+    }
+  }
+}
