@@ -6,6 +6,8 @@
     "dev": "node ../../scripts/run.mjs venv --cwd apps/api uvicorn src.main:app --reload --host 0.0.0.0 --port @{API_PORT:8000}",
     "lint": "node ../../scripts/run.mjs venv --cwd apps/api python -m compileall src scripts",
     "build": "node ../../scripts/run.mjs venv --cwd apps/api python -m compileall src scripts",
-    "test": "node ../../scripts/run.mjs venv --cwd apps/api python -m unittest discover tests"
+    "test": "node ../../scripts/run.mjs venv --cwd apps/api python -m unittest discover tests",
+    "eval": "node ../../scripts/run.mjs venv --cwd apps/api python scripts/eval.py",
+    "reingest": "node ../../scripts/run.mjs venv --cwd apps/api python scripts/reingest.py"
   }
 }
