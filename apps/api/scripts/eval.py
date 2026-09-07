@@ -199,7 +199,27 @@ def summarise(results: list[CaseResult], cases: list[dict]) -> dict[str, Any]:
     unexpected_fallbacks = [
         r for r in results if r.fell_back and not by_id[r.id].get("expect_fallback")
     ]
-    missed_fallbacks = [r for r in expected_fallbacks if not r.fell_back]
+    # Not every non-fallback is an invention, and conflating the two overstates the failure
+    # this product cares most about.
+    #
+    # `insufficient_context` is set only by the deterministic fallback path, which runs when
+    # retrieval found nothing at all. An out-of-corpus question whose topic is *adjacent* to
+    # real content still retrieves passages, so the loop exits `max_hops`, an answer is
+    # generated, and the model itself says "the retrieved context does not cover this". That
+    # is the correct outcome reached by a different route, and scoring it as an invention
+    # hides the fact that the pipeline is behaving.
+    #
+    # The two are told apart by whether the answer made any *cited* claim. Citing nothing
+    # means asserting nothing about the corpus, which is what a refusal is. This is a
+    # property of the answer rather than a phrase-match on its wording, so it does not rot
+    # the first time the model rewords a refusal.
+    #
+    # It is not airtight: an answer that asserts something from the model's own knowledge
+    # without citing would also count zero claims, and that is the most dangerous failure
+    # here. `uncited_answers` is reported separately so it stays visible rather than being
+    # averaged away — a number worth reading by hand when it moves.
+    answered_anyway = [r for r in expected_fallbacks if not r.fell_back and r.checked > 0]
+    refused_in_prose = [r for r in expected_fallbacks if not r.fell_back and r.checked == 0]
 
     # Pooled across the run rather than averaged per case: a case with eight claims is
     # eight chances to be wrong, and averaging per-case rates would let one heavily-cited
@@ -219,7 +239,12 @@ def summarise(results: list[CaseResult], cases: list[dict]) -> dict[str, Any]:
         "exit_reasons": _distribution([r.exit_reason or "error" for r in results]),
         # Answering out-of-corpus questions anyway is the failure this product exists to
         # avoid, so it is reported on its own rather than folded into an accuracy number.
-        "answered_when_it_should_not_have": len(missed_fallbacks),
+        # An out-of-corpus question answered with cited claims: the failure this product
+        # exists to avoid, and the only one of these three that is unambiguously bad.
+        "answered_when_it_should_not_have": len(answered_anyway),
+        # Refused, but by generating prose rather than by falling back — so it cost a full
+        # retrieval loop and an answering call to say "I don't know". Correct, and wasteful.
+        "refused_without_falling_back": len(refused_in_prose),
         "fell_back_when_it_should_not_have": len(unexpected_fallbacks),
         # Answer quality, as distinct from retrieval quality. None when nothing was
         # checkable at all, which is a dataset problem rather than a score of zero.
@@ -230,6 +255,11 @@ def summarise(results: list[CaseResult], cases: list[dict]) -> dict[str, Any]:
         # one that is collapsing onto a workspace's greatest hits pushes it up while recall
         # holds steady, which is exactly the case no other metric here would catch.
         "citation_concentration": _citation_concentration(results),
+        # Answers that made no cited claim at all. A refusal looks like this and so does an
+        # answer written from the model's own knowledge, so this is a number to read rather
+        # than gate on: a rise means either more honest refusals or more uncited assertion,
+        # and only reading a few tells you which.
+        "uncited_answers": sum(1 for r in results if not r.fell_back and r.checked == 0),
         "by_kind": {
             kind: _kind_summary([r for r in results if r.kind == kind])
             for kind in KINDS
@@ -295,6 +325,7 @@ def compare(current: dict, baseline: dict) -> list[str]:
         ("mrr", True),
         ("grounded_rate", True),
         ("citation_concentration", False),
+        ("refused_without_falling_back", False),
         ("unsupported_citations", False),
         ("p50_latency_ms", False),
         ("p95_latency_ms", False),
