@@ -132,6 +132,19 @@ class IChunkRepository(Protocol):
         ...
 
     async def list_for_asset(self, asset_id: UUID) -> list[Chunk]:
+        """Leaves only — the passages a reader sees and a citation points at."""
+        ...
+
+    async def list_all_for_asset(self, asset_id: UUID) -> list[Chunk]:
+        """Every chunk including parent sections — for a pipeline resuming after chunking."""
+        ...
+
+    async def list_parents(self, parent_ids: list[UUID]) -> dict[UUID, Chunk]:
+        """Parent sections keyed by id, for expanding matched children before generation."""
+        ...
+
+    async def count_by_asset(self, asset_ids: list[UUID]) -> dict[UUID, int]:
+        """Leaf counts per asset, for the library list."""
         ...
 
 

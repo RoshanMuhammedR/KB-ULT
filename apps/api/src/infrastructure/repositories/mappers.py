@@ -171,6 +171,12 @@ def chunk_to_domain(model: ChunkModel) -> Chunk:
         text=model.text,
         metadata=model.metadata_ or {},
         created_at=model.created_at,
+        parent_id=model.parent_id,
+        # The column is nullable and the domain default is "". Both are falsy, which is
+        # what `text_for_embedding` keys on, but normalising here keeps the domain object
+        # honest about its own type.
+        embed_text=model.embed_text or "",
+        modality=model.modality,
     )
 
 

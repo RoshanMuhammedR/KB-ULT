@@ -20,6 +20,10 @@ class ChunkRepository:
     async def replace_for_asset(self, asset_id: UUID, chunks: list[Chunk]) -> list[Chunk]:
         await self.db.execute(delete(ChunkModel).where(ChunkModel.knowledge_asset_id == asset_id))
         models: list[ChunkModel] = []
+        # Relies on the chunker emitting each parent before its own children: ids are
+        # assigned client-side and the whole batch flushes as one unit, so the self-FK on
+        # `parent_id` is satisfied without ordering the INSERTs by hand. A reordering that
+        # broke that invariant would surface as a foreign-key violation here.
         for chunk in chunks:
             model = ChunkModel(
                 id=chunk.id or uuid4(),
@@ -27,6 +31,12 @@ class ChunkRepository:
                 chunk_index=chunk.chunk_index,
                 text=sanitize_text_for_storage(chunk.text),
                 metadata_=sanitize_json_for_storage(chunk.metadata),
+                parent_id=chunk.parent_id,
+                # Model-generated, so it needs the same NUL-stripping as `text`. Stored as
+                # NULL rather than "" to match the column default; `text_for_embedding`
+                # treats both as "embed `text` as-is".
+                embed_text=sanitize_text_for_storage(chunk.embed_text) or None,
+                modality=chunk.modality,
             )
             self.db.add(model)
             models.append(model)
@@ -71,6 +81,24 @@ class ChunkRepository:
             ).order_by(ChunkModel.chunk_index)
         )).all()
         return [chunk_to_domain(row) for row in rows]
+
+    async def list_parents(self, parent_ids: list[UUID]) -> dict[UUID, Chunk]:
+        """The parent sections for a set of matched children, keyed by id.
+
+        Small-to-big retrieval: the child is what matched, the parent is what the model
+        reads. Returned as a dict because the caller resolves each document's own parent
+        rather than iterating a list.
+
+        An ORM `select`, never `Session.get` — a `get` that hits the identity map returns
+        the row without emitting a statement, which means the tenant filter in
+        `do_orm_execute` never runs for it.
+        """
+        if not parent_ids:
+            return {}
+        rows = (await self.db.scalars(
+            select(ChunkModel).where(ChunkModel.id.in_(parent_ids))
+        )).all()
+        return {row.id: chunk_to_domain(row) for row in rows}
 
     async def list_all_for_asset(self, asset_id: UUID) -> list[Chunk]:
         """Every chunk including parents — for the pipeline resuming after chunking."""

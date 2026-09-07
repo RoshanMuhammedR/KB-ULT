@@ -84,6 +84,26 @@ export function SourceRow({
               </div>
             </div>
           ) : null}
+
+          {source.status === "ready" && source.passage_count === 0 ? (
+            <div className="mt-3 rounded-md border border-dashed border-border-strong bg-canvas-soft p-3">
+              <p className="text-[13px] font-medium">
+                Added, but nothing searchable came out of it.
+              </p>
+              <p className="mt-1 text-[12px] text-muted-foreground">
+                Saga finished processing this source and produced no passages, so answers
+                can&apos;t cite it. {recoveryHint(source)}
+              </p>
+              <div className="mt-3 flex gap-2">
+                <Button size="sm" variant="secondary" onClick={() => onRetry(source)}>
+                  <RefreshCw className="size-3.5" aria-hidden /> Process it again
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => onDelete(source)}>
+                  <Trash2 className="size-3.5" aria-hidden /> Remove
+                </Button>
+              </div>
+            </div>
+          ) : null}
         </div>
 
         <div className="flex flex-col items-end gap-2">
