@@ -81,6 +81,8 @@ class CaseResult:
     exit_reason: str
     retrieved: list[str] = field(default_factory=list)
     expected: list[str] = field(default_factory=list)
+    #: "all" (every expected chunk required) or "any" (they are alternatives). See `recall`.
+    match: str = "all"
     answer: str = ""
     fell_back: bool = False
     error: str = ""
@@ -98,10 +100,27 @@ class CaseResult:
 
         The single most diagnostic number here: generation cannot fix what retrieval never
         surfaced, so a low recall makes every downstream metric meaningless.
+
+        `match` says what the listed chunks mean, and getting it wrong silently misreports
+        the system rather than failing:
+
+        * `all` (default) — every listed chunk is required. Correct for a multi-hop question,
+          where the answer genuinely needs both halves.
+        * `any` — the listed chunks are alternatives, and finding one is a hit. Correct
+          wherever several passages answer the question equally well, which small-to-big
+          chunking makes common: "Vite" appears in nine chunks of this corpus, and a
+          question about the build tool is answered correctly by at least three of them.
+
+        Without `any`, the only honest option is to pin a single chunk and score every other
+        correct passage as a total miss — which is how a working retriever gets a recall of
+        0.00 on a question it answered perfectly. Listing the alternatives under `all` is no
+        better: finding one of three would score 0.33 for a complete answer.
         """
         if not self.expected:
             return None
         found = len(set(self.expected) & set(self.retrieved))
+        if self.match == "any":
+            return 1.0 if found else 0.0
         return found / len(self.expected)
 
     @property
@@ -131,6 +150,7 @@ async def run_case(case: dict[str, Any], tenant_id: str, user_id: str) -> CaseRe
         hops=0,
         exit_reason="",
         expected=case.get("expected_chunks", []),
+        match=case.get("match", "all"),
     )
 
     try:
