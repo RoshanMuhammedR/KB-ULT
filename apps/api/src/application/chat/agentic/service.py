@@ -165,6 +165,9 @@ class AgenticChatService:
             assembled.wire_citations,
             insufficient=False,
             trace=state.to_wire(),
+            # Blocking mode already has the verdict, so it goes in on the INSERT and needs
+            # no second write. The streaming path below fills it in afterwards.
+            grounding=report.to_wire() if report else None,
         )
         yield ("done", self._done(user_message, assistant, insufficient=False, state=state))
 
@@ -172,6 +175,13 @@ class AgenticChatService:
         # place when this arrives, and simply never shows one if the connection ended first.
         if report is None:
             report = await self.grounding.check(answer, assembled.citations)
+            # Persist before yielding: the check has already been paid for, and a client
+            # that hangs up between these two lines should still keep the result. The
+            # reverse order would lose it exactly when the user is most likely to reload.
+            try:
+                await self.conversation_repo.set_grounding(assistant.id, report.to_wire())
+            except Exception:  # noqa: BLE001 - a badge that failed to save is not a failed answer
+                logger.warning("grounding_persist_failed", message_id=str(assistant.id))
         yield ("verified", report.to_wire())
 
     # --- terminal paths -------------------------------------------------------------
@@ -221,7 +231,8 @@ class AgenticChatService:
         return conversation
 
     async def _persist_turn(
-        self, conversation_id, question, answer, citations, *, insufficient, trace=None
+        self, conversation_id, question, answer, citations, *, insufficient, trace=None,
+        grounding=None,
     ):
         from src.domain.entities import Message
 
@@ -235,6 +246,7 @@ class AgenticChatService:
                 content=answer,
                 citations=citations,
                 trace=trace,
+                grounding=grounding,
                 insufficient_context=insufficient,
             )
         )

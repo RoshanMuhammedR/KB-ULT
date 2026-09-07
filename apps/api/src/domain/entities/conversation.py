@@ -30,6 +30,9 @@ class Message:
     id: UUID = field(default_factory=uuid4)
     citations: list[dict[str, Any]] = field(default_factory=list)
     trace: dict[str, Any] | None = None
+    #: The grounding checker's verdict, or None when nothing was checkable — a fallback
+    #: answer, or one with no citation markers. Absent is not the same as unverified.
+    grounding: dict[str, Any] | None = None
     insufficient_context: bool = False
     created_at: datetime | None = None
 

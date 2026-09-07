@@ -188,6 +188,7 @@ def message_to_domain(model: MessageModel) -> Message:
         content=model.content,
         citations=model.citations or [],
         trace=model.trace,
+        grounding=model.grounding,
         insufficient_context=model.insufficient_context,
         created_at=model.created_at,
     )

@@ -319,6 +319,9 @@ class MessageModel(TenantScoped, Base):
     # How the answer was reached: the loop's hop-by-hop record. Nullable because answers
     # written before 0010 genuinely have none, and because only the assistant turn has one.
     trace: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # Whether the answer's citations held up. Written *after* the row is inserted on the
+    # streaming path, because the check runs after `done` to protect time-to-first-token.
+    grounding: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     insufficient_context: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 

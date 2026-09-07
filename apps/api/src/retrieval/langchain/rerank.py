@@ -20,7 +20,7 @@ from langchain_core.documents import Document
 from pydantic import BaseModel, Field
 
 from src.domain.entities import ChunkModality
-from src.retrieval.langchain.retrievers import MODALITY, SCORE
+from src.retrieval.langchain.retrievers import MODALITY
 
 logger = structlog.get_logger(__name__)
 
@@ -94,9 +94,17 @@ class ScoringReranker:
         # inside the timeout - so every query paid the full wait and then threw the answer
         # away. `documents` is left whole for `_fallback`, which still ranks over everything
         # that was retrieved.
-        pool = sorted(documents, key=lambda d: d.metadata.get(SCORE, 0.0), reverse=True)[
-            : self.candidate_limit
-        ]
+        #
+        # Sliced in the order it arrives, because that order *is* the fusion result.
+        # `EnsembleRetriever.weighted_reciprocal_rank` accumulates `weight / (rank + c)`
+        # into a local dict, sorts by it, and returns the list - the score itself is never
+        # written to `Document.metadata`. So position is the only surviving record of RRF,
+        # and re-sorting by `SCORE` here would silently discard cross-arm corroboration:
+        # `SCORE` is raw cosine, which the lexical arm carries too but is not ranked by. A
+        # chunk found by both arms would lose to one the dense arm merely liked, and a
+        # lexical-only hit - the exact identifier this whole arm exists to catch - could
+        # never reach the pool at all whenever dense returned `candidate_limit` documents.
+        pool = documents[: self.candidate_limit]
 
         try:
             scored = await asyncio.wait_for(
@@ -161,11 +169,13 @@ class ScoringReranker:
     def _fallback(self, documents: list[Document]) -> list[Document]:
         """Fusion order, cut harder.
 
-        Without a judge, the only signal left is the retrieval score — so this keeps fewer
+        Without a judge, the only signal left is fusion rank — so this keeps fewer
         documents than a successful rerank would, on the principle that unjudged context is
         worth less than judged context.
+
+        Takes the head of the list for the same reason `compress` does: the order is the
+        fusion result and nothing else records it. This path matters more than the pool cut,
+        not less — a degraded rerank is exactly when the retrieval signal is all there is,
+        so throwing it away for raw cosine does the most damage here.
         """
-        ranked = sorted(
-            documents, key=lambda d: d.metadata.get(SCORE, 0.0), reverse=True
-        )
-        return ranked[: max(1, self.top_n // 2)]
+        return documents[: max(1, self.top_n // 2)]
