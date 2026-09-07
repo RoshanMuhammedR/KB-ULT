@@ -8,6 +8,10 @@ RUN uv sync --no-dev --no-install-project
 COPY src src
 COPY alembic alembic
 COPY alembic.ini .
+# Operational scripts: reingest and the eval harness. Small, no extra dependencies, and
+# without them neither can be run against a deployed stack, which is the only environment
+# with a real corpus to run them against.
+COPY scripts scripts
 RUN uv sync --no-dev
 
 FROM python:3.12-slim
@@ -17,6 +21,7 @@ COPY --from=build /app/.venv /app/.venv
 COPY --from=build /app/src /app/src
 COPY --from=build /app/alembic /app/alembic
 COPY --from=build /app/alembic.ini /app/alembic.ini
+COPY --from=build /app/scripts /app/scripts
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
 RUN chmod +x /app/docker-entrypoint.sh && chown -R app:app /app
 ENV PATH="/app/.venv/bin:$PATH"

@@ -51,13 +51,18 @@ async def main() -> int:
     tokens = set_tenant_context(UUID(args.tenant), UUID(args.user))
     try:
         async with session_scope() as db:
-            # Only current, ready sources: a superseded version is not worth re-embedding,
-            # and one still mid-pipeline is already going to produce the new shape.
+            # Current sources only — a superseded version is not worth re-embedding.
+            #
+            # Not filtered to READY. An asset stranded mid-pipeline (a worker died somewhere
+            # its except-block could not recover from, so nothing marked it FAILED) would be
+            # invisible here and unreachable everywhere else. `service.reingest` is the one
+            # that decides: it queues a stranded asset and refuses one genuinely in flight.
+            # FAILED is excluded because `retry` owns it.
             assets = (
                 await db.scalars(
                     select(KnowledgeAssetModel)
                     .where(KnowledgeAssetModel.superseded_at.is_(None))
-                    .where(KnowledgeAssetModel.status == AssetStatus.READY.value)
+                    .where(KnowledgeAssetModel.status != AssetStatus.FAILED.value)
                     .order_by(KnowledgeAssetModel.created_at)
                 )
             ).all()
@@ -90,15 +95,22 @@ async def main() -> int:
             from src.composition import build_ingestion_service
 
             service = build_ingestion_service(db, get_settings())
+            queued = 0
             for asset in stale:
-                # Goes through the normal retry path, so it is queued rather than run here:
-                # the worker owns the pipeline, and running it inline would bypass the job
-                # record, the event log and the retry policy.
-                await service.retry(asset.id)
-                print(f"  queued {asset.filename}")
+                # `reingest`, not `retry`. `retry` guards on `status == FAILED` and returns
+                # silently for anything else, so calling it here queued nothing at all while
+                # this script cheerfully reported success — which is how a broken re-ingest
+                # went unnoticed. It is queued rather than run inline because the worker owns
+                # the pipeline, the job record and the retry policy.
+                if await service.reingest(asset.id):
+                    queued += 1
+                    print(f"  queued {asset.filename}")
+                else:
+                    print(f"  SKIPPED {asset.filename} (not ready — already in flight?)")
 
-        print(f"\nQueued {len(stale)} sources. Watch progress with GET /jobs.")
-        return 0
+        # Report what actually happened. Anything else here is how the last bug hid.
+        print(f"\nQueued {queued} of {len(stale)} sources. Watch progress with GET /jobs.")
+        return 0 if queued == len(stale) else 1
     finally:
         reset_tenant_context(tokens)
         await engine.dispose()

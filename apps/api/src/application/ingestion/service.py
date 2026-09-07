@@ -342,6 +342,69 @@ class IngestionService:
         logger.info("ingestion_retry_enqueued", knowledge_asset_id=str(asset_id))
         return asset
 
+    async def reingest(self, asset_id: UUID) -> bool:
+        """Re-run the pipeline for an asset that already succeeded. True if it was queued.
+
+        Deliberately not `retry`, and not a flag on it. The two look similar and guard
+        opposite conditions: `retry` acts only on a FAILED asset and stands down whenever the
+        queue still owns the work, because duplicating a run that is already coming back
+        costs real money for nothing. Re-ingestion acts only on a *finished* asset, where
+        there is no pending run to collide with and the whole point is to redo work that
+        succeeded — the output is stale, not wrong.
+
+        Collapsing them into `retry(force=True)` is what produced the bug this replaces:
+        `scripts/reingest.py` called `retry` on READY assets, hit its `!= FAILED` guard,
+        returned silently, and reported four sources queued while queuing none.
+
+        Returns a bool rather than the asset so a caller cannot mistake "nothing to do" for
+        "done", which is exactly the confusion that hid the original defect.
+        """
+        asset = await self.asset_repo.get(asset_id)
+        if asset is None:
+            raise ValueError(f"KnowledgeAsset not found: {asset_id}")
+
+        job = await self.job_repo.latest_for_asset(asset_id)
+
+        # FAILED belongs to `retry`, which knows to stand down while the queue still owns the
+        # work. Stepping around it here would duplicate a run that is already coming back.
+        if asset.status == AssetStatus.FAILED:
+            logger.info("reingest_skipped", knowledge_asset_id=str(asset_id), reason="use_retry")
+            return False
+
+        # A mid-pipeline status normally means a worker is holding it, and a second job would
+        # re-parse and re-embed the same source alongside the first. But it can also mean the
+        # asset is *stranded*: the pipeline died somewhere its own except-block could not
+        # recover from, so nothing ever marked it FAILED and its job has since exhausted the
+        # queue's attempts. That asset is then reachable by nothing — `retry` refuses it for
+        # not being FAILED and re-ingestion refuses it for not being READY — and the only way
+        # out is editing the database by hand. Treating "no job the queue will retry" as the
+        # signal makes it recoverable without inventing a status.
+        if asset.status != AssetStatus.READY:
+            if job is None or self._queue_will_retry(job):
+                logger.info(
+                    "reingest_skipped",
+                    knowledge_asset_id=str(asset_id),
+                    reason="in_flight",
+                    status=str(asset.status),
+                )
+                return False
+            logger.warning(
+                "reingest_recovering_stranded_asset",
+                knowledge_asset_id=str(asset_id),
+                status=str(asset.status),
+                job_attempts=job.attempts,
+            )
+
+        async with self.atomic_scope.atomic():
+            job = await self.job_repo.create(IngestionJob(asset_id=asset_id))
+            asset.status = AssetStatus.QUEUED
+            asset.error_message = None
+            await self.asset_repo.update_from_domain(asset)
+            await self._enqueue(asset_id)
+            await self._record(asset, "reingest", "Re-ingestion enqueued", job_id=job.id)
+        logger.info("reingest_enqueued", knowledge_asset_id=str(asset_id))
+        return True
+
     @staticmethod
     def _queue_will_retry(job: IngestionJob) -> bool:
         """True while the queue still owns this job — a worker has it, or will take it again.
@@ -353,6 +416,19 @@ class IngestionService:
         `max_attempts` mirrors `RetryStrategy(max_attempts=3)` in queue/tasks.py; the two
         have to be changed together.
         """
+        # Past the budget, the status is not to be believed. `mark_failed` runs in the
+        # pipeline's own except-block, so a worker that dies somewhere that block cannot
+        # recover from leaves the row on RUNNING with nothing left alive to correct it — and
+        # RUNNING reads as "the queue has it" forever, which makes the asset permanently
+        # unretryable through every path the product offers. Procrastinate has long since
+        # stopped re-scheduling by then.
+        #
+        # Strictly greater, not >=: a job on its final permitted attempt is genuinely live,
+        # and must not be duplicated. The residual risk of an extra run is bounded anyway —
+        # chunks and embeddings are replaced rather than appended, so a duplicate costs
+        # money and time, never correctness.
+        if job.attempts > job.max_attempts:
+            return False
         if job.status in (JobStatus.RUNNING, JobStatus.QUEUED):
             return True
         if job.status == JobStatus.SUCCEEDED:
@@ -507,8 +583,8 @@ class IngestionService:
                 # YouTube video with no captions — routes through the FAILED path below
                 # instead of escaping uncaught. Only fetched when extraction is needed,
                 # so a retry past extraction skips re-acquiring.
-                raw = handler.acquire(asset)
-                asset = handler.parse(asset, raw)
+                raw = await handler.acquire(asset)
+                asset = await handler.parse(asset, raw)
                 await self.asset_repo.update_from_domain(asset)
 
             step = "chunking"

@@ -62,9 +62,16 @@ def _build_service(**overrides):
     chunk_repo.replace_for_asset.side_effect = lambda _, chunks: chunks
 
     # The source handler owns acquire (download) + parse (extract -> documents).
+    #
+    # `AsyncMock`, not `Mock`. Both methods are `async def` on `ISourceHandler`, and a sync
+    # Mock returns a plain value where the real handler returns a coroutine — so a missing
+    # `await` at the call site passes here and fails on every real ingestion. That is not
+    # hypothetical: it shipped, and broke uploads completely until it was found by running
+    # the pipeline against a live corpus. A fake that differs from the real collaborator
+    # exactly in the bug is worse than no fake at all.
     handler = Mock()
-    handler.acquire.return_value = RawContent(data=b"pdf", mime="application/pdf")
-    handler.parse.side_effect = lambda asset, raw: KnowledgeAsset(
+    handler.acquire = AsyncMock(return_value=RawContent(data=b"pdf", mime="application/pdf"))
+    handler.parse = AsyncMock(side_effect=lambda asset, raw: KnowledgeAsset(
         id=asset.id,
         knowledge_base_id=asset.knowledge_base_id,
         lineage_id=asset.lineage_id,
@@ -74,7 +81,7 @@ def _build_service(**overrides):
         storage_key=asset.storage_key,
         status=AssetStatus.EXTRACTING,
         documents=[Document(page_content="hello", metadata={"locator": {"type": "page", "value": 1}})],
-    )
+    ))
     source_handler_registry = Mock()
     source_handler_registry.get.return_value = handler
 
