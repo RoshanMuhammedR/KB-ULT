@@ -12,6 +12,16 @@ measurements. Run it before a change and after, and keep the numbers.
     python scripts/eval.py ... --out runs/after.json --baseline runs/before.json
     python scripts/eval.py ... --fail-under recall_at_k=0.7,grounded_rate=0.9
 
+Two flags exist specifically to judge the learned relevance prior, which cannot be evaluated
+by running the same questions repeatedly — doing that measures how well it memorised them:
+
+    RETRIEVAL_PRIOR_ENABLED=1 python scripts/eval.py ... --warm 3      # shape across passes
+    RETRIEVAL_PRIOR_ENABLED=1 python scripts/eval.py ... --holdout     # does it generalise
+
+Ship the prior only if holdout recall is flat-or-up and `citation_concentration` has not
+risen. Concentration climbing while recall holds is the signature of entrenchment, and it is
+invisible to every other number here.
+
 The dataset is a JSON list. `expected_chunks` may be omitted for cases where the point is
 the *behaviour* rather than a specific passage — an out-of-corpus question that must trigger
 the fallback, or an injection attempt that must be summarised rather than obeyed:
@@ -32,6 +42,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import statistics
 import sys
@@ -195,12 +206,40 @@ def summarise(results: list[CaseResult], cases: list[dict]) -> dict[str, Any]:
         "grounded_rate": round(total_supported / total_checked, 4) if total_checked else None,
         "claims_checked": total_checked,
         "unsupported_citations": total_checked - total_supported,
+        # The entrenchment tell. A learned prior that is genuinely helping leaves this flat;
+        # one that is collapsing onto a workspace's greatest hits pushes it up while recall
+        # holds steady, which is exactly the case no other metric here would catch.
+        "citation_concentration": _citation_concentration(results),
         "by_kind": {
             kind: _kind_summary([r for r in results if r.kind == kind])
             for kind in KINDS
             if any(r.kind == kind for r in results)
         },
     }
+
+
+def _citation_concentration(results: list[CaseResult]) -> float | None:
+    """Share of all retrievals that went to the busiest 5% of passages.
+
+    A corpus answering a varied question set should spread its citations around. If a small
+    set of passages starts appearing everywhere, retrieval has stopped responding to the
+    question — which is what a prior gone wrong looks like from the outside, and it can
+    happen while recall on already-seen questions stays perfect.
+
+    Computed over retrieved chunks rather than cited ones so it measures what the prior
+    actually reorders, and so it is defined even for a run where nothing was cited.
+    """
+    counts: dict[str, int] = {}
+    for result in results:
+        for chunk_id in result.retrieved:
+            counts[chunk_id] = counts.get(chunk_id, 0) + 1
+    if not counts:
+        return None
+
+    total = sum(counts.values())
+    top_n = max(1, round(len(counts) * 0.05))
+    busiest = sorted(counts.values(), reverse=True)[:top_n]
+    return round(sum(busiest) / total, 4)
 
 
 def _kind_summary(results: list[CaseResult]) -> dict[str, Any]:
@@ -235,6 +274,7 @@ def compare(current: dict, baseline: dict) -> list[str]:
         ("recall_at_k", True),
         ("mrr", True),
         ("grounded_rate", True),
+        ("citation_concentration", False),
         ("unsupported_citations", False),
         ("p50_latency_ms", False),
         ("p95_latency_ms", False),
@@ -293,6 +333,47 @@ def check_thresholds(summary: dict[str, Any], thresholds: dict[str, float]) -> l
     return failures
 
 
+def split_holdout(cases: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Halve the dataset into a set that builds signal and a set that is scored on it.
+
+    **This is the measurement that tells the two outcomes apart.** A prior that genuinely
+    helps and a prior that is entrenching look identical on questions it has already seen —
+    both push recall up, because both are learning to return what was returned before. The
+    difference only shows on questions the signal was not built from: real generalisation
+    lifts those too, while entrenchment leaves them flat or drags them down as retrieval
+    collapses toward a handful of well-worn passages.
+
+    Split on a stable hash of the case id rather than on position or `random`, so the same
+    dataset produces the same halves on every run — otherwise a comparison against a saved
+    baseline is comparing two different experiments. Interleaving by index would also
+    correlate the split with dataset order, which tends to group cases by kind.
+    """
+    warm, holdout = [], []
+    for case in cases:
+        digest = hashlib.sha256(str(case["id"]).encode("utf-8")).digest()
+        (warm if digest[0] % 2 else holdout).append(case)
+    return warm, holdout
+
+
+async def run_all(
+    cases: list[dict], tenant_id: str, user_id: str, *, quiet: bool = False
+) -> list[CaseResult]:
+    """Run every case, printing a line each unless asked not to."""
+    results: list[CaseResult] = []
+    for case in cases:
+        result = await run_case(case, tenant_id, user_id)
+        results.append(result)
+        if quiet:
+            continue
+        recall = "-" if result.recall is None else f"{result.recall:.2f}"
+        grounded = "-" if result.verified is None else f"{result.supported}/{result.checked}"
+        status = result.error or (
+            f"{result.exit_reason} hops={result.hops} recall={recall} grounded={grounded}"
+        )
+        print(f"  {result.id:32} {result.latency_ms:7.0f}ms  {status}")
+    return results
+
+
 async def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset", required=True, type=Path)
@@ -300,6 +381,22 @@ async def main() -> int:
     parser.add_argument("--user", required=True, help="User UUID within that tenant")
     parser.add_argument("--out", type=Path, help="Write the summary here for later comparison")
     parser.add_argument("--baseline", type=Path, help="Compare against a previous summary")
+    parser.add_argument(
+        "--warm",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Run the dataset N times first to build up signal, reporting each pass. A "
+        "prior that helps is flat-or-up across passes; one that entrenches rises on pass 2 "
+        "and then falls.",
+    )
+    parser.add_argument(
+        "--holdout",
+        action="store_true",
+        help="Split the dataset in half: build signal on one half, score on the other. The "
+        "only way to tell a prior that generalises from one that has memorised the "
+        "questions its signal came from.",
+    )
     parser.add_argument(
         "--fail-under",
         metavar="METRIC=VALUE,...",
@@ -312,20 +409,30 @@ async def main() -> int:
     thresholds = parse_thresholds(args.fail_under) if args.fail_under else {}
 
     cases = json.loads(args.dataset.read_text(encoding="utf-8"))
-    print(f"Running {len(cases)} cases...\n")
 
-    results: list[CaseResult] = []
-    for case in cases:
-        result = await run_case(case, args.tenant, args.user)
-        results.append(result)
-        recall = "-" if result.recall is None else f"{result.recall:.2f}"
-        grounded = "-" if result.verified is None else f"{result.supported}/{result.checked}"
-        status = result.error or (
-            f"{result.exit_reason} hops={result.hops} recall={recall} grounded={grounded}"
+    scored_cases = cases
+    if args.holdout:
+        warm_cases, scored_cases = split_holdout(cases)
+        print(f"Holdout: building signal on {len(warm_cases)}, scoring {len(scored_cases)}\n")
+        # The warm half's own numbers are never reported. Its only job is to leave signal in
+        # `chunk_signals`; scoring it would be scoring the questions the prior just learned.
+        await run_all(warm_cases, args.tenant, args.user, quiet=True)
+
+    for pass_number in range(args.warm):
+        print(f"Warming pass {pass_number + 1}/{args.warm}...")
+        warmed = await run_all(scored_cases, args.tenant, args.user, quiet=True)
+        pass_summary = summarise(warmed, scored_cases)
+        # Printed per pass because the *shape* across passes is the signal: rising and then
+        # falling is entrenchment, flat-or-up is a prior doing its job.
+        print(
+            f"  recall={pass_summary['recall_at_k']} mrr={pass_summary['mrr']} "
+            f"concentration={pass_summary['citation_concentration']}\n"
         )
-        print(f"  {result.id:32} {result.latency_ms:7.0f}ms  {status}")
 
-    summary = summarise(results, cases)
+    print(f"Running {len(scored_cases)} cases...\n")
+    results = await run_all(scored_cases, args.tenant, args.user)
+
+    summary = summarise(results, scored_cases)
     print("\n" + json.dumps(summary, indent=2))
 
     if args.out:

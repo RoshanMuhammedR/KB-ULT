@@ -41,6 +41,7 @@ from src.infrastructure.langchain_adapters.chat_model import OpenAICompatibleCha
 from src.infrastructure.langchain_adapters.embeddings import OpenAICompatibleEmbeddingsAdapter
 from src.infrastructure.langchain_adapters.text_splitter import RecursiveSplitterAdapter
 from src.infrastructure.repositories import (
+    ChunkSignalRepository,
     ChunkRepository,
     ConversationRepository,
     IngestionJobEventRepository,
@@ -246,6 +247,11 @@ def build_agentic_chat_service(db: AsyncSession, settings: Settings) -> AgenticC
 
     vector_store = PgVectorStore(db)
     chunk_repo = ChunkRepository(db)
+    # One repository, two roles: the loop reads priors from it before reranking, and the
+    # service writes outcomes back to it after the answer has been graded. Built here so
+    # `retrieval_prior_enabled` is expressed as "the loop has no signal repository" rather
+    # than as a flag the loop has to remember to check.
+    signal_repo = ChunkSignalRepository(db)
 
     return AgenticChatService(
         kb_repo=KnowledgeBaseRepository(db),
@@ -277,12 +283,18 @@ def build_agentic_chat_service(db: AsyncSession, settings: Settings) -> AgenticC
             candidate_limit=settings.retrieval_top_k * settings.retrieval_candidate_multiplier,
             threshold=settings.retrieval_score_threshold,
             rrf_k=settings.retrieval_rrf_k,
+            signal_repo=signal_repo if settings.retrieval_prior_enabled else None,
+            prior_settings=settings,
         ),
         resolver=QueryResolver(fast),
         assembler=ContextAssembler(chunk_repo, token_budget=settings.context_token_budget),
         grounding=GroundingChecker(fast),
         llm_provider=AICreditsLLMProvider(_build_chat_adapter(settings, settings.aicredits_chat_model)),
         grounding_blocking=settings.grounding_blocking,
+        # Written to unconditionally, even with the prior disabled: signal has to exist
+        # before it can be evaluated, and a workspace that turns the prior on should not
+        # start from an empty table.
+        signal_repo=signal_repo,
     )
 
 

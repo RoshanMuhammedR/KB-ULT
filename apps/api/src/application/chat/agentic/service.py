@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from contextlib import suppress
 from uuid import UUID
 
 import structlog
@@ -33,7 +34,7 @@ from src.application.chat.agentic.prompts import (
     build_messages,
 )
 from src.application.chat.titles import title_from_question
-from src.domain.entities import Conversation, MessageRole
+from src.domain.entities import ChunkSignalEvent, Conversation, MessageRole
 from src.retrieval.langchain.query import QueryResolver, needs_retrieval
 
 logger = structlog.get_logger(__name__)
@@ -63,6 +64,7 @@ class AgenticChatService:
         grounding: GroundingChecker,
         llm_provider,
         grounding_blocking: bool = False,
+        signal_repo=None,
     ) -> None:
         self.kb_repo = kb_repo
         self.conversation_repo = conversation_repo
@@ -73,6 +75,7 @@ class AgenticChatService:
         self.grounding = grounding
         self.llm_provider = llm_provider
         self.grounding_blocking = grounding_blocking
+        self.signal_repo = signal_repo
 
     async def ask_stream(
         self, conversation_id: UUID | None, question: str
@@ -182,6 +185,8 @@ class AgenticChatService:
                 await self.conversation_repo.set_grounding(assistant.id, report.to_wire())
             except Exception:  # noqa: BLE001 - a badge that failed to save is not a failed answer
                 logger.warning("grounding_persist_failed", message_id=str(assistant.id))
+
+        await self._record_signals(report, assembled.citations)
         yield ("verified", report.to_wire())
 
     # --- terminal paths -------------------------------------------------------------
@@ -251,6 +256,45 @@ class AgenticChatService:
             )
         )
         return user_message, assistant
+
+    async def _record_signals(self, report, citations) -> None:
+        """Attribute the answer's outcome back to the passages it was written from.
+
+        Here rather than in the retrieval loop, for two reasons that both matter. It needs
+        the grounding verdict, which does not exist until after the answer. And it must
+        record the citations that *reached the answer*, not the retrieval pool — rewarding
+        everything retrieved would reward being retrieved, which is the thing the prior
+        influences, closing the loop with no signal from outside it.
+
+        Ordinal N is `citations[N-1]`. Invalid ordinals resolve to no citation and are
+        skipped; a fallback answer cites nothing and so produces no signal at all, which is
+        correct — the reader is looking at the absence of an answer.
+        """
+        if self.signal_repo is None or not report.cited_ordinals:
+            return
+
+        unsupported = set(report.unsupported_ordinals)
+        events = []
+        for ordinal in report.cited_ordinals:
+            if not 1 <= ordinal <= len(citations):
+                continue
+            chunk_id = citations[ordinal - 1].chunk_id
+            if not chunk_id:
+                continue
+            with suppress(ValueError, AttributeError):
+                events.append(
+                    ChunkSignalEvent(
+                        chunk_id=UUID(chunk_id),
+                        cited=1,
+                        supported=0 if ordinal in unsupported else 1,
+                        unsupported=1 if ordinal in unsupported else 0,
+                    )
+                )
+
+        try:
+            await self.signal_repo.record(events)
+        except Exception:  # noqa: BLE001 - the answer is already written, streamed and stored
+            logger.warning("signal_record_failed", events=len(events))
 
     @staticmethod
     def _done(user_message, assistant, *, insufficient: bool, state: LoopState) -> dict:
