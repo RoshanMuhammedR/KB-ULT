@@ -1,9 +1,25 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { X } from "lucide-react";
 import { Modal, ModalBody, ModalHeader, type ModalPlacement, type ModalSize } from "@kb/ui";
 import type { ReactNode } from "react";
+
+/**
+ * Whether the URL still names this overlay.
+ *
+ * A parallel-route slot keeps rendering its last matched page across client-side navigation
+ * — `default.tsx` only applies to a fresh load — so following a link *out* of an overlay left
+ * the panel floating over whatever it had navigated to. "Open source" was the visible one:
+ * the reader loaded underneath a dialog that would not go away, and the source could not be
+ * read at all.
+ *
+ * There is no framework hook for this. The slot has to notice the URL has moved on and take
+ * itself down, so every page in `@modal` asks this before it renders anything.
+ */
+export function useOverlayOpen(href: string): boolean {
+  return usePathname() === href;
+}
 
 /**
  * A route rendered as an overlay over the tab you were on.
@@ -14,6 +30,7 @@ import type { ReactNode } from "react";
  * do something different from the close button beside it.
  */
 export function RouteOverlay({
+  href,
   title,
   subtitle,
   children,
@@ -21,6 +38,8 @@ export function RouteOverlay({
   placement = "center",
   bodyClassName
 }: {
+  /** The path this overlay is. It closes itself the moment the URL is something else. */
+  href: string;
   title: string;
   subtitle?: string;
   children: ReactNode;
@@ -29,7 +48,10 @@ export function RouteOverlay({
   bodyClassName?: string;
 }) {
   const router = useRouter();
+  const open = useOverlayOpen(href);
   const close = () => router.back();
+
+  if (!open) return null;
 
   return (
     <Modal onClose={close} size={size} placement={placement}>

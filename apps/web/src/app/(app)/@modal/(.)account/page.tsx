@@ -5,7 +5,7 @@ import { RouteOverlay } from "@/components/saga/route-overlay";
 
 export default function AccountOverlay() {
   return (
-    <RouteOverlay title="Account" subtitle="Your account and your library" size="sm">
+    <RouteOverlay href="/account" title="Account" subtitle="Your account and your library" size="sm">
       <AccountPanel />
     </RouteOverlay>
   );

@@ -54,7 +54,20 @@ const HIDDEN_METADATA = new Set([
  * app renders this in an overlay over whatever you were reading, so a citation can be
  * checked without losing the answer that made you check it.
  */
-export function SourceDetail({ sourceId }: { sourceId: string }) {
+export function SourceDetail({
+  sourceId,
+  inOverlay = false
+}: {
+  sourceId: string;
+  /**
+   * Rendered inside the modal slot rather than as a page.
+   *
+   * Only the breadcrumb changes: "Back to your library" is a promise about where you land,
+   * and in an overlay opened over a conversation it would be a false one — the close button
+   * beside it returns you to the answer you were reading.
+   */
+  inOverlay?: boolean;
+}) {
   const router = useRouter();
   // The array *element*, not a derived object: its identity only changes when this specific
   // asset is upserted, so churn elsewhere in the library doesn't re-render this page.
@@ -172,14 +185,16 @@ export function SourceDetail({ sourceId }: { sourceId: string }) {
 
   return (
     <div>
-      <div className="px-5 pt-6 md:px-8">
-        <Link
-          href="/library"
-          className="inline-flex items-center gap-1.5 text-[13px] text-muted-foreground hover:text-foreground"
-        >
-          <ArrowLeft className="size-3.5" aria-hidden /> Back to your library
-        </Link>
-      </div>
+      {inOverlay ? null : (
+        <div className="px-5 pt-6 md:px-8">
+          <Link
+            href="/library"
+            className="inline-flex items-center gap-1.5 text-[13px] text-muted-foreground hover:text-foreground"
+          >
+            <ArrowLeft className="size-3.5" aria-hidden /> Back to your library
+          </Link>
+        </div>
+      )}
 
       <AppHeader
         title={title}

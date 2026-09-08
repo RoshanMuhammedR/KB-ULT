@@ -12,6 +12,7 @@ import { RouteOverlay } from "@/components/saga/route-overlay";
 export default function MemoryOverlay() {
   return (
     <RouteOverlay
+      href="/memory"
       title="Memory"
       subtitle="Background for answers, never a cited source"
       placement="right"

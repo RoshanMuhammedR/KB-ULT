@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
@@ -109,6 +110,7 @@ export function ConversationList({
   /** Called when a link inside is followed, so a drawer holding this can close. */
   onNavigate?: () => void;
 }) {
+  const router = useRouter();
   const conversations = useConversationsStore((state) => state.conversations);
   const loading = useConversationsStore((state) => state.loading);
   const rename = useConversationsStore((state) => state.rename);
@@ -140,9 +142,13 @@ export function ConversationList({
   async function confirmDelete() {
     if (!pendingDelete) return;
     setDeleting(true);
+    const wasOpen = pendingDelete.id === activeId;
     try {
       await remove(pendingDelete.id);
       setPendingDelete(null);
+      // Deleting the thread you are reading left you reading it: the page keeps the copy it
+      // loaded, and the next question posts to a conversation the server no longer has.
+      if (wasOpen) router.replace("/");
     } catch {
       toast.error("Couldn't delete that conversation.");
     } finally {

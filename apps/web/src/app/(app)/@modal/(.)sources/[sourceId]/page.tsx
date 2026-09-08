@@ -2,8 +2,9 @@
 
 import { useParams, useRouter } from "next/navigation";
 import { X } from "lucide-react";
-import { Modal } from "@kb/ui";
+import { Modal, ModalHeader } from "@kb/ui";
 import { SourceDetail } from "@/components/saga/source-detail";
+import { useOverlayOpen } from "@/components/saga/route-overlay";
 
 /**
  * The source reader, over the conversation that sent you to it.
@@ -14,19 +15,29 @@ import { SourceDetail } from "@/components/saga/source-detail";
 export default function SourceOverlay() {
   const { sourceId } = useParams<{ sourceId: string }>();
   const router = useRouter();
+  const open = useOverlayOpen(`/sources/${sourceId}`);
+  const close = () => router.back();
+
+  if (!open) return null;
 
   return (
-    <Modal onClose={() => router.back()} size="xl" className="max-h-[92dvh]">
-      <div className="relative min-h-0 flex-1 overflow-y-auto">
+    <Modal onClose={close} size="xl">
+      {/* A header bar rather than a close button floating over the content. The panel below
+          has a heading and a row of actions of its own at exactly that corner, and an
+          absolutely-positioned button landed on top of both. */}
+      <ModalHeader>
+        <h2 className="truncate text-sm font-semibold">Source</h2>
         <button
           type="button"
-          onClick={() => router.back()}
+          onClick={close}
           aria-label="Close"
-          className="absolute right-3 top-3 z-10 rounded-full border border-border bg-card p-1.5 text-muted-foreground shadow-xs hover:bg-muted hover:text-foreground"
+          className="shrink-0 rounded-full p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
         >
           <X className="size-4" aria-hidden />
         </button>
-        <SourceDetail sourceId={sourceId} />
+      </ModalHeader>
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <SourceDetail sourceId={sourceId} inOverlay />
       </div>
     </Modal>
   );

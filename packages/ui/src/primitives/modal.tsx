@@ -6,6 +6,60 @@ import { cn } from "../cn";
 const FOCUSABLE =
   'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
+/**
+ * The scroll lock, counted.
+ *
+ * Module-scoped because the lock is a property of the document, not of any one dialog. Two
+ * stacked modals — a confirm inside an overlay, say — each capture and restore what they
+ * found, and whichever cleans up last wins. React does not promise that is the inner one, so
+ * the outer modal could restore "" first and the inner one then put "hidden" back, leaving
+ * the whole page permanently unscrollable with nothing on screen to explain why.
+ *
+ * A counter has no ordering to get wrong: the last release restores, whoever it is.
+ */
+let locks = 0;
+let restore = "";
+
+function lockScroll(): () => void {
+  if (locks === 0) {
+    restore = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+  }
+  locks += 1;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    locks -= 1;
+    if (locks === 0) document.body.style.overflow = restore;
+  };
+}
+
+/**
+ * Which dialog is on top.
+ *
+ * Every open modal listens on `document` for Escape and Tab, so a confirm opened inside an
+ * overlay had two listeners answering the same key: Escape cancelled the confirm *and* closed
+ * the overlay underneath it, and Tab was fought over by two focus traps. Only the topmost
+ * dialog should hear either.
+ *
+ * A module-level stack rather than an event-bubbling trick, because these listeners are on
+ * the document and there is no DOM nesting between two `fixed` panels to bubble through.
+ */
+const stack: symbol[] = [];
+
+function pushDialog(token: symbol): () => void {
+  stack.push(token);
+  return () => {
+    const at = stack.lastIndexOf(token);
+    if (at !== -1) stack.splice(at, 1);
+  };
+}
+
+function isTopDialog(token: symbol): boolean {
+  return stack[stack.length - 1] === token;
+}
+
 export type ModalSize = "sm" | "md" | "lg" | "xl" | "full";
 export type ModalPlacement = "center" | "right";
 
@@ -66,7 +120,12 @@ export function Modal({
       initialFocus?.current ?? panel?.querySelector<HTMLElement>(FOCUSABLE) ?? panel ?? null;
     target?.focus?.();
 
+    const token = Symbol("modal");
+    const pop = pushDialog(token);
+
     function onKeyDown(event: KeyboardEvent) {
+      // A dialog with something open on top of it is not the one being typed into.
+      if (!isTopDialog(token)) return;
       if (event.key === "Escape" && dismissableRef.current) {
         event.preventDefault();
         closeRef.current();
@@ -92,11 +151,11 @@ export function Modal({
     }
 
     document.addEventListener("keydown", onKeyDown);
-    const { overflow } = document.body.style;
-    document.body.style.overflow = "hidden";
+    const unlock = lockScroll();
     return () => {
       document.removeEventListener("keydown", onKeyDown);
-      document.body.style.overflow = overflow;
+      pop();
+      unlock();
       previouslyFocused?.focus?.();
     };
     // `initialFocus` is read once, on open, deliberately: re-running this would re-lock
