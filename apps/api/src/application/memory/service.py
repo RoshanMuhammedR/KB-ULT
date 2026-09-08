@@ -110,7 +110,7 @@ class MemoryService:
         self.duplicate_threshold = duplicate_threshold
         self.token_budget = token_budget
 
-    async def recall(self, knowledge_base_id: UUID, keywords: str) -> list[Memory]:
+    async def recall(self, knowledge_base_ids: list[UUID], keywords: str) -> list[Memory]:
         """The memories worth putting in front of this question, within budget.
 
         Failure is silent and total: an answer without memory is the answer this system gave
@@ -123,7 +123,7 @@ class MemoryService:
             return []
 
         try:
-            memories = await self.repo.search(knowledge_base_id, keywords, self.max_injected)
+            memories = await self.repo.search(knowledge_base_ids, keywords, self.max_injected)
         except Exception:  # noqa: BLE001
             logger.warning("memory_recall_failed")
             return []

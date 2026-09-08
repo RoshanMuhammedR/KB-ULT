@@ -4,7 +4,7 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import delete, desc, select
+from sqlalchemy import delete, desc, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,6 +19,23 @@ from src.infrastructure.repositories.unit_of_work import commit_or_flush
 class KnowledgeAssetRepository:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
+
+    async def count_by_knowledge_base(self) -> dict[UUID, int]:
+        """Current source counts for every base in the tenant, in one query.
+
+        The base switcher shows them, and a per-base round trip would make opening a menu
+        cost one query per base. Superseded versions are excluded for the same reason the
+        library list excludes them: they are history, not contents.
+        """
+        rows = (await self.db.execute(
+            select(
+                KnowledgeAssetModel.knowledge_base_id,
+                func.count(KnowledgeAssetModel.id),
+            )
+            .where(KnowledgeAssetModel.superseded_at.is_(None))
+            .group_by(KnowledgeAssetModel.knowledge_base_id)
+        )).all()
+        return {kb_id: int(count) for kb_id, count in rows}
 
     async def list_current(self, knowledge_base_id: UUID) -> list[KnowledgeAsset]:
         rows = (await self.db.scalars(

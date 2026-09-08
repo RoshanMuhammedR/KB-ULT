@@ -444,3 +444,29 @@ class WorkspaceMemoryModel(TenantScoped, Base):
     updated_at = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
+
+
+class ConversationKnowledgeBaseModel(TenantScoped, Base):
+    """Which knowledge bases a conversation is attached to.
+
+    Chat is one interface you attach bases to, so a thread spans a set of them.
+    `conversations.knowledge_base_id` still records the base the thread was *started* in —
+    it is NOT NULL and every existing row has one — and this is the attachment set on top.
+    """
+
+    __tablename__ = "conversation_knowledge_bases"
+    __table_args__ = (
+        UniqueConstraint(
+            "conversation_id", "knowledge_base_id", name="uq_conversation_knowledge_base"
+        ),
+        Index("ix_conversation_kbs_conversation", "conversation_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False
+    )
+    knowledge_base_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("knowledge_bases.id", ondelete="CASCADE"), nullable=False
+    )
+    created_at = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

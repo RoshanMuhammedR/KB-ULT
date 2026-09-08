@@ -44,6 +44,10 @@ class RenameConversationRequest(BaseModel):
 
 class AskRequest(BaseModel):
     question: str
+    #: The knowledge bases to answer from. Omitted means "whatever this thread is already
+    #: attached to", and for a new thread the workspace default — so a client that predates
+    #: the switcher keeps working unchanged.
+    knowledge_base_ids: list[UUID] | None = None
 
 
 class FeedbackRequest(BaseModel):

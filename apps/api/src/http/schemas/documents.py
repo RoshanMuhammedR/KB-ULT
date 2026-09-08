@@ -69,6 +69,9 @@ class IngestUrlRequest(BaseModel):
     """Ingest a URL-based source (e.g. a YouTube video) — no file upload."""
 
     url: str
+    #: The base to ingest into. Omitted means the workspace default, so a client that
+    #: predates the switcher keeps working.
+    knowledge_base_id: UUID | None = None
 
 
 class UploadUrlRequest(BaseModel):

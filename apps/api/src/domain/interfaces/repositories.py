@@ -55,9 +55,28 @@ class IRefreshTokenRepository(Protocol):
 
 class IKnowledgeBaseRepository(Protocol):
     async def get_default(self) -> KnowledgeBase | None:
+        """The oldest base in the tenant. First-run bootstrap only, never request routing."""
         ...
 
     async def ensure_default(self) -> KnowledgeBase:
+        ...
+
+    async def get(self, knowledge_base_id: UUID) -> KnowledgeBase | None:
+        """One base by id. Returning None is how "not yours" is expressed — the tenant
+        filter makes another tenant's base indistinguishable from one that does not exist."""
+        ...
+
+    async def list_all(self) -> list[KnowledgeBase]:
+        ...
+
+    async def create(self, name: str) -> KnowledgeBase:
+        ...
+
+    async def rename(self, knowledge_base_id: UUID, name: str) -> KnowledgeBase:
+        ...
+
+    async def delete(self, knowledge_base_id: UUID) -> None:
+        """Deletes the base and, by cascade, everything in it."""
         ...
 
 

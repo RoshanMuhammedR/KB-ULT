@@ -88,7 +88,7 @@ class _StubChatService:
     def __init__(self, on_each_frame=None) -> None:
         self.on_each_frame = on_each_frame
 
-    async def ask_stream(self, conversation_id, question):
+    async def ask_stream(self, conversation_id, question, knowledge_base_ids=None):
         conversation = {"id": str(uuid4()), "title": "Stub"}
         for event, payload in (
             ("conversation", conversation),

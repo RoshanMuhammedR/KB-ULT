@@ -143,13 +143,13 @@ class EmbeddingRepository:
     async def query_ready_chunks(
         self,
         query_embedding: list[float],
-        knowledge_base_id: UUID,
+        knowledge_base_ids: list[UUID],
         top_k: int,
     ) -> list[tuple[ChunkModel, KnowledgeAssetModel, float]]:
         """Dense arm: nearest neighbours by cosine similarity."""
         distance = EmbeddingModel.vector.cosine_distance(query_embedding)
         rows = (await self.db.execute(
-            self._ready_chunks_base(knowledge_base_id, distance)
+            self._ready_chunks_base(knowledge_base_ids, distance)
             .order_by(distance)
             .limit(top_k)
         )).all()
@@ -159,7 +159,7 @@ class EmbeddingRepository:
         self,
         query_embedding: list[float],
         query_text: str,
-        knowledge_base_id: UUID,
+        knowledge_base_ids: list[UUID],
         top_k: int,
     ) -> list[tuple[ChunkModel, KnowledgeAssetModel, float]]:
         """Lexical arm: chunks containing the query's terms, ranked by `ts_rank_cd`.
@@ -182,7 +182,7 @@ class EmbeddingRepository:
         distance = EmbeddingModel.vector.cosine_distance(query_embedding)
         tsquery = func.websearch_to_tsquery("english", query_text)
         rows = (await self.db.execute(
-            self._ready_chunks_base(knowledge_base_id, distance)
+            self._ready_chunks_base(knowledge_base_ids, distance)
             .where(ChunkModel.fts.op("@@")(tsquery))
             .order_by(func.ts_rank_cd(ChunkModel.fts, tsquery).desc())
             .limit(top_k)
@@ -190,7 +190,7 @@ class EmbeddingRepository:
         return [(chunk, asset, float(score)) for chunk, asset, score in rows]
 
     @staticmethod
-    def _ready_chunks_base(knowledge_base_id: UUID, distance):
+    def _ready_chunks_base(knowledge_base_ids: list[UUID], distance):
         """Shared skeleton of both arms: same joins, same visibility rules, same columns.
 
         Built with ORM `select()` constructs rather than raw SQL on purpose. The tenant filter
@@ -204,7 +204,11 @@ class EmbeddingRepository:
             .join(EmbeddingModel, EmbeddingModel.chunk_id == ChunkModel.id)
             .join(KnowledgeAssetModel, KnowledgeAssetModel.id == ChunkModel.knowledge_asset_id)
             .options(joinedload(ChunkModel.asset))
-            .where(KnowledgeAssetModel.knowledge_base_id == knowledge_base_id)
+            # `IN`, not `==`: a chat can have several bases attached at once. Postgres
+            # plans this as a bitmap over the same `knowledge_base_id` index, so the HNSW
+            # scan on `embeddings` is unaffected — the vector index is reached through the
+            # join either way.
+            .where(KnowledgeAssetModel.knowledge_base_id.in_(knowledge_base_ids))
             .where(KnowledgeAssetModel.superseded_at.is_(None))
             .where(KnowledgeAssetModel.status == AssetStatus.READY.value)
         )

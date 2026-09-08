@@ -90,10 +90,13 @@ class AgenticChatService:
         self.memory_distill_every_n_turns = memory_distill_every_n_turns
 
     async def ask_stream(
-        self, conversation_id: UUID | None, question: str
+        self,
+        conversation_id: UUID | None,
+        question: str,
+        knowledge_base_ids: list[UUID] | None = None,
     ) -> AsyncIterator[tuple[str, object]]:
         try:
-            async for event in self._ask(conversation_id, question):
+            async for event in self._ask(conversation_id, question, knowledge_base_ids):
                 yield event
         except asyncio.CancelledError:
             raise
@@ -107,10 +110,14 @@ class AgenticChatService:
             yield ("done", {"insufficient_context": True, "message_id": None, "user_message_id": None})
 
     async def _ask(
-        self, conversation_id: UUID | None, question: str
+        self,
+        conversation_id: UUID | None,
+        question: str,
+        knowledge_base_ids: list[UUID] | None = None,
     ) -> AsyncIterator[tuple[str, object]]:
-        knowledge_base = await self.kb_repo.ensure_default()
-        conversation = await self._resolve_conversation(conversation_id, knowledge_base.id, question)
+        conversation, bases = await self._resolve_conversation(
+            conversation_id, question, knowledge_base_ids
+        )
         # Bound once; every log line this question produces carries it from here on, including
         # lines written inside the retrieval and rerank steps that know nothing about requests.
         structlog.contextvars.bind_contextvars(conversation_id=str(conversation.id))
@@ -136,7 +143,8 @@ class AgenticChatService:
         # question is actually about — the same input the lexical retrieval arm gets.
         memories = []
         if self.memory_service is not None:
-            memories = await self.memory_service.recall(knowledge_base.id, resolved.keywords)
+            # Memory spans the same bases the answer will be retrieved from.
+            memories = await self.memory_service.recall(bases, resolved.keywords)
 
         # Split before retrieving, not after a failed hop. A compound question retrieves for
         # neither half otherwise: the embedding lands between the two subjects and the lexical
@@ -151,7 +159,7 @@ class AgenticChatService:
             memories_used=len(memories),
             parts=parts,
         )
-        async for event in self.loop.stream(state, knowledge_base.id, keywords=resolved.keywords):
+        async for event in self.loop.stream(state, bases, keywords=resolved.keywords):
             yield event
 
         if not state.found_anything:
@@ -225,7 +233,7 @@ class AgenticChatService:
 
         await self._record_signals(report, assembled.citations)
         await self._maybe_distil(
-            knowledge_base.id, question, answer, conversation.id, assistant.id, turn
+            bases[0] if bases else None, question, answer, conversation.id, assistant.id, turn
         )
         yield ("verified", report.to_wire())
 
@@ -262,18 +270,65 @@ class AgenticChatService:
 
     # --- persistence ----------------------------------------------------------------
 
-    async def _resolve_conversation(self, conversation_id, knowledge_base_id, question):
+    async def _resolve_conversation(self, conversation_id, question, knowledge_base_ids):
+        """Return `(conversation, attached base ids)`.
+
+        Every base the caller names is checked for existence through the tenant-filtered
+        repository, so a base belonging to another workspace reads as "not found" and never
+        as "forbidden" — saying forbidden would confirm the id exists.
+
+        A new thread attaches what the caller asked for, or the default base when it asked for
+        nothing. An existing thread uses what it is already attached to, and attaches anything
+        newly named: this is where the previous code was actively unsafe, because it fetched a
+        conversation by id and never checked which base it belonged to. With one base per
+        tenant that was invisible; with several, a thread started in B would have been answered
+        from A's corpus and A's memories.
+        """
+        requested = await self._validated_bases(knowledge_base_ids)
+
         if conversation_id is None:
-            return await self.conversation_repo.create(
+            if not requested:
+                requested = [(await self.kb_repo.ensure_default()).id]
+            conversation = await self.conversation_repo.create(
                 Conversation(
-                    knowledge_base_id=knowledge_base_id,
+                    # The base the thread was started in. The attachment set is what
+                    # retrieval actually reads.
+                    knowledge_base_id=requested[0],
                     title=title_from_question(question),
                 )
             )
+            await self.conversation_repo.attach_bases(conversation.id, requested)
+            return conversation, requested
+
         conversation = await self.conversation_repo.get(conversation_id)
         if conversation is None:
             raise ValueError("Conversation not found")
-        return conversation
+
+        if requested:
+            await self.conversation_repo.attach_bases(conversation.id, requested)
+
+        bases = await self.conversation_repo.attached_bases(conversation.id)
+        if not bases:
+            # Older thread from before the attachment table, or every base it used has been
+            # deleted. Fall back to the base it was started in, which is NOT NULL.
+            bases = [conversation.knowledge_base_id]
+        return conversation, bases
+
+    async def _validated_bases(self, knowledge_base_ids) -> list[UUID]:
+        """Drop ids this tenant cannot see, preserving the caller's order."""
+        if not knowledge_base_ids:
+            return []
+        seen: set[UUID] = set()
+        valid: list[UUID] = []
+        for knowledge_base_id in knowledge_base_ids:
+            if knowledge_base_id in seen:
+                continue
+            seen.add(knowledge_base_id)
+            if await self.kb_repo.get(knowledge_base_id) is not None:
+                valid.append(knowledge_base_id)
+        if not valid:
+            raise ValueError("Knowledge base not found")
+        return valid
 
     async def _persist_turn(
         self, conversation_id, question, answer, citations, *, insufficient, trace=None,

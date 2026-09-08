@@ -77,9 +77,17 @@ def _message_schema(message) -> MessageSchema:
 @router.get("", response_model=list[ConversationSummarySchema])
 async def list_conversations(
     db: Annotated[AsyncSession, Depends(get_db)],
+    knowledge_base_id: UUID | None = None,
 ) -> list[ConversationSummarySchema]:
-    kb = await KnowledgeBaseRepository(db).ensure_default()
-    rows = await ConversationRepository(db).list_for_knowledge_base(kb.id)
+    """Threads started in one base, or in the workspace default when none is named.
+
+    Scoped by the base a thread was *started* in rather than by its attachment set: a thread
+    should appear in one place in the sidebar, and "started in" is the only answer that stays
+    stable when bases are attached and detached later.
+    """
+    if knowledge_base_id is None:
+        knowledge_base_id = (await KnowledgeBaseRepository(db).ensure_default()).id
+    rows = await ConversationRepository(db).list_for_knowledge_base(knowledge_base_id)
     return [
         ConversationSummarySchema(
             id=conversation.id,
@@ -285,7 +293,9 @@ async def ask_in_conversation(
             async def produce() -> None:
                 """Drive the answer, pushing each frame to the consumer below."""
                 try:
-                    async for event, payload in chat_service.ask_stream(target, question):
+                    async for event, payload in chat_service.ask_stream(
+                        target, question, request.knowledge_base_ids
+                    ):
                         await frames.put(_frame(event, payload))
                 except ValueError as exc:
                     # A bad conversation id — the only client-caused failure down here.

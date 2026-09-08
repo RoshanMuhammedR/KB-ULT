@@ -79,7 +79,9 @@ class MemoryRepository:
         )).all()
         return [memory_to_domain(row) for row in rows]
 
-    async def search(self, knowledge_base_id: UUID, query: str, limit: int) -> list[Memory]:
+    async def search(
+        self, knowledge_base_ids: list[UUID], query: str, limit: int
+    ) -> list[Memory]:
         """Active memories matching any of a query's terms, best first.
 
         **OR, not AND, and that is the whole point.** This used `websearch_to_tsquery`, which
@@ -100,7 +102,7 @@ class MemoryRepository:
         `limit` keeps the tail out. Precision comes from the ranking, not from the filter.
         """
         terms = [term for term in re.findall(r"[\w']+", query.lower()) if len(term) > 2]
-        if not terms:
+        if not terms or not knowledge_base_ids:
             return []
 
         # `||` is tsquery OR, and it has to be the SQL operator rather than Python's `|`:
@@ -118,7 +120,10 @@ class MemoryRepository:
         rows = (await self.db.scalars(
             self._visible(
                 select(WorkspaceMemoryModel).where(
-                    WorkspaceMemoryModel.knowledge_base_id == knowledge_base_id,
+                    # Recall spans every base attached to the chat, so a fact learned in
+                    # one library is available while answering from another one it is
+                    # deliberately being read alongside.
+                    WorkspaceMemoryModel.knowledge_base_id.in_(knowledge_base_ids),
                     WorkspaceMemoryModel.superseded_at.is_(None),
                     WorkspaceMemoryModel.fts.op("@@")(tsquery),
                 )

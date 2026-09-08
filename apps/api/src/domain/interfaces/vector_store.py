@@ -18,7 +18,7 @@ class IVectorStore(Protocol):
     async def search_dense(
         self,
         query_embedding: list[float],
-        knowledge_base_id: UUID,
+        knowledge_base_ids: list[UUID],
         limit: int,
         threshold: float,
     ) -> list[RetrievalResult]:
@@ -32,7 +32,7 @@ class IVectorStore(Protocol):
         self,
         query_embedding: list[float],
         query_text: str,
-        knowledge_base_id: UUID,
+        knowledge_base_ids: list[UUID],
         limit: int,
     ) -> list[RetrievalResult]:
         """Chunks containing the query's literal terms, best keyword match first.

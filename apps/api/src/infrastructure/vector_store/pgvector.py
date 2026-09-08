@@ -28,11 +28,11 @@ class PgVectorStore:
     async def search_dense(
         self,
         query_embedding: list[float],
-        knowledge_base_id: UUID,
+        knowledge_base_ids: list[UUID],
         limit: int,
         threshold: float,
     ) -> list[RetrievalResult]:
-        rows = await self.embedding_repo.query_ready_chunks(query_embedding, knowledge_base_id, limit)
+        rows = await self.embedding_repo.query_ready_chunks(query_embedding, knowledge_base_ids, limit)
         # The threshold now filters a candidate pool rather than an already-truncated list, so
         # a marginal match no longer costs a result slot — it is simply replaced by the next
         # candidate down.
@@ -42,12 +42,12 @@ class PgVectorStore:
         self,
         query_embedding: list[float],
         query_text: str,
-        knowledge_base_id: UUID,
+        knowledge_base_ids: list[UUID],
         limit: int,
     ) -> list[RetrievalResult]:
         try:
             rows = await self.embedding_repo.query_ready_chunks_lexical(
-                query_embedding, query_text, knowledge_base_id, limit
+                query_embedding, query_text, knowledge_base_ids, limit
             )
         except ProgrammingError:
             # `chunks.fts` is added by migration 0006. If the code is deployed ahead of the

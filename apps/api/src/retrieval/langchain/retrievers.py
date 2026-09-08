@@ -75,7 +75,8 @@ class _ChunkRetriever(BaseRetriever):
     # this is an `IVectorStore`. Runtime validation would buy nothing anyway — the only
     # thing that ever constructs these is the composition root.
     vector_store: Any
-    knowledge_base_id: UUID
+    #: Every base attached to this chat. Retrieval spans all of them.
+    knowledge_base_ids: list[UUID]
     limit: int
 
     model_config = {"arbitrary_types_allowed": True}
@@ -99,7 +100,7 @@ class DenseChunkRetriever(_ChunkRetriever):
         self, query: str, *, run_manager: AsyncCallbackManagerForRetrieverRun
     ) -> list[Document]:
         results = await self.vector_store.search_dense(
-            self.query_embedding, self.knowledge_base_id, self.limit, self.threshold
+            self.query_embedding, self.knowledge_base_ids, self.limit, self.threshold
         )
         return [to_document(result) for result in results]
 
@@ -121,7 +122,7 @@ class LexicalChunkRetriever(_ChunkRetriever):
         if not query.strip():
             return []
         results = await self.vector_store.search_lexical(
-            self.query_embedding, query, self.knowledge_base_id, self.limit
+            self.query_embedding, query, self.knowledge_base_ids, self.limit
         )
         return [to_document(result) for result in results]
 
@@ -129,7 +130,7 @@ class LexicalChunkRetriever(_ChunkRetriever):
 def build_hybrid_retriever(
     vector_store: IVectorStore,
     query_embedding: list[float],
-    knowledge_base_id: UUID,
+    knowledge_base_ids: list[UUID],
     *,
     limit: int,
     threshold: float,
@@ -161,14 +162,14 @@ def build_hybrid_retriever(
 
     dense = DenseChunkRetriever(
         vector_store=vector_store,
-        knowledge_base_id=knowledge_base_id,
+        knowledge_base_ids=knowledge_base_ids,
         limit=limit,
         query_embedding=query_embedding,
         threshold=threshold,
     )
     lexical = LexicalChunkRetriever(
         vector_store=vector_store,
-        knowledge_base_id=knowledge_base_id,
+        knowledge_base_ids=knowledge_base_ids,
         limit=limit,
         query_embedding=query_embedding,
     )

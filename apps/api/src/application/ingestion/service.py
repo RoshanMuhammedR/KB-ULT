@@ -90,11 +90,26 @@ class IngestionService:
 
     # ------------------------------------------------------------------ request path
 
+    async def _target_base(self, knowledge_base_id: UUID | None) -> UUID:
+        """Which base this source belongs in.
+
+        `None` means the workspace default, which is what an upload with no base chosen gets
+        — first-run, and any client that predates the switcher. A named base is checked
+        through the tenant-filtered repository, so another workspace's id reads as "not
+        found" rather than as "forbidden": saying forbidden would confirm the id exists.
+        """
+        if knowledge_base_id is None:
+            return (await self.kb_repo.ensure_default()).id
+        if await self.kb_repo.get(knowledge_base_id) is None:
+            raise ValueError("Knowledge base not found")
+        return knowledge_base_id
+
     async def enqueue_ingestion(
         self,
         file_data: bytes,
         filename: str,
         content_type: str | None = None,
+        knowledge_base_id: UUID | None = None,
     ) -> KnowledgeAsset:
         """Fast path (HTTP): persist the source + job, then return without processing.
 
@@ -109,7 +124,7 @@ class IngestionService:
         # Fail fast in the request if we can't handle this source type at all.
         source_type = source_type_for_filename(safe_filename)
         self.source_handler_registry.get(source_type)
-        knowledge_base = await self.kb_repo.ensure_default()
+        target_base = await self._target_base(knowledge_base_id)
         asset_id = uuid4()
         # Tenant-prefixed so the bucket layout mirrors the isolation boundary the database
         # already enforces. This used to be a `user_id: str = "anonymous"` default parameter
@@ -128,11 +143,11 @@ class IngestionService:
         # an open transaction would hold a database connection for its duration, and an
         # orphaned object is harmless (nothing references it) where an orphaned row is not.
         asset = await self._persist_queued_asset(
-            knowledge_base_id=knowledge_base.id,
+            knowledge_base_id=target_base,
             filename=safe_filename,
             build=lambda lineage_id, version: KnowledgeAsset(
                 id=asset_id,
-                knowledge_base_id=knowledge_base.id,
+                knowledge_base_id=target_base,
                 lineage_id=lineage_id,
                 version=version,
                 filename=safe_filename,
@@ -156,6 +171,7 @@ class IngestionService:
         filename: str,
         content_type: str | None = None,
         size_bytes: int | None = None,
+        knowledge_base_id: UUID | None = None,
     ) -> tuple[UUID, str, str]:
         """Reserve an asset id and hand back a URL the client can PUT the file to.
 
@@ -228,13 +244,13 @@ class IngestionService:
             await self.file_storage.delete(storage_key)
             raise
 
-        knowledge_base = await self.kb_repo.ensure_default()
+        target_base = await self._target_base(knowledge_base_id)
         asset = await self._persist_queued_asset(
-            knowledge_base_id=knowledge_base.id,
+            knowledge_base_id=target_base,
             filename=safe_filename,
             build=lambda lineage_id, version: KnowledgeAsset(
                 id=asset_id,
-                knowledge_base_id=knowledge_base.id,
+                knowledge_base_id=target_base,
                 lineage_id=lineage_id,
                 version=version,
                 filename=safe_filename,
@@ -258,7 +274,9 @@ class IngestionService:
         )
         return asset
 
-    async def enqueue_url(self, url: str) -> KnowledgeAsset:
+    async def enqueue_url(
+        self, url: str, knowledge_base_id: UUID | None = None
+    ) -> KnowledgeAsset:
         """Fast path (HTTP) for URL sources like YouTube — the file-less sibling of
         `enqueue_ingestion`.
 
@@ -272,15 +290,15 @@ class IngestionService:
         # Fail fast in the request if we can't handle this source type at all.
         self.source_handler_registry.get(source_type)
         filename, source_uri, extra = identity_for_url(source_type, url)
-        knowledge_base = await self.kb_repo.ensure_default()
+        target_base = await self._target_base(knowledge_base_id)
         asset_id = uuid4()
 
         asset = await self._persist_queued_asset(
-            knowledge_base_id=knowledge_base.id,
+            knowledge_base_id=target_base,
             filename=filename,
             build=lambda lineage_id, version: KnowledgeAsset(
                 id=asset_id,
-                knowledge_base_id=knowledge_base.id,
+                knowledge_base_id=target_base,
                 lineage_id=lineage_id,
                 version=version,
                 filename=filename,

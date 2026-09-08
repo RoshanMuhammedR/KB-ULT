@@ -7,7 +7,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.text import sanitize_text_for_storage
 from src.domain.entities import Conversation, Message, MessageRole
-from src.infrastructure.database.models import ConversationModel, MessageModel
+from src.infrastructure.database.models import (
+    ConversationKnowledgeBaseModel,
+    ConversationModel,
+    MessageModel,
+)
 from src.infrastructure.repositories.mappers import conversation_to_domain, message_to_domain
 from src.infrastructure.repositories.unit_of_work import commit_or_flush
 
@@ -105,6 +109,40 @@ class ConversationRepository:
         for message in conversation.messages:
             message.feedback = ratings.get(message.id)
         return conversation
+
+    async def attached_bases(self, conversation_id: UUID) -> list[UUID]:
+        """Every knowledge base this thread is attached to, oldest attachment first.
+
+        Empty only for a thread whose bases have all been deleted. The caller treats that as
+        "nothing to retrieve from" rather than as an error — the thread is still readable, and
+        its old answers still cite what they cited.
+        """
+        rows = (await self.db.scalars(
+            select(ConversationKnowledgeBaseModel.knowledge_base_id)
+            .where(ConversationKnowledgeBaseModel.conversation_id == conversation_id)
+            .order_by(ConversationKnowledgeBaseModel.created_at)
+        )).all()
+        return list(rows)
+
+    async def attach_bases(self, conversation_id: UUID, knowledge_base_ids: list[UUID]) -> None:
+        """Attach bases to a thread, ignoring any already attached.
+
+        ORM inserts rather than a Core upsert, so `before_flush` stamps tenancy — this runs a
+        handful of times per conversation, not per answer, so the round trips are not worth
+        hand-writing tenancy for. `uq_conversation_knowledge_base` is the backstop.
+        """
+        if not knowledge_base_ids:
+            return
+        already = set(await self.attached_bases(conversation_id))
+        for knowledge_base_id in knowledge_base_ids:
+            if knowledge_base_id in already:
+                continue
+            self.db.add(
+                ConversationKnowledgeBaseModel(
+                    conversation_id=conversation_id, knowledge_base_id=knowledge_base_id
+                )
+            )
+        await self._commit()
 
     async def count_turns(self, conversation_id: UUID) -> int:
         """Exchanges so far, not messages — and deliberately not `len(recent_messages(...))`.

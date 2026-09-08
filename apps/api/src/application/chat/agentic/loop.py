@@ -172,7 +172,7 @@ class RetrievalLoop:
     async def stream(
         self,
         state: LoopState,
-        knowledge_base_id: UUID,
+        knowledge_base_ids: list[UUID],
         *,
         keywords: str = "",
     ) -> AsyncIterator[tuple[str, dict]]:
@@ -214,7 +214,7 @@ class RetrievalLoop:
                 # The keyword hint belongs to the whole question, so it is only meaningful
                 # when the whole question is what is being searched.
                 lexical = lexical_query if len(searches) == 1 else search
-                for document in await self._fetch(search, lexical, knowledge_base_id):
+                for document in await self._fetch(search, lexical, knowledge_base_ids):
                     key = document.metadata.get(CHUNK_ID) or document.page_content[:80]
                     if key in seen_candidates:
                         continue
@@ -311,13 +311,13 @@ class RetrievalLoop:
         )
 
     async def _fetch(
-        self, query: str, lexical_query: str, knowledge_base_id: UUID
+        self, query: str, lexical_query: str, knowledge_base_ids: list[UUID]
     ) -> list[Document]:
         embedding = await self.embedding_provider.embed_query(query)
         retriever = build_hybrid_retriever(
             self.vector_store,
             embedding,
-            knowledge_base_id,
+            knowledge_base_ids,
             limit=self.candidate_limit,
             threshold=self.threshold,
             rrf_k=self.rrf_k,

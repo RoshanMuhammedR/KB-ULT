@@ -4,7 +4,16 @@ from pathlib import Path
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Response,
+    UploadFile,
+    status,
+)
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
@@ -120,9 +129,13 @@ async def _to_schema(
 @router.get("", response_model=list[KnowledgeAssetSchema])
 async def list_assets(
     db: Annotated[Session, Depends(get_db)],
+    knowledge_base_id: UUID | None = None,
 ) -> list[KnowledgeAssetSchema]:
-    kb = await KnowledgeBaseRepository(db).ensure_default()
-    assets = await KnowledgeAssetRepository(db).list_current(kb.id)
+    """Sources in one base, or in the workspace default when none is named."""
+    # A named base, or the workspace default when the client has not chosen one.
+    if knowledge_base_id is None:
+        knowledge_base_id = (await KnowledgeBaseRepository(db).ensure_default()).id
+    assets = await KnowledgeAssetRepository(db).list_current(knowledge_base_id)
     # One grouped count for the whole list, rather than a query per row.
     counts = await ChunkRepository(db).count_by_asset([asset.id for asset in assets])
     # No `file_storage`: the library list renders names and statuses, not file contents, so
@@ -266,6 +279,9 @@ async def upload_document(
     ingestion_service: Annotated[IngestionService, Depends(get_ingestion_service)],
     file_storage: Annotated[IFileStorage, Depends(get_file_storage)],
     file: UploadFile = File(...),
+    # A form field rather than a query param, so it travels with the multipart body the
+    # browser is already sending. Omitted means the workspace default.
+    knowledge_base_id: UUID | None = Form(default=None),
 ) -> KnowledgeAssetSchema:
     # Accepts the upload, stores it, and enqueues the ingestion job — then returns
     # 202 immediately with a `queued` asset. The heavy pipeline runs in the worker;
@@ -303,6 +319,7 @@ async def upload_document(
             file_data,
             Path(file.filename).name,
             file.content_type,
+            knowledge_base_id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -365,7 +382,7 @@ async def ingest_url(
     # URL sources (YouTube today) have no upload: resolve + queue, then return 202. The
     # worker fetches the transcript. Client polls GET /documents/{id} like an upload.
     try:
-        asset = await ingestion_service.enqueue_url(request.url)
+        asset = await ingestion_service.enqueue_url(request.url, request.knowledge_base_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return await _to_schema(asset, file_storage)
