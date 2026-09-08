@@ -135,5 +135,58 @@ class RerankPoolTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("prompt", recorder)
 
 
+
+class DegradedFloorTests(unittest.IsolatedAsyncioTestCase):
+    """A degraded rerank still has to filter something.
+
+    `_passes` is only reachable on the success path, so a timeout previously let through
+    whatever survived a positional cut — unjudged and unfiltered. Worse, `max(1, ...)`
+    guaranteed at least one survivor, which makes `state.found_anything` unconditionally true
+    and the deterministic "I could not find this" fallback unreachable: one provider blip
+    turned an out-of-corpus question into a generated answer over arbitrary passages.
+
+    A full eval run showed `rerank_degraded` on *every hop*, so this was not a rare edge — the
+    relevance floor had never once been applied in production.
+    """
+
+    async def test_weak_documents_are_dropped_when_the_judge_is_unreachable(self):
+        recorder = {}
+        strong = Document(page_content="relevant" + "x" * 100, metadata={SCORE: 0.8})
+        weak = Document(page_content="barely related" + "x" * 100, metadata={SCORE: 0.05})
+        reranker = ScoringReranker(
+            _LLM(recorder, fail=True),
+            top_n=6,
+            candidate_limit=12,
+            threshold=0.35,
+            asr_threshold=0.25,
+            timeout_seconds=5,
+            fusion_floor=0.25,
+        )
+
+        kept, degraded = await reranker.compress([strong, weak], "q")
+
+        self.assertTrue(degraded)
+        self.assertEqual(kept, [strong])
+
+    async def test_everything_below_the_floor_leaves_nothing(self):
+        """So `found_anything` can be false and the honest fallback becomes reachable."""
+        recorder = {}
+        weak = [Document(page_content="x" * 100, metadata={SCORE: 0.05}) for _ in range(4)]
+        reranker = ScoringReranker(
+            _LLM(recorder, fail=True),
+            top_n=6,
+            candidate_limit=12,
+            threshold=0.35,
+            asr_threshold=0.25,
+            timeout_seconds=5,
+            fusion_floor=0.25,
+        )
+
+        kept, degraded = await reranker.compress(weak, "q")
+
+        self.assertTrue(degraded)
+        self.assertEqual(kept, [])
+
+
 if __name__ == "__main__":
     unittest.main()

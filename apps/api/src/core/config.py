@@ -88,7 +88,17 @@ class Settings(BaseSettings):
     rerank_candidate_limit: int = 12
     # The reranker is an LLM call; past this it is costing more than the recall it adds.
     # On timeout the pipeline falls back to raw fusion order rather than failing.
-    rerank_timeout_seconds: float = 2.5
+    #
+    # Raised from 2.5s, which was not a budget but a guarantee of failure: a full eval run
+    # showed `rerank_degraded` on *every single hop*, so the per-modality relevance floor had
+    # never once been applied in production. The fallback path cuts the pool positionally and
+    # never reaches `_passes`, so a permanently-degraded reranker means unjudged, unfiltered
+    # passages reaching the answer on every question — while the trace cheerfully recorded
+    # `rerank_complete` nowhere and nobody read `degraded`.
+    #
+    # Scoring 12 excerpts of 400 chars each is a ~5k-token prompt on the fast model; 2.5s was
+    # never realistic for that. This is a ceiling for a call that has gone wrong, not a target.
+    rerank_timeout_seconds: float = 8.0
     # Relevance floor after reranking, applied per modality: ASR text scores lower than
     # typed prose at identical usefulness, so holding both to one bar silently drops
     # transcripts.

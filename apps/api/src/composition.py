@@ -276,6 +276,9 @@ def build_agentic_chat_service(db: AsyncSession, settings: Settings) -> AgenticC
                 threshold=settings.rerank_relevance_threshold,
                 asr_threshold=settings.rerank_asr_relevance_threshold,
                 timeout_seconds=settings.rerank_timeout_seconds,
+                # Applied only when the judge could not be reached — the one floor still
+                # available when there is no judged score to apply the real one to.
+                fusion_floor=settings.retrieval_score_threshold,
             ),
             rewriter=QueryRewriter(fast),
             sufficiency=SufficiencyChecker(fast, min_chunks=settings.retrieval_min_context_chunks),

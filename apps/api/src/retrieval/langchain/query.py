@@ -127,21 +127,28 @@ class _Decomposition(BaseModel):
 
 
 _DECOMPOSE_SYSTEM = (
-    "Split a question into the separate things it asks.\n\n"
+    "Split a question ONLY when it asks about two different things that would be written up "
+    "in different places.\n\n"
     "Rules:\n"
     "- Each part must stand alone. Someone reading only that part, with no access to the "
     "original question, must be able to search for it. Replace every 'it', 'that' and "
     "'the same' with the actual subject.\n"
+    "- Do NOT split a thing from its own description. A choice and the reason for that "
+    "choice, a component and how it works, a setting and its default — these are written "
+    "about together, so splitting them makes two searches that return the same passage.\n"
     "- Keep the user's own wording. Do not answer, expand or explain.\n"
-    "- A question that asks one thing returns exactly one part, unchanged.\n"
+    "- Returning one part is the common case and always acceptable.\n"
     "- Never return more than three parts. Prefer fewer.\n\n"
     "Examples:\n"
     'Question: "Which AI model does the trip planner use, and which gateway does the backend '
     'proxy call it through?"\n'
-    '-> parts: ["Which AI model does the trip planner use?", "Which gateway does the trip '
-    'planner backend proxy call the AI model through?"]\n'
+    '-> two different things: ["Which AI model does the trip planner use?", "Which gateway '
+    'does the trip planner backend proxy call the AI model through?"]\n'
+    'Question: "What build tool does the trip planner use, and why was it chosen?"\n'
+    '-> ONE thing and its rationale, do not split: ["What build tool does the trip planner '
+    'use, and why was it chosen?"]\n'
     'Question: "What is the notice period?"\n'
-    '-> parts: ["What is the notice period?"]'
+    '-> ["What is the notice period?"]'
 )
 
 #: A question asking for more than this is asking for a report, not an answer. The cap also

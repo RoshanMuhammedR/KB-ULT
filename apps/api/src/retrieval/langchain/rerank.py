@@ -20,7 +20,7 @@ from langchain_core.documents import Document
 from pydantic import BaseModel, Field
 
 from src.domain.entities import ChunkModality
-from src.retrieval.langchain.retrievers import MODALITY
+from src.retrieval.langchain.retrievers import MODALITY, SCORE
 
 logger = structlog.get_logger(__name__)
 
@@ -71,6 +71,7 @@ class ScoringReranker:
         threshold: float,
         asr_threshold: float,
         timeout_seconds: float,
+        fusion_floor: float = 0.0,
     ) -> None:
         self.llm = llm
         self.top_n = top_n
@@ -78,6 +79,9 @@ class ScoringReranker:
         self.threshold = threshold
         self.asr_threshold = asr_threshold
         self.timeout_seconds = timeout_seconds
+        # The floor to apply when there is no judged score to apply the real one to. See
+        # `_fallback`.
+        self.fusion_floor = fusion_floor
 
     async def compress(self, documents: list[Document], query: str) -> tuple[list[Document], bool]:
         """Return `(documents, degraded)`, best first.
@@ -167,15 +171,34 @@ class ScoringReranker:
         return document.metadata.get("rerank_score", 0.0) >= floor
 
     def _fallback(self, documents: list[Document]) -> list[Document]:
-        """Fusion order, cut harder.
+        """Fusion order, cut harder, and still floored.
 
-        Without a judge, the only signal left is fusion rank — so this keeps fewer
-        documents than a successful rerank would, on the principle that unjudged context is
-        worth less than judged context.
+        Without a judge, the only signals left are fusion rank and the raw retrieval score —
+        so this keeps fewer documents than a successful rerank would, on the principle that
+        unjudged context is worth less than judged context.
 
         Takes the head of the list for the same reason `compress` does: the order is the
         fusion result and nothing else records it. This path matters more than the pool cut,
         not less — a degraded rerank is exactly when the retrieval signal is all there is,
-        so throwing it away for raw cosine does the most damage here.
+        so throwing it away for raw cosine order would do the most damage here.
+
+        **It applies a floor now, which it did not before.** `_passes` is only reachable on
+        the success path, so a degraded rerank previously let through whatever survived a
+        positional cut, unjudged and unfiltered — and `max(1, ...)` guaranteed at least one
+        document, which makes `state.found_anything` unconditionally true and the
+        deterministic "I could not find this" fallback unreachable. A single provider blip
+        therefore turned an out-of-corpus question into a generated answer over three
+        arbitrary passages. An eval run showed this firing on *every hop*, so the relevance
+        floor had never once been applied in production.
+
+        The floor here is the retrieval score, not the rerank threshold: those are different
+        scales and comparing a cosine against a judged-relevance cutoff would be nonsense.
+        It is a weak floor — the dense arm already applied it, so in practice this removes
+        weak lexical-only hits — but a weak floor honestly applied beats none at all.
         """
-        return documents[: max(1, self.top_n // 2)]
+        kept = [
+            document
+            for document in documents
+            if document.metadata.get(SCORE, 0.0) >= self.fusion_floor
+        ]
+        return kept[: max(1, self.top_n // 2)]
