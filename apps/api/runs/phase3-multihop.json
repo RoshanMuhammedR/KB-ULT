@@ -1,0 +1,61 @@
+{
+  "cases": 33,
+  "errors": 0,
+  "recall_at_k": 0.94,
+  "mrr": 0.8333,
+  "p50_latency_ms": 16754,
+  "p95_latency_ms": 25507,
+  "mean_hops": 1.7,
+  "hop_distribution": {
+    "1": 10,
+    "2": 23
+  },
+  "exit_reasons": {
+    "max_hops": 22,
+    "nothing_found": 1,
+    "sufficient": 10
+  },
+  "answered_when_it_should_not_have": 0,
+  "refused_without_falling_back": 4,
+  "fell_back_when_it_should_not_have": 0,
+  "grounded_rate": 0.9091,
+  "claims_checked": 33,
+  "unsupported_citations": 3,
+  "citation_concentration": 0.13,
+  "verified_without_checking": 0,
+  "uncited_sentences": 83,
+  "unchecked_claims": 0,
+  "uncited_answers": 6,
+  "by_kind": {
+    "single_hop": {
+      "cases": 7,
+      "recall": 1.0,
+      "p95_latency_ms": 45745
+    },
+    "multi_hop": {
+      "cases": 5,
+      "recall": 0.7,
+      "p95_latency_ms": 25507
+    },
+    "exact_identifier": {
+      "cases": 10,
+      "recall": 1.0,
+      "p95_latency_ms": 23085
+    },
+    "out_of_corpus": {
+      "cases": 5,
+      "recall": null,
+      "p95_latency_ms": 18525
+    },
+    "follow_up": {
+      "cases": 3,
+      "recall": 1.0,
+      "p95_latency_ms": 17834
+    },
+    "injection": {
+      "cases": 3,
+      "recall": null,
+      "p95_latency_ms": 16979
+    }
+  }
+}
