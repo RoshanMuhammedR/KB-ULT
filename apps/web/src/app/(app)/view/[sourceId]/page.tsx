@@ -101,7 +101,7 @@ export default function SourceViewerPage() {
 
   if (missing) {
     return (
-      <div className="mx-auto max-w-md px-5 py-24 text-center">
+      <div className="mx-auto h-full max-w-md overflow-y-auto px-5 py-24 text-center">
         <h1 className="text-display-md">That source isn&apos;t here</h1>
         <p className="mt-2 text-sm text-muted-foreground">It may have been removed.</p>
         <Button className="mt-6" onClick={() => router.push("/library")}>
@@ -113,7 +113,7 @@ export default function SourceViewerPage() {
 
   if (!source) {
     return (
-      <div className="space-y-4 px-5 py-8 md:px-8">
+      <div className="h-full space-y-4 overflow-y-auto px-5 py-8 md:px-8">
         <Skeleton className="h-8 w-1/3" />
         <Skeleton className="h-64" />
       </div>
@@ -127,7 +127,7 @@ export default function SourceViewerPage() {
   const after = passages.filter((passage) => passage.chunk_index > (chunkIndex ?? -1));
 
   return (
-    <div className="min-h-dvh">
+    <div className="h-full overflow-y-auto">
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-5 py-4 md:px-8">
         <div className="flex min-w-0 items-center gap-3">
           <SourceIcon type={source.source_type} />
