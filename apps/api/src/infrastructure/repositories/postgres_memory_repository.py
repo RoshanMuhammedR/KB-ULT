@@ -9,7 +9,10 @@ the corpus, for a table that holds tens of rows.
 
 from __future__ import annotations
 
+import operator
+import re
 from datetime import datetime, timezone
+from functools import reduce
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -77,17 +80,41 @@ class MemoryRepository:
         return [memory_to_domain(row) for row in rows]
 
     async def search(self, knowledge_base_id: UUID, query: str, limit: int) -> list[Memory]:
-        """Active memories matching a query's keywords, best first.
+        """Active memories matching any of a query's terms, best first.
 
-        `websearch_to_tsquery` for the same reasons the lexical retrieval arm uses it: it
-        understands quoted phrases and never raises on punctuation a user happens to type.
-        It ANDs its terms, so a query matching nothing returns nothing and the answer is
-        built without memory — which is the correct outcome, not a degraded one.
+        **OR, not AND, and that is the whole point.** This used `websearch_to_tsquery`, which
+        ANDs its terms — copied from the lexical retrieval arm, where ANDing is right because
+        a passage is long and a query that matches every term in one passage is a strong
+        signal. A memory is one sentence of at most `memory_max_chars`. Requiring every word
+        of "Which database stores the trips, and why was that one chosen?" to appear in a
+        300-character fact means nothing ever matches, and the whole feature silently returns
+        nothing on every turn.
+
+        It is worse than it looks, because the query is frequently the entire question:
+        `QueryResolver` returns `keywords = question` verbatim whenever there is no history
+        (`retrieval/langchain/query.py`), which is every opening turn.
+
+        `plainto_tsquery` normalises and stems the same way but is still an AND, so the terms
+        are ORed explicitly. Ranking by `ts_rank_cd` then does the discriminating: a memory
+        matching three query terms outranks one matching a single stopword-ish term, and
+        `limit` keeps the tail out. Precision comes from the ranking, not from the filter.
         """
-        if not query.strip():
+        terms = [term for term in re.findall(r"[\w']+", query.lower()) if len(term) > 2]
+        if not terms:
             return []
 
-        tsquery = func.websearch_to_tsquery("english", query)
+        # `||` is tsquery OR, and it has to be the SQL operator rather than Python's `|`:
+        # `operator.or_` on SQLAlchemy elements renders a *boolean* OR, which yields
+        # `fts @@ q1 OR q2 OR q3` — the `@@` binds to the first term only and Postgres
+        # rejects the bare tsqueries that follow.
+        #
+        # Each term goes through `plainto_tsquery` so stemming and stop-word removal match
+        # how `fts` was generated. Composing tsquery *values* rather than building a query
+        # string also means user text never becomes query syntax.
+        tsquery = reduce(
+            lambda left, right: left.op("||")(right),
+            (func.plainto_tsquery("english", term) for term in terms),
+        )
         rows = (await self.db.scalars(
             self._visible(
                 select(WorkspaceMemoryModel).where(

@@ -244,6 +244,10 @@ export type GroundingReport = {
 };
 
 // ---- Workspace memory ----------------------------------------------------
+/** Whether stored memories actually reach an answer. They did not, for the whole life of the
+ * feature so far, while every other memory endpoint behaved normally — so the page asks. */
+export type MemoryStatus = { enabled: boolean };
+
 /** A fact the workspace has stated about itself, injected as background into future answers. */
 export type WorkspaceMemory = {
   id: string;

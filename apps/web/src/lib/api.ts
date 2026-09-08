@@ -17,6 +17,7 @@ import type {
   AnswerStatus,
   AnswerTrace,
   GroundingReport,
+  MemoryStatus,
   Rating,
   WorkspaceMemory
 } from "@/types/api";
@@ -428,6 +429,11 @@ function dispatchFrame(frame: string, handlers: StreamHandlers): void {
 export { ApiError };
 
 // ---- Workspace memory ----------------------------------------------------
+
+/** Does memory affect answers at all? Asked before the page offers to store anything. */
+export function getMemoryStatus(): Promise<MemoryStatus> {
+  return request<MemoryStatus>("/memories/status");
+}
 
 export function listMemories(includeSuperseded = false): Promise<WorkspaceMemory[]> {
   return request<WorkspaceMemory[]>(

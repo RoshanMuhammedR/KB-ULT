@@ -19,3 +19,13 @@ class MemorySchema(BaseModel):
     superseded_at: datetime | None = None
     last_used_at: datetime | None = None
     created_at: datetime | None = None
+
+
+class MemoryStatusSchema(BaseModel):
+    """Whether stored memories actually reach an answer.
+
+    Exists because they did not, for the entire life of the feature so far, while every other
+    endpoint here behaved normally. The page needs one honest bit to render against.
+    """
+
+    enabled: bool

@@ -6,6 +6,14 @@ import * as api from "@/lib/api";
 
 type MemoriesState = {
   memories: WorkspaceMemory[];
+  /**
+   * Whether memory actually reaches an answer. `null` until asked.
+   *
+   * Kept beside the list because the two say different things: an empty list means "nothing
+   * learned yet", and `enabled: false` means "nothing here will ever be used". Showing the
+   * first when the truth is the second is the bug this whole page had.
+   */
+  enabled: boolean | null;
   loading: boolean;
   loaded: boolean;
   /** First load. Idempotent, so StrictMode's double mount makes one request, not two. */
@@ -23,6 +31,7 @@ let inFlight: Promise<void> | null = null;
 
 export const useMemoriesStore = create<MemoriesState>()((set, get) => ({
   memories: [],
+  enabled: null,
   loading: true,
   loaded: false,
 
@@ -38,7 +47,11 @@ export const useMemoriesStore = create<MemoriesState>()((set, get) => ({
 
   refresh: async () => {
     try {
-      set({ memories: await api.listMemories(), loaded: true });
+      const [status, memories] = await Promise.all([
+        api.getMemoryStatus(),
+        api.listMemories()
+      ]);
+      set({ memories, enabled: status.enabled, loaded: true });
     } catch {
       // Quiet, like the conversations store: a memory list that fails to load should not
       // throw a banner over the page the user actually came to read.
@@ -71,6 +84,6 @@ export const useMemoriesStore = create<MemoriesState>()((set, get) => ({
 
   reset: () => {
     inFlight = null;
-    set({ memories: [], loading: true, loaded: false });
+    set({ memories: [], enabled: null, loading: true, loaded: false });
   }
 }));

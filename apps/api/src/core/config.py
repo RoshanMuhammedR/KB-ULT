@@ -138,17 +138,26 @@ class Settings(BaseSettings):
     feedback_downvote_weight: float = 3.0
 
     # --- Workspace memory ---
-    # Facts that outlive a thread, injected as background into future prompts. Off by
-    # default: it is the largest and least proven part of the flywheel, and a wrong memory
-    # is worse than no memory because it is applied to questions it has nothing to do with.
-    memory_enabled: bool = False
+    # Facts that outlive a thread, injected as background into future prompts.
+    #
+    # On by default. It shipped off, which meant the Memory page saved rows, listed them and
+    # deleted them while having no effect on a single answer — the read path was gated on
+    # this flag and the write path was not, so the UI presented a working feature that did
+    # nothing. Off is only an honest state if the UI says so, which it now does.
+    memory_enabled: bool = True
     memory_max_injected: int = 5
     # Memory's own slice of the context, SUBTRACTED from the assembler's budget at the
     # composition seam rather than added on top — so enabling memory can never push a
     # previously-fitting answer over the limit.
     memory_token_budget: int = 400
-    # One distillation per three turns. Every turn would mean a model call per answer for a
-    # table that gains a row a week.
+    # One distillation on the opening turn, then one every N. The first turn earns its call
+    # because that is where people state who they are and how they want to be answered; after
+    # that a model call per answer would be waste on a table that gains a row a week.
+    #
+    # Counted in *turns*, from a COUNT over the thread — not from the length of the history
+    # window. That is the bug this replaces: the window is capped at `_HISTORY_TURNS`
+    # messages, so the count saturated at 4 and `% 3` was never 0 again after the opening
+    # turn. It distilled once per conversation and never noticed.
     memory_distill_every_n_turns: int = 3
     # Enforced in code after the model returns, never asked for in the prompt: a memory is
     # injected into every future prompt, so its length is a cost paid forever.

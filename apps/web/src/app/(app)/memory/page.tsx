@@ -20,6 +20,7 @@ import { toast } from "@/stores/toast-store";
  */
 export default function MemoryPage() {
   const memories = useMemoriesStore((state) => state.memories);
+  const enabled = useMemoriesStore((state) => state.enabled);
   const loading = useMemoriesStore((state) => state.loading);
   const ensureLoaded = useMemoriesStore((state) => state.ensureLoaded);
   const add = useMemoriesStore((state) => state.add);
@@ -65,6 +66,18 @@ export default function MemoryPage() {
       />
 
       <div className="px-5 py-6 md:px-8">
+        {enabled === false ? (
+          // The state this page was silently in for its whole life: everything below worked,
+          // and nothing stored here ever reached an answer. Saying so is the fix.
+          <Panel className="mb-6 border-dashed p-4">
+            <p className="text-[13px] font-medium">Memory is turned off for this workspace.</p>
+            <p className="mt-1 text-[12px] text-muted-foreground">
+              Anything saved here would be kept but never used in an answer, so adding to it is
+              disabled. Set <code>MEMORY_ENABLED=1</code> to turn it back on.
+            </p>
+          </Panel>
+        ) : null}
+
         <Panel className="p-4">
           <label htmlFor="new-memory" className="text-[13px] font-medium">
             Tell Saga something to remember
@@ -76,9 +89,14 @@ export default function MemoryPage() {
             onChange={(event) => setDraft(event.target.value)}
             placeholder="We refer to our customers as members, never users."
             className="mt-2"
+            disabled={enabled === false}
           />
           <div className="mt-2 flex justify-end">
-            <Button size="sm" onClick={() => void onAdd()} disabled={!draft.trim() || adding}>
+            <Button
+              size="sm"
+              onClick={() => void onAdd()}
+              disabled={!draft.trim() || adding || enabled === false}
+            >
               {adding ? "Saving..." : "Remember this"}
             </Button>
           </div>

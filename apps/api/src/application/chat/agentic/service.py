@@ -120,6 +120,10 @@ class AgenticChatService:
 
         history = await self.conversation_repo.recent_messages(conversation.id, _HISTORY_TURNS)
         turns = [{"role": m.role.value, "content": m.content} for m in history]
+        # Asked of the database rather than taken from `len(history)`: the window above is
+        # capped, so its length stops counting once the thread outgrows it. This one is the
+        # turn about to happen, so a brand-new conversation is turn 1.
+        turn = await self.conversation_repo.count_turns(conversation.id) + 1
 
         yield ("status", {"stage": "resolving"})
         resolved = await self.resolver.resolve(question, turns)
@@ -207,7 +211,7 @@ class AgenticChatService:
 
         await self._record_signals(report, assembled.citations)
         await self._maybe_distil(
-            knowledge_base.id, question, answer, conversation.id, assistant.id, len(history)
+            knowledge_base.id, question, answer, conversation.id, assistant.id, turn
         )
         yield ("verified", report.to_wire())
 
@@ -280,23 +284,30 @@ class AgenticChatService:
         return user_message, assistant
 
     async def _maybe_distil(
-        self, knowledge_base_id, question, answer, conversation_id, message_id, history_length
+        self, knowledge_base_id, question, answer, conversation_id, message_id, turn
     ) -> None:
         """Hand this exchange to the background distiller, if it is worth the model call.
 
         Two of the three gates are structural rather than checked here: this is only reached
         on the successful path, so a fallback and an `insufficient_context` answer have both
         already returned above and can never be distilled. Neither contains anything the
-        workspace said about itself. The gate that is checked is the turn counter, which
-        keeps this to one call per few exchanges — a table that gains a row a week does not
-        deserve a model call per question.
+        workspace said about itself. The gate that is checked is the turn counter.
+
+        `turn` is a COUNT over the thread, not the length of the history window. Using the
+        window is what broke this: it is capped at `_HISTORY_TURNS` messages, so its length
+        went 0, 2, 4, 4, 4… and `% 3 == 0` was true only at 0. Distillation fired on the
+        opening turn of every conversation and then never again, however long the thread ran,
+        and nothing reported it.
+
+        The opening turn still distils — that is where people say who they are and how they
+        want to be answered — and after that every Nth.
 
         Deferred, never awaited inline: it is a second model call, and the answer is already
         finished. Nothing here can fail the stream.
         """
         if self.memory_queue is None or not self.memory_distill_every_n_turns:
             return
-        if history_length % self.memory_distill_every_n_turns:
+        if turn != 1 and turn % self.memory_distill_every_n_turns:
             return
 
         try:

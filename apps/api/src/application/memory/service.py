@@ -114,15 +114,34 @@ class MemoryService:
         """The memories worth putting in front of this question, within budget.
 
         Failure is silent and total: an answer without memory is the answer this system gave
-        yesterday, which is a perfectly good answer.
+        yesterday, which is a perfectly good answer. Silent is not the same as invisible,
+        though — an empty `keywords` is logged, because it is a real cause of "memory does
+        nothing" that otherwise looks identical to "there was nothing to recall".
         """
+        if not keywords.strip():
+            logger.info("memory_recall_skipped", reason="no_keywords")
+            return []
+
         try:
             memories = await self.repo.search(knowledge_base_id, keywords, self.max_injected)
         except Exception:  # noqa: BLE001
             logger.warning("memory_recall_failed")
             return []
 
-        return self._within_budget(memories)
+        kept = self._within_budget(memories)
+
+        # Recall is what "used" means. Previously `last_used_at` moved only when a fact was
+        # re-derived by the distiller, so a memory injected into a hundred answers still
+        # displayed as never used — the Memory page's staleness column was measuring the
+        # wrong event entirely. Best-effort: failing to record the use must not cost the use.
+        if kept:
+            try:
+                await self.repo.touch([memory.id for memory in kept])
+            except Exception:  # noqa: BLE001
+                logger.warning("memory_touch_failed", count=len(kept))
+
+        logger.info("memory_recalled", found=len(memories), injected=len(kept))
+        return kept
 
     def _within_budget(self, memories: list[Memory]) -> list[Memory]:
         """Drop the lowest-ranked memories until they fit.
@@ -138,7 +157,11 @@ class MemoryService:
         for memory in memories:
             cost = len(memory.content) / _CHARS_PER_TOKEN
             if spent + cost > self.token_budget:
-                break
+                # `continue`, not `break`. Memories arrive best-first, so stopping at the
+                # first one that does not fit throws away every better-than-nothing fact
+                # behind a single long one. `memory_max_chars` bounds each at ~86 tokens, so
+                # skipping one and taking the next is a real gain, not a rounding error.
+                continue
             kept.append(memory)
             spent += cost
         return kept

@@ -106,6 +106,26 @@ class ConversationRepository:
             message.feedback = ratings.get(message.id)
         return conversation
 
+    async def count_turns(self, conversation_id: UUID) -> int:
+        """Exchanges so far, not messages — and deliberately not `len(recent_messages(...))`.
+
+        The history window is capped at `_HISTORY_TURNS`, so its length saturates and stops
+        counting. Anything that paces work by "every N turns" has to ask the database, or it
+        silently stops firing once the thread outgrows the window.
+
+        Counts user messages, since every exchange has exactly one and an assistant turn can
+        be absent mid-flight.
+        """
+        return int(
+            await self.db.scalar(
+                select(func.count(MessageModel.id)).where(
+                    MessageModel.conversation_id == conversation_id,
+                    MessageModel.role == MessageRole.USER.value,
+                )
+            )
+            or 0
+        )
+
     async def recent_messages(self, conversation_id: UUID, limit: int) -> list[Message]:
         """The tail of a thread, oldest-first — what follow-up questions are built from."""
         models = (await self.db.scalars(

@@ -5,6 +5,11 @@ is not a feature, it is something that happens to you. The difference is entirel
 routes: being able to see what was learned, correct it, and delete it. `DELETE` is a hard
 delete for the same reason — "forget this" that only hides a row is a lie the user cannot
 detect.
+
+For the same reason these routes now report `memory_enabled`. They used to work perfectly
+while the feature was switched off, because only the *read* path in the answer pipeline was
+gated on the setting and nothing here was. So the page saved facts, listed them and deleted
+them, and not one of them ever reached an answer. A feature that is off has to look off.
 """
 
 from __future__ import annotations
@@ -16,12 +21,34 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.core.config import Settings, get_settings
 from src.domain.entities import Memory, MemoryKind
-from src.http.schemas.memories import MemorySchema
+from src.http.schemas.memories import MemorySchema, MemoryStatusSchema
 from src.infrastructure.database.session import get_db
 from src.infrastructure.repositories import KnowledgeBaseRepository, MemoryRepository
 
 router = APIRouter(prefix="/memories", tags=["memories"])
+
+
+def _require_enabled(settings: Settings) -> None:
+    """Refuse writes while memory is off, rather than storing something inert.
+
+    A 409 rather than a 404: the resource exists and the request is well-formed, the feature
+    is simply not turned on. The client renders that state instead of an empty list.
+    """
+    if not settings.memory_enabled:
+        raise HTTPException(
+            status_code=409,
+            detail="Memory is turned off for this workspace, so nothing would be recalled.",
+        )
+
+
+@router.get("/status", response_model=MemoryStatusSchema)
+async def memory_status(
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> MemoryStatusSchema:
+    """Whether memory actually affects answers. The page reads this before showing controls."""
+    return MemoryStatusSchema(enabled=settings.memory_enabled)
 
 
 class CreateMemoryRequest(BaseModel):
@@ -67,8 +94,10 @@ async def list_memories(
 async def create_memory(
     request: CreateMemoryRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
 ) -> MemorySchema:
     """Tell the workspace something directly, without waiting for it to be inferred."""
+    _require_enabled(settings)
     content = request.content.strip()
     if not content:
         raise HTTPException(status_code=422, detail="A memory needs some content")
@@ -85,9 +114,11 @@ async def update_memory(
     memory_id: UUID,
     request: UpdateMemoryRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
 ) -> MemorySchema:
     """Correct a memory in place. A wrong remembered fact is worse than no memory at all,
     because it is applied to questions it has nothing to do with."""
+    _require_enabled(settings)
     content = request.content.strip()
     if not content:
         raise HTTPException(status_code=422, detail="A memory needs some content")
