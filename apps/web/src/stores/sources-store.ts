@@ -4,7 +4,6 @@ import { create } from "zustand";
 import { countByState, sourceTitle } from "@kb/shared";
 import type { KnowledgeAsset } from "@/types/api";
 import * as api from "@/lib/api";
-import { useKnowledgeBasesStore } from "@/stores/knowledge-bases-store";
 import { follow, followAll, stopAll, unfollow } from "@/lib/ingestion-poller";
 import { toast } from "@/stores/toast-store";
 
@@ -29,11 +28,11 @@ type SourcesState = {
   /** First load. Idempotent, so StrictMode's double mount makes one request, not two. */
   ensureLoaded: () => Promise<void>;
   /**
-   * Re-fetch for the currently selected knowledge base.
+   * Discard the cached library and fetch it again.
    *
    * Distinct from `ensureLoaded`, which is idempotent by design and would do nothing here.
-   * Switching base is exactly the case where the cached list is for the wrong corpus, so it
-   * has to be discarded rather than kept.
+   * Needed after anything the server decides and the client cannot: a delete elsewhere, a
+   * membership change, a base removed out from under a source.
    */
   refresh: () => Promise<void>;
   /** Register a just-created source and start following its ingestion. */
@@ -92,10 +91,11 @@ export const useSourcesStore = create<SourcesState>()((set, get) => {
       if (get().loaded) return Promise.resolve();
       inFlight ??= (async () => {
         try {
-          // Scoped to the selected base, like the thread list. Read at call time so this
-          // store does not re-render on every switcher change.
-          const { selectedId } = useKnowledgeBasesStore.getState();
-          const assets = await api.listAssets(selectedId);
+          // The whole library, not one base. A source can now be filed in several bases at
+          // once and carries its `base_ids` with it, so every per-base view is a filter over
+          // this one list — and a source filed in no base is still the user's file and still
+          // has to appear somewhere.
+          const assets = await api.listAssets(null);
           commit(assets);
           set({ loaded: true });
           // Resume following anything still in flight, e.g. after a reload.

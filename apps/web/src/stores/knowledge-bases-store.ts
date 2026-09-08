@@ -2,6 +2,7 @@
 
 import { create } from "zustand";
 import type { KnowledgeBase } from "@/types/api";
+import type { KnowledgeBaseEdits } from "@/lib/api";
 import * as api from "@/lib/api";
 
 /**
@@ -22,13 +23,23 @@ type KnowledgeBasesState = {
   attachedIds: string[];
   loading: boolean;
   loaded: boolean;
+  /**
+   * The base currently being dragged, if any.
+   *
+   * Here rather than in a drag event because two components that never meet need it: the
+   * card being dragged and the Chat tab it can be dropped on sit in different subtrees, and
+   * `dataTransfer` is only readable inside a drop handler — not while deciding whether to
+   * light the target up.
+   */
+  draggingId: string | null;
+  setDragging: (id: string | null) => void;
   ensureLoaded: () => Promise<void>;
   refresh: () => Promise<void>;
   select: (id: string) => void;
   setAttached: (ids: string[]) => void;
   toggleAttached: (id: string) => void;
-  add: (name: string) => Promise<KnowledgeBase>;
-  rename: (id: string, name: string) => Promise<void>;
+  add: (name: string, edits?: Omit<KnowledgeBaseEdits, "name">) => Promise<KnowledgeBase>;
+  edit: (id: string, edits: KnowledgeBaseEdits) => Promise<void>;
   remove: (id: string) => Promise<void>;
   reset: () => void;
 };
@@ -59,6 +70,9 @@ export const useKnowledgeBasesStore = create<KnowledgeBasesState>()((set, get) =
   attachedIds: [],
   loading: true,
   loaded: false,
+  draggingId: null,
+
+  setDragging: (id) => set({ draggingId: id }),
 
   ensureLoaded: () => {
     if (get().loaded) return Promise.resolve();
@@ -119,15 +133,15 @@ export const useKnowledgeBasesStore = create<KnowledgeBasesState>()((set, get) =
     set({ attachedIds: settled });
   },
 
-  add: async (name) => {
-    const base = await api.createKnowledgeBase(name);
+  add: async (name, edits = {}) => {
+    const base = await api.createKnowledgeBase(name, edits);
     set((state) => ({ bases: [...state.bases, base] }));
     get().select(base.id);
     return base;
   },
 
-  rename: async (id, name) => {
-    const base = await api.renameKnowledgeBase(id, name);
+  edit: async (id, edits) => {
+    const base = await api.updateKnowledgeBase(id, edits);
     set((state) => ({ bases: state.bases.map((item) => (item.id === id ? base : item)) }));
   },
 
@@ -147,6 +161,13 @@ export const useKnowledgeBasesStore = create<KnowledgeBasesState>()((set, get) =
 
   reset: () => {
     inFlight = null;
-    set({ bases: [], selectedId: null, attachedIds: [], loading: true, loaded: false });
+    set({
+      bases: [],
+      selectedId: null,
+      attachedIds: [],
+      draggingId: null,
+      loading: true,
+      loaded: false
+    });
   }
 }));

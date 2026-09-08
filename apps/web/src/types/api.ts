@@ -13,7 +13,10 @@ export type IngestionJob = {
 
 export type KnowledgeAsset = {
   id: string;
+  /** The base it was uploaded into. Groups the library; does NOT decide searchability. */
   knowledge_base_id: string;
+  /** Every base it is filed in. This is what decides where a question can reach it. */
+  base_ids: string[];
   lineage_id: string;
   version: number;
   filename: string;
@@ -85,6 +88,15 @@ export type Message = {
   trace?: AnswerTrace | null;
   /** This reader's own thumb. Per-user, so it is never shared across a workspace. */
   feedback?: Rating | null;
+  /**
+   * Follow-up questions the passages behind this answer could also answer.
+   *
+   * Live only: they arrive on the stream after the answer and are not persisted, so a
+   * reloaded thread shows none. That is deliberate — a suggestion is grounded in the
+   * passages retrieved for that turn, and a corpus that has since changed would make an
+   * old suggestion a promise the library can no longer keep.
+   */
+  suggestions?: string[];
 };
 
 /** A reader's verdict. Signed because the server sums it, not because it is a scale. */
@@ -280,7 +292,20 @@ export type WorkspaceMemory = {
 export type KnowledgeBase = {
   id: string;
   name: string;
+  /** What this library is for, in the owner's words. Optional, and often absent. */
+  description: string | null;
+  /** A colour *token* - "amber", "slate" — never a hex. See `BASE_COLOURS`. */
+  colour: string | null;
   created_at: string | null;
   /** How many current sources it holds — what makes a base recognisable in the switcher. */
   source_count: number;
 };
+
+/**
+ * The colours a base can be given, in the order they are offered.
+ *
+ * The name is what the server stores; the theme owns what each one looks like, so a base
+ * stays legible in both appearances and nothing has to migrate when the palette changes.
+ */
+export const BASE_COLOURS = ["amber", "rose", "violet", "sky", "emerald", "slate"] as const;
+export type BaseColour = (typeof BASE_COLOURS)[number];

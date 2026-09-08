@@ -12,6 +12,7 @@ import {
 } from "@kb/shared";
 import { Button, Panel, ProgressBar, SourceIcon, StatusBadge } from "@kb/ui";
 import type { KnowledgeAsset } from "@/types/api";
+import { SourceBases } from "@/components/saga/source-bases";
 
 /** Recovery advice worth giving, keyed by the step that actually failed. */
 function recoveryHint(source: KnowledgeAsset): string {
@@ -40,7 +41,7 @@ export function SourceRow({
   const title = sourceTitle(source);
 
   return (
-    <Panel className="p-4">
+    <Panel className="border-border-soft p-4">
       <div className="flex flex-wrap items-start gap-4">
         <SourceIcon type={source.source_type} />
         <div className="min-w-0 flex-1">
@@ -54,6 +55,8 @@ export function SourceRow({
             {typeCopy[source.source_type]?.label ?? source.source_type} · {source.filename}
             {source.created_at ? ` · added ${relative(source.created_at)}` : ""}
           </p>
+
+          <SourceBases source={source} className="mt-2" />
 
           {working ? (
             <div className="mt-3 max-w-md">

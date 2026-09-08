@@ -126,7 +126,10 @@ export function useAsk({
             // Arrives after `done`, on the same connection: the answer is already on
             // screen and this resolves its badge in place. If the connection ends first
             // the badge simply never appears, which is why nothing here is required.
-            onVerified: (grounding) => patchAssistant({ grounding })
+            onVerified: (grounding) => patchAssistant({ grounding }),
+            // Also after `done`. Kept on the message rather than in page state so scrolling
+            // back to an older answer still shows what it offered at the time.
+            onSuggestions: (suggestions) => patchAssistant({ suggestions })
           },
           controller.signal,
           true,

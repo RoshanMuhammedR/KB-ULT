@@ -1,11 +1,11 @@
 /*
  * Saga design system.
- * Warm cream canvas, warm near-black ink, one voltage (orange), hairline depth.
+ * Cool near-white canvas, near-black ink, one voltage (orange), hairline depth.
  * All colors are oklch. Light + dark are both authored explicitly, never derived.
  *
  * Consumed by both apps: their globals.css is `@import "tailwindcss"` + this file.
- * `--font-sans-src` / `--font-mono-src` are set by next/font in each app's layout.tsx;
- * the tokens below read them so the hosted font feeds the design token.
+ * `--font-sans-src` / `--font-serif-src` / `--font-mono-src` are set by next/font in each
+ * app's layout.tsx; the tokens below read them so the hosted font feeds the design token.
  */
 
 @custom-variant dark (&:is(.dark *));
@@ -18,8 +18,11 @@
   --radius-2xl: calc(var(--radius) + 8px);
   --radius-3xl: calc(var(--radius) + 12px);
 
-  --font-sans: var(--font-sans-src), "Inter Tight", system-ui, "Helvetica Neue", Helvetica, Arial,
-    sans-serif;
+  --font-sans: var(--font-sans-src), "Plus Jakarta Sans", system-ui, "Helvetica Neue", Helvetica,
+    Arial, sans-serif;
+  /* Reserved for answer prose and display headings, where a serif reads as authored text
+   * rather than as chrome. Nothing else should reach for it. */
+  --font-serif: var(--font-serif-src), "Newsreader", Georgia, "Times New Roman", serif;
   --font-mono: var(--font-mono-src), "JetBrains Mono", "Fira Code", ui-monospace, monospace;
 
   --color-background: var(--background);
@@ -31,6 +34,8 @@
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
   --color-primary-active: var(--primary-active);
+  --color-primary-soft: var(--primary-soft);
+  --color-primary-soft-border: var(--primary-soft-border);
   --color-secondary: var(--secondary);
   --color-secondary-foreground: var(--secondary-foreground);
   --color-muted: var(--muted);
@@ -57,6 +62,16 @@
   --color-stage-indexing: var(--stage-indexing);
   --color-stage-ready: var(--stage-ready);
 
+  /* Base palette — the colour a knowledge base is picked out by.
+   * The database stores the *name* ("amber"), never the hex, so the theme owns what each one
+   * looks like and a base cannot go unreadable when the theme changes. */
+  --color-base-amber: var(--base-amber);
+  --color-base-rose: var(--base-rose);
+  --color-base-violet: var(--base-violet);
+  --color-base-sky: var(--base-sky);
+  --color-base-emerald: var(--base-emerald);
+  --color-base-slate: var(--base-slate);
+
   --text-display-mega: 4.5rem;
   --text-display-mega--line-height: 1.06;
   --text-display-mega--letter-spacing: -0.03em;
@@ -77,85 +92,109 @@
 :root {
   --radius: 0.5rem;
 
-  --background: oklch(0.973 0.005 95);
-  --canvas-soft: oklch(0.982 0.004 95);
-  --foreground: oklch(0.246 0.011 92);
+  --background: oklch(0.982 0.002 248);
+  --canvas-soft: oklch(1 0 0);
+  --foreground: oklch(0.239 0 0);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.246 0.011 92);
+  --card-foreground: oklch(0.239 0 0);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.246 0.011 92);
+  --popover-foreground: oklch(0.239 0 0);
 
-  --primary: oklch(0.618 0.229 34.2);
+  --primary: oklch(0.663 0.204 35);
   --primary-foreground: oklch(1 0 0);
-  --primary-active: oklch(0.539 0.204 33.6);
+  --primary-active: oklch(0.607 0.2 34.5);
+  /* The orange at reading weight: a tint to sit behind text, and the border that goes with
+   * it. Both are opaque rather than an alpha of `--primary`, because they land on cards as
+   * often as on the canvas and an alpha would shift between the two. */
+  --primary-soft: oklch(0.97 0.016 42);
+  --primary-soft-border: oklch(0.92 0.04 37);
 
   --secondary: oklch(1 0 0);
-  --secondary-foreground: oklch(0.246 0.011 92);
-  --surface-strong: oklch(0.923 0.006 95);
+  --secondary-foreground: oklch(0.239 0 0);
+  --surface-strong: oklch(0.936 0.005 258);
 
-  --muted: oklch(0.945 0.005 95);
-  --muted-foreground: oklch(0.556 0.01 92);
-  --muted-soft: oklch(0.676 0.011 90);
+  --muted: oklch(0.963 0.003 229);
+  --muted-foreground: oklch(0.498 0.009 254);
+  --muted-soft: oklch(0.703 0.011 248);
 
-  --accent: oklch(0.945 0.005 95);
-  --accent-foreground: oklch(0.246 0.011 92);
+  --accent: oklch(0.963 0.003 229);
+  --accent-foreground: oklch(0.239 0 0);
 
   --destructive: oklch(0.558 0.19 8.5);
   --destructive-foreground: oklch(1 0 0);
   --success: oklch(0.552 0.111 165);
 
-  --border: oklch(0.923 0.006 95);
-  --border-soft: oklch(0.945 0.005 95);
-  --border-strong: oklch(0.838 0.009 92);
-  --input: oklch(0.923 0.006 95);
-  --ring: oklch(0.618 0.229 34.2);
+  --border: oklch(0.894 0.006 264);
+  --border-soft: oklch(0.936 0.005 258);
+  --border-strong: oklch(0.838 0.008 260);
+  --input: oklch(0.894 0.006 264);
+  --ring: oklch(0.663 0.204 35);
 
   --stage-queued: oklch(0.79 0.062 45);
   --stage-reading: oklch(0.775 0.062 250);
   --stage-splitting: oklch(0.76 0.078 300);
   --stage-indexing: oklch(0.8 0.068 145);
   --stage-ready: oklch(0.653 0.108 72);
+
+  --base-amber: oklch(0.72 0.155 65);
+  --base-rose: oklch(0.65 0.185 15);
+  --base-violet: oklch(0.6 0.175 295);
+  --base-sky: oklch(0.65 0.13 235);
+  --base-emerald: oklch(0.66 0.12 160);
+  --base-slate: oklch(0.6 0.02 258);
 }
 
 .dark {
-  --background: oklch(0.187 0.006 92);
-  --canvas-soft: oklch(0.222 0.006 92);
-  --foreground: oklch(0.949 0.005 95);
-  --card: oklch(0.232 0.006 92);
-  --card-foreground: oklch(0.949 0.005 95);
-  --popover: oklch(0.232 0.006 92);
-  --popover-foreground: oklch(0.949 0.005 95);
+  --background: oklch(0.187 0.006 271);
+  --canvas-soft: oklch(0.205 0.006 271);
+  --foreground: oklch(0.963 0.003 248);
+  --card: oklch(0.223 0.008 275);
+  --card-foreground: oklch(0.963 0.003 248);
+  --popover: oklch(0.223 0.008 275);
+  --popover-foreground: oklch(0.963 0.003 248);
 
-  --primary: oklch(0.664 0.204 35);
-  --primary-foreground: oklch(0.16 0.006 92);
-  --primary-active: oklch(0.598 0.192 34);
+  /* Lifted and desaturated from the light primary. The light orange on a near-black ground
+   * reads as a glowing edge rather than a colour; it moves down to `--primary-active` here,
+   * where a press is expected to look heavier. */
+  --primary: oklch(0.729 0.17 35.8);
+  --primary-foreground: oklch(0.187 0.006 271);
+  --primary-active: oklch(0.663 0.204 35);
+  --primary-soft: oklch(0.3 0.045 35);
+  --primary-soft-border: oklch(0.38 0.07 35);
 
-  --secondary: oklch(0.262 0.006 92);
-  --secondary-foreground: oklch(0.949 0.005 95);
-  --surface-strong: oklch(0.302 0.007 92);
+  --secondary: oklch(0.243 0.008 264);
+  --secondary-foreground: oklch(0.963 0.003 248);
+  --surface-strong: oklch(0.302 0.013 273);
 
-  --muted: oklch(0.262 0.006 92);
-  --muted-foreground: oklch(0.708 0.008 92);
-  --muted-soft: oklch(0.578 0.008 92);
+  --muted: oklch(0.261 0.012 271);
+  --muted-foreground: oklch(0.714 0.017 263);
+  --muted-soft: oklch(0.58 0.014 265);
 
-  --accent: oklch(0.288 0.007 92);
-  --accent-foreground: oklch(0.949 0.005 95);
+  --accent: oklch(0.302 0.013 273);
+  --accent-foreground: oklch(0.963 0.003 248);
 
   --destructive: oklch(0.652 0.176 8);
-  --destructive-foreground: oklch(0.16 0.006 92);
+  --destructive-foreground: oklch(0.187 0.006 271);
   --success: oklch(0.688 0.116 165);
 
-  --border: oklch(0.318 0.007 92);
-  --border-soft: oklch(0.278 0.006 92);
-  --border-strong: oklch(0.402 0.008 92);
-  --input: oklch(0.318 0.007 92);
-  --ring: oklch(0.664 0.204 35);
+  --border: oklch(0.302 0.013 273);
+  --border-soft: oklch(0.261 0.012 271);
+  --border-strong: oklch(0.395 0.01 268);
+  --input: oklch(0.302 0.013 273);
+  --ring: oklch(0.729 0.17 35.8);
 
   --stage-queued: oklch(0.66 0.075 45);
   --stage-reading: oklch(0.64 0.078 250);
   --stage-splitting: oklch(0.63 0.09 300);
   --stage-indexing: oklch(0.66 0.082 145);
   --stage-ready: oklch(0.63 0.11 72);
+
+  --base-amber: oklch(0.78 0.14 65);
+  --base-rose: oklch(0.72 0.16 15);
+  --base-violet: oklch(0.68 0.15 295);
+  --base-sky: oklch(0.72 0.115 235);
+  --base-emerald: oklch(0.73 0.11 160);
+  --base-slate: oklch(0.7 0.018 258);
 }
 
 @layer base {
@@ -171,7 +210,6 @@
     background-color: var(--color-background);
     color: var(--color-foreground);
     font-family: var(--font-sans);
-    font-feature-settings: "cv05", "ss01";
   }
 
   ::selection {

@@ -1,15 +1,16 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { LibraryBig, Plus, Search } from "lucide-react";
 import { sourceTitle, typeCopy, type SourceType } from "@kb/shared";
-import { Button, ConfirmDialog, EmptyState, Input, Panel, Skeleton } from "@kb/ui";
-import { AppHeader } from "@/components/saga/app-shell";
+import { Button, ConfirmDialog, EmptyState, Input, Panel, Skeleton, cn } from "@kb/ui";
 import { AddSourceDialog } from "@/components/saga/add-source-dialog";
 import { SourceRow } from "@/components/saga/source-row";
 import type { KnowledgeAsset } from "@/types/api";
 import * as api from "@/lib/api";
+import { useKnowledgeBasesStore } from "@/stores/knowledge-bases-store";
 import { useSourcesStore } from "@/stores/sources-store";
+import { baseDotClass } from "@/lib/base-colour";
 import { toast } from "@/stores/toast-store";
 
 const TYPE_FILTERS: (SourceType | "all")[] = ["all", "pdf", "youtube", "markdown", "pptx", "audio"];
@@ -25,20 +26,30 @@ export default function LibraryPage() {
   const loading = useSourcesStore((state) => state.loading);
   const counts = useSourcesStore((state) => state.counts);
   const track = useSourcesStore((state) => state.track);
-  const upsert = useSourcesStore((state) => state.upsert);
+  const ensureSources = useSourcesStore((state) => state.ensureLoaded);
   const remove = useSourcesStore((state) => state.remove);
+  const bases = useKnowledgeBasesStore((state) => state.bases);
+  const ensureBases = useKnowledgeBasesStore((state) => state.ensureLoaded);
   const [query, setQuery] = useState("");
   const [type, setType] = useState<SourceType | "all">("all");
   const [status, setStatus] = useState<"all" | "ready" | "working" | "failed">("all");
+  // "" is every base, including sources filed in none. A base id narrows to that base only.
+  const [base, setBase] = useState("");
   const [adding, setAdding] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<KnowledgeAsset | null>(null);
   const [deleting, setDeleting] = useState(false);
+
+  useEffect(() => {
+    void ensureBases();
+    void ensureSources();
+  }, [ensureBases, ensureSources]);
 
   const needle = query.trim().toLowerCase();
   const filtered = sources.filter((source) => {
     if (needle && !`${sourceTitle(source)} ${source.filename}`.toLowerCase().includes(needle)) {
       return false;
     }
+    if (base && !source.base_ids.includes(base)) return false;
     if (type !== "all" && source.source_type !== type) return false;
     if (status === "ready" && source.status !== "ready") return false;
     if (status === "failed" && source.status !== "failed") return false;
@@ -72,18 +83,23 @@ export default function LibraryPage() {
   }
 
   return (
-    <div>
-      <AppHeader
-        title="Library"
-        description={`${counts.ready} ${counts.ready === 1 ? "source" : "sources"} ready to answer from · ${counts.total} in total`}
-        actions={
-          <Button onClick={() => setAdding(true)}>
+    <div className="h-full overflow-y-auto">
+      <div className="border-b border-border-soft bg-card px-6 py-6 md:px-8">
+        <div className="mx-auto flex max-w-6xl flex-col justify-between gap-4 sm:flex-row sm:items-center">
+          <div>
+            <h1 className="text-display-sm font-semibold tracking-tight">Document library</h1>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              Everything you have added, across every base. {counts.ready} ready to answer from
+              {counts.total === counts.ready ? "" : ` · ${counts.total} in total`}.
+            </p>
+          </div>
+          <Button size="sm" className="shrink-0" onClick={() => setAdding(true)}>
             <Plus className="size-4" aria-hidden /> Add a source
           </Button>
-        }
-      />
+        </div>
+      </div>
 
-      <div className="px-5 py-6 md:px-8">
+      <div className="mx-auto max-w-6xl px-5 py-6 md:px-8">
         <div className="flex flex-wrap items-center gap-3">
           <div className="relative min-w-56 flex-1">
             <Search
@@ -98,38 +114,39 @@ export default function LibraryPage() {
               className="h-10 pl-9 text-sm"
             />
           </div>
+          {bases.length > 1 ? (
+            <div className="flex flex-wrap gap-1" role="group" aria-label="Filter by knowledge base">
+              <FilterChip active={base === ""} onClick={() => setBase("")}>
+                All bases
+              </FilterChip>
+              {bases.map((option) => (
+                <FilterChip
+                  key={option.id}
+                  active={base === option.id}
+                  onClick={() => setBase(option.id)}
+                >
+                  <span aria-hidden className={cn("size-2 rounded-full", baseDotClass(option))} />
+                  {option.name}
+                </FilterChip>
+              ))}
+            </div>
+          ) : null}
           <div className="flex flex-wrap gap-1" role="group" aria-label="Filter by type">
             {TYPE_FILTERS.map((option) => (
-              <button
-                key={option}
-                type="button"
-                onClick={() => setType(option)}
-                aria-pressed={type === option}
-                className={`rounded-md border px-3 py-1.5 text-[13px] font-medium ${
-                  type === option
-                    ? "border-foreground bg-foreground text-background"
-                    : "border-border bg-card text-muted-foreground hover:text-foreground"
-                }`}
-              >
+              <FilterChip key={option} active={type === option} onClick={() => setType(option)}>
                 {option === "all" ? "All types" : typeCopy[option].label}
-              </button>
+              </FilterChip>
             ))}
           </div>
           <div className="flex flex-wrap gap-1" role="group" aria-label="Filter by status">
             {STATUS_FILTERS.map((option) => (
-              <button
+              <FilterChip
                 key={option.key}
-                type="button"
+                active={status === option.key}
                 onClick={() => setStatus(option.key)}
-                aria-pressed={status === option.key}
-                className={`rounded-md border px-3 py-1.5 text-[13px] font-medium ${
-                  status === option.key
-                    ? "border-foreground bg-foreground text-background"
-                    : "border-border bg-card text-muted-foreground hover:text-foreground"
-                }`}
               >
                 {option.label}
-              </button>
+              </FilterChip>
             ))}
           </div>
         </div>
@@ -164,6 +181,7 @@ export default function LibraryPage() {
                     setQuery("");
                     setType("all");
                     setStatus("all");
+                    setBase("");
                   }}
                 >
                   Clear filters
@@ -184,13 +202,7 @@ export default function LibraryPage() {
       </div>
 
       {adding ? (
-        <AddSourceDialog
-          onClose={() => setAdding(false)}
-          onAdded={(asset) => {
-            track(asset);
-            upsert(asset);
-          }}
-        />
+        <AddSourceDialog onClose={() => setAdding(false)} />
       ) : null}
 
       {pendingDelete ? (
@@ -204,5 +216,32 @@ export default function LibraryPage() {
         />
       ) : null}
     </div>
+  );
+}
+
+/** One filter chip. Same shape for type, status and base, so they read as one control. */
+function FilterChip({
+  active,
+  onClick,
+  children
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-[13px] font-medium transition-colors",
+        active
+          ? "border-primary bg-primary-soft text-primary"
+          : "border-border bg-card text-muted-foreground hover:text-foreground"
+      )}
+    >
+      {children}
+    </button>
   );
 }

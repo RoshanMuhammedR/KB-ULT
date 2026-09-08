@@ -1,6 +1,5 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useCallback } from "react";
 import {
   ChatError,
@@ -18,7 +17,6 @@ import { useAsk } from "@/lib/use-ask";
  * the saved thread rather than an empty page.
  */
 export default function AskPage() {
-  const router = useRouter();
   const refresh = useConversationsStore((state) => state.refresh);
 
   const onCreated = useCallback(
@@ -37,15 +35,19 @@ export default function AskPage() {
   const started = conversation.messages.length > 0;
 
   return (
-    <div className="grid min-h-dvh grid-rows-[auto_1fr_auto] lg:grid-cols-[300px_1fr] lg:grid-rows-1">
-      <div className="hidden h-dvh lg:block">
+    <div className="flex h-full min-h-0 lg:grid lg:grid-cols-[280px_1fr]">
+      <div className="hidden min-h-0 lg:block">
         <ConversationList />
       </div>
 
-      <div className="flex min-h-0 flex-col lg:h-dvh">
+      <div className="flex min-h-0 w-full flex-col">
         <div className="min-h-0 flex-1 overflow-y-auto">
           {started ? (
-            <Thread conversation={conversation} streamingId={streamingId} />
+            <Thread
+              conversation={conversation}
+              streamingId={streamingId}
+              onAsk={(question) => void ask(question)}
+            />
           ) : (
             <NewConversationEmpty onPick={(question) => void ask(question)} />
           )}
@@ -57,14 +59,6 @@ export default function AskPage() {
         </div>
         <Composer onSend={(question) => void ask(question)} disabled={busy} />
       </div>
-
-      <button
-        type="button"
-        onClick={() => router.push("/library")}
-        className="border-t border-border px-5 py-3 text-left text-[13px] text-muted-foreground lg:hidden"
-      >
-        Browse your library →
-      </button>
     </div>
   );
 }

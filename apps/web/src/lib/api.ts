@@ -146,25 +146,67 @@ export function listKnowledgeBases(): Promise<KnowledgeBase[]> {
   return request<KnowledgeBase[]>("/knowledge-bases");
 }
 
-export function createKnowledgeBase(name: string): Promise<KnowledgeBase> {
+export type KnowledgeBaseEdits = {
+  name?: string;
+  description?: string | null;
+  colour?: string | null;
+};
+
+export function createKnowledgeBase(
+  name: string,
+  edits: Omit<KnowledgeBaseEdits, "name"> = {}
+): Promise<KnowledgeBase> {
   return request<KnowledgeBase>("/knowledge-bases", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name })
+    body: JSON.stringify({ name, ...edits })
   });
 }
 
-export function renameKnowledgeBase(id: string, name: string): Promise<KnowledgeBase> {
+/**
+ * Change any of name, description or colour. Omitted keys are left alone by the server, so
+ * this must send only what the caller actually set — spreading a whole base object through
+ * here would rewrite fields nobody edited.
+ */
+export function updateKnowledgeBase(
+  id: string,
+  edits: KnowledgeBaseEdits
+): Promise<KnowledgeBase> {
   return request<KnowledgeBase>(`/knowledge-bases/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name })
+    body: JSON.stringify(edits)
   });
 }
 
 /** Deletes the base and everything in it. Always confirm before calling. */
 export function deleteKnowledgeBase(id: string): Promise<void> {
   return request<void>(`/knowledge-bases/${id}`, { method: "DELETE" });
+}
+
+/**
+ * File an existing source in another base. No re-upload and no re-ingestion: the passages
+ * already exist, and membership is the only thing that decides where they are searchable.
+ */
+export function addAssetToBase(
+  assetId: string,
+  knowledgeBaseId: string
+): Promise<KnowledgeAsset> {
+  return request<KnowledgeAsset>(`/documents/${assetId}/bases`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ knowledge_base_id: knowledgeBaseId })
+  });
+}
+
+/** Take a source out of one base. It stays in the others, and stays in the library. */
+export function removeAssetFromBase(
+  assetId: string,
+  knowledgeBaseId: string
+): Promise<KnowledgeAsset> {
+  return request<KnowledgeAsset>(`/documents/${assetId}/bases/${knowledgeBaseId}`, {
+    method: "DELETE"
+  });
 }
 
 export function listAssets(knowledgeBaseId?: string | null): Promise<KnowledgeAsset[]> {
@@ -360,6 +402,11 @@ export type StreamHandlers = {
   onStatus?: (status: AnswerStatus) => void;
   /** Arrives after `done`; the answer is already complete and displayed. */
   onVerified?: (report: GroundingReport) => void;
+  /**
+   * Questions the retrieved passages could also answer. After `done`, like `verified`, and
+   * equally optional — a connection that ends first simply shows no suggestions.
+   */
+  onSuggestions?: (questions: string[]) => void;
 };
 
 /**
@@ -476,6 +523,9 @@ function dispatchFrame(frame: string, handlers: StreamHandlers): void {
       break;
     case "verified":
       handlers.onVerified?.(payload as GroundingReport);
+      break;
+    case "suggestions":
+      handlers.onSuggestions?.((payload as string[]).map(String));
       break;
     case "error":
       throw new ApiError(500, (payload as { message: string }).message);

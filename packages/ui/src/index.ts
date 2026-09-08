@@ -25,4 +25,12 @@ export { EmptyState, Skeleton } from "./primitives/feedback";
 // Import it from "@kb/ui/markdown" instead.
 export { Logo } from "./primitives/logo";
 export { ConfirmDialog } from "./primitives/confirm-dialog";
+export {
+  Modal,
+  ModalBody,
+  ModalFooter,
+  ModalHeader,
+  type ModalPlacement,
+  type ModalSize
+} from "./primitives/modal";
 export { THEME_SCRIPT, THEME_STORAGE_KEY, useTheme, type Theme } from "./use-theme";

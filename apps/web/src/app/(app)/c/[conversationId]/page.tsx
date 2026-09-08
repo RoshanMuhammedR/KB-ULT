@@ -78,7 +78,7 @@ export default function ConversationPage() {
 
   if (missing) {
     return (
-      <div className="mx-auto max-w-md px-5 py-24 text-center">
+      <div className="mx-auto h-full max-w-md overflow-y-auto px-5 py-24 text-center">
         <h1 className="text-display-md">That conversation isn&apos;t here</h1>
         <p className="mt-2 text-sm text-muted-foreground">
           It may have been deleted. Your other threads are still in the list.
@@ -91,13 +91,13 @@ export default function ConversationPage() {
   }
 
   return (
-    <div className="grid min-h-dvh lg:grid-cols-[300px_1fr]">
-      <div className="hidden h-dvh lg:block">
+    <div className="flex h-full min-h-0 lg:grid lg:grid-cols-[280px_1fr]">
+      <div className="hidden min-h-0 lg:block">
         <ConversationList activeId={conversationId} />
       </div>
 
-      <div className="flex min-h-0 flex-col lg:h-dvh">
-        <header className="flex items-center gap-2 border-b border-border px-5 py-4 md:px-8">
+      <div className="flex min-h-0 w-full flex-col">
+        <header className="flex shrink-0 items-center gap-2 border-b border-border-soft bg-card px-5 py-3 md:px-8">
           {renaming ? (
             <form
               className="flex-1"
@@ -141,6 +141,7 @@ export default function ConversationPage() {
               conversation={conversation}
               streamingId={streamingId}
               onDeleteMessage={onDeleteMessage}
+              onAsk={(question) => void ask(question)}
             />
           ) : (
             <div className="mx-auto max-w-3xl space-y-6 px-5 py-8 md:px-8">

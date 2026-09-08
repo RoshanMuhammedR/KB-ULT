@@ -10,12 +10,16 @@ import {
   Info,
   MessageSquarePlus,
   MoreHorizontal,
+  Paperclip,
   Pencil,
   RefreshCw,
   Search,
+  Send,
+  Sparkles,
   ThumbsDown,
   ThumbsUp,
-  Trash2
+  Trash2,
+  X
 } from "lucide-react";
 import { formatLocator, relative, time } from "@kb/shared";
 import {
@@ -44,7 +48,10 @@ import type {
 } from "@/types/api";
 import { clearFeedback, setFeedback } from "@/lib/api";
 import { useConversationsStore } from "@/stores/conversations-store";
+import { useKnowledgeBasesStore } from "@/stores/knowledge-bases-store";
 import { useSourcesStore } from "@/stores/sources-store";
+import { baseDotClass } from "@/lib/base-colour";
+import { readBaseDragData } from "@/lib/base-drag";
 import { toast } from "@/stores/toast-store";
 
 /* ----------------------------- Conversation list ---------------------------- */
@@ -92,11 +99,11 @@ export function ConversationList({ activeId }: { activeId?: string }) {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col border-border lg:border-r">
-      <div className="space-y-3 border-b border-border p-4">
+    <div className="flex h-full min-h-0 flex-col bg-card lg:border-r lg:border-border-soft">
+      <div className="space-y-3 border-b border-border-soft p-3">
         <Link
           href="/"
-          className="flex items-center gap-2 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary-active"
+          className="flex items-center justify-center gap-2 rounded-xl bg-primary px-3 py-2 text-sm font-medium text-primary-foreground shadow-xs transition-colors hover:bg-primary-active"
         >
           <MessageSquarePlus className="size-4" aria-hidden /> New conversation
         </Link>
@@ -110,7 +117,7 @@ export function ConversationList({ activeId }: { activeId?: string }) {
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Search conversations"
             aria-label="Search conversations"
-            className="h-10 pl-9 text-sm"
+            className="h-9 rounded-xl border-transparent bg-muted pl-9 text-[13px] focus:border-primary focus:bg-card"
           />
         </div>
       </div>
@@ -153,8 +160,10 @@ export function ConversationList({ activeId }: { activeId?: string }) {
                   <Link
                     href={`/c/${conversation.id}`}
                     className={cn(
-                      "block rounded-md px-3 py-2.5 pr-16 transition-colors",
-                      activeId === conversation.id ? "bg-surface-strong" : "hover:bg-muted"
+                      "block rounded-xl px-3 py-2.5 pr-16 transition-colors",
+                      activeId === conversation.id
+                        ? "border border-primary-soft-border bg-primary-soft"
+                        : "border border-transparent hover:bg-muted"
                     )}
                   >
                     <span className="line-clamp-2 text-[13px] font-semibold">
@@ -244,44 +253,164 @@ export function Composer({
   const processing = useSourcesStore((state) => state.counts.processing);
 
   return (
-    <div className="border-t border-border bg-background p-4 md:px-8 md:py-5">
-      <form
-        className="mx-auto flex max-w-3xl items-end gap-2"
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (!value.trim() || disabled) return;
-          onSend(value.trim());
-          setValue("");
-        }}
-      >
-        <label htmlFor="composer" className="sr-only">
-          Ask a question of your library
-        </label>
-        <textarea
-          id="composer"
-          rows={1}
-          value={value}
-          disabled={disabled}
-          onChange={(event) => setValue(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey) {
-              event.preventDefault();
-              event.currentTarget.form?.requestSubmit();
-            }
+    <div className="border-t border-border-soft bg-card px-4 pb-4 pt-3 md:px-8">
+      <div className="mx-auto max-w-3xl">
+        <AttachedBases />
+        <form
+          className="mt-2 flex items-end gap-2 rounded-2xl border border-border bg-background p-2 focus-within:border-primary"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!value.trim() || disabled) return;
+            onSend(value.trim());
+            setValue("");
           }}
-          placeholder={ready === 0 ? "Add a source before asking" : "Ask anything in your library…"}
-          className="max-h-40 min-h-11 flex-1 resize-y rounded-md border border-border bg-card px-4 py-3 text-[15px] placeholder:text-muted-soft"
-        />
-        <Button type="submit" disabled={disabled || !value.trim()} className="h-11 px-4">
-          <span className="sr-only sm:not-sr-only">Ask</span>
-        </Button>
-      </form>
-      <p className="mx-auto mt-2 max-w-3xl text-[12px] text-muted-foreground">
-        {hint ??
-          `Answering from ${ready} ready ${ready === 1 ? "source" : "sources"}${
-            processing ? ` · ${processing} still being prepared` : ""
-          }. Enter to send, Shift+Enter for a new line.`}
-      </p>
+        >
+          <label htmlFor="composer" className="sr-only">
+            Ask a question of your library
+          </label>
+          <textarea
+            id="composer"
+            rows={1}
+            value={value}
+            disabled={disabled}
+            onChange={(event) => setValue(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                event.currentTarget.form?.requestSubmit();
+              }
+            }}
+            placeholder={ready === 0 ? "Add a source before asking" : "Ask anything in your library…"}
+            className="max-h-40 min-h-10 flex-1 resize-y bg-transparent px-2 py-2 text-[15px] placeholder:text-muted-soft focus:outline-none"
+          />
+          <Button
+            type="submit"
+            disabled={disabled || !value.trim()}
+            className="size-10 shrink-0 rounded-xl px-0"
+            aria-label="Ask"
+          >
+            <Send className="size-4" aria-hidden />
+          </Button>
+        </form>
+        <p className="mt-2 text-[12px] text-muted-foreground">
+          {hint ??
+            `Answering from ${ready} ready ${ready === 1 ? "source" : "sources"}${
+              processing ? ` · ${processing} still being prepared` : ""
+            }. Enter to send, Shift+Enter for a new line.`}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The bases this question will be answered from, and a drop target for adding one.
+ *
+ * The row is always visible, even with a single base attached. Which corpus an answer came
+ * from is the one thing a reader cannot check afterwards by reading the answer, so it is
+ * stated before the question is asked rather than explained after.
+ */
+function AttachedBases() {
+  const bases = useKnowledgeBasesStore((state) => state.bases);
+  const attachedIds = useKnowledgeBasesStore((state) => state.attachedIds);
+  const toggleAttached = useKnowledgeBasesStore((state) => state.toggleAttached);
+  const setAttached = useKnowledgeBasesStore((state) => state.setAttached);
+  const setDragging = useKnowledgeBasesStore((state) => state.setDragging);
+  const dragging = useKnowledgeBasesStore((state) => state.draggingId);
+  const [over, setOver] = useState(false);
+  const [picking, setPicking] = useState(false);
+
+  const attached = bases.filter((base) => attachedIds.includes(base.id));
+  const rest = bases.filter((base) => !attachedIds.includes(base.id));
+
+  if (bases.length === 0) return null;
+
+  return (
+    <div
+      onDragOver={(event) => {
+        if (!dragging) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "copy";
+        setOver(true);
+      }}
+      onDragLeave={() => setOver(false)}
+      onDrop={(event) => {
+        event.preventDefault();
+        setOver(false);
+        const id = readBaseDragData(event) || dragging;
+        setDragging(null);
+        if (id && !attachedIds.includes(id)) setAttached([...attachedIds, id]);
+      }}
+      className={cn(
+        "relative flex flex-wrap items-center gap-1.5 rounded-xl border border-dashed px-2 py-1.5 transition-colors",
+        over ? "border-primary bg-primary-soft" : dragging ? "border-primary/50" : "border-transparent"
+      )}
+    >
+      <span className="text-[11px] font-medium text-muted-foreground">Answering from</span>
+      {attached.map((base) => (
+        <span
+          key={base.id}
+          className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted py-0.5 pl-2 pr-1 text-[11px] font-medium"
+        >
+          <span aria-hidden className={cn("size-2 rounded-full", baseDotClass(base))} />
+          {base.name}
+          {attached.length > 1 ? (
+            <button
+              type="button"
+              onClick={() => toggleAttached(base.id)}
+              title={`Stop answering from ${base.name}`}
+              aria-label={`Stop answering from ${base.name}`}
+              className="rounded-full p-0.5 text-muted-soft hover:bg-surface-strong hover:text-foreground"
+            >
+              <X className="size-3" aria-hidden />
+            </button>
+          ) : null}
+        </span>
+      ))}
+
+      {rest.length > 0 ? (
+        <button
+          type="button"
+          onClick={() => setPicking((value) => !value)}
+          aria-expanded={picking}
+          aria-haspopup="menu"
+          className="inline-flex items-center gap-1 rounded-full border border-dashed border-border-strong px-2 py-0.5 text-[11px] font-medium text-muted-foreground hover:border-primary hover:text-primary"
+        >
+          <Paperclip className="size-3" aria-hidden /> Attach a base
+        </button>
+      ) : null}
+
+      {picking ? (
+        <>
+          {/* Click-away, not a focus trap: the composer behind it stays readable. */}
+          <button
+            type="button"
+            aria-label="Close"
+            className="fixed inset-0 z-10 cursor-default"
+            onClick={() => setPicking(false)}
+          />
+          <Panel className="absolute bottom-full left-0 z-20 mb-1 w-64 p-1 shadow-lg">
+            <ul role="menu" className="max-h-56 overflow-y-auto">
+              {rest.map((base) => (
+                <li key={base.id}>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      toggleAttached(base.id);
+                      setPicking(false);
+                    }}
+                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-muted"
+                  >
+                    <span aria-hidden className={cn("size-2 rounded-full", baseDotClass(base))} />
+                    <span className="truncate">{base.name}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </Panel>
+        </>
+      ) : null}
     </div>
   );
 }
@@ -291,11 +420,14 @@ export function Composer({
 export function Thread({
   conversation,
   streamingId,
-  onDeleteMessage
+  onDeleteMessage,
+  onAsk
 }: {
   conversation: Conversation;
   streamingId?: string | null;
   onDeleteMessage?: (messageId: string) => void;
+  /** Asking a suggested follow-up. Absent means suggestions are not offered. */
+  onAsk?: (question: string) => void;
 }) {
   const endRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -311,6 +443,7 @@ export function Thread({
           streaming={streamingId === message.id}
           onDelete={onDeleteMessage}
           conversationId={conversation.id || undefined}
+          {...(onAsk ? { onAsk } : {})}
         />
       ))}
       <div ref={endRef} />
@@ -322,12 +455,14 @@ export function MessageBlock({
   message,
   streaming,
   onDelete,
-  conversationId
+  conversationId,
+  onAsk
 }: {
   message: Message;
   streaming?: boolean;
   onDelete?: (messageId: string) => void;
   conversationId?: string;
+  onAsk?: (question: string) => void;
 }) {
   const [copied, setCopied] = useState(false);
 
@@ -381,6 +516,10 @@ export function MessageBlock({
         />
       ) : null}
 
+      {!streaming && onAsk && message.suggestions?.length ? (
+        <FollowUps questions={message.suggestions} onAsk={onAsk} />
+      ) : null}
+
       {!streaming ? (
         <AnswerTracePanel trace={message.trace} grounding={message.grounding} />
       ) : null}
@@ -416,6 +555,41 @@ export function MessageBlock({
         </div>
       ) : null}
     </article>
+  );
+}
+
+/**
+ * Questions the passages behind this answer could also answer.
+ *
+ * Grounded, not generated from the topic: the server writes them while looking at what was
+ * actually retrieved, so a suggestion that leads to "I could not find this" is not offered.
+ * A suggestion the library cannot honour is worse than none, because the product proposed it.
+ */
+function FollowUps({
+  questions,
+  onAsk
+}: {
+  questions: string[];
+  onAsk: (question: string) => void;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <p className="flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
+        <Sparkles className="size-3" aria-hidden /> You could also ask
+      </p>
+      <div className="flex flex-wrap gap-1.5">
+        {questions.map((question) => (
+          <button
+            key={question}
+            type="button"
+            onClick={() => onAsk(question)}
+            className="rounded-full border border-border bg-card px-3 py-1.5 text-left text-[13px] text-muted-foreground transition-colors hover:border-primary hover:bg-primary-soft hover:text-primary"
+          >
+            {question}
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }
 
