@@ -105,6 +105,8 @@ export type Rating = 1 | -1;
 // List view — enough to recognise a thread without loading it.
 export type ConversationSummary = {
   id: string;
+  /** The base it was started in. Drawn as a colour beside the title. */
+  knowledge_base_id: string;
   title: string;
   message_count: number;
   preview: string;

@@ -29,16 +29,24 @@ class ConversationRepository:
 
     # --- Reads --------------------------------------------------------------------
 
-    async def list_for_knowledge_base(self, knowledge_base_id: UUID) -> list[tuple[Conversation, int, str]]:
+    async def list_for_knowledge_base(
+        self, knowledge_base_id: UUID | None
+    ) -> list[tuple[Conversation, int, str]]:
         """Return `[(conversation, message_count, preview)]`, most recently touched first.
+
+        `None` is every thread in the workspace, not the default base. The client shows one
+        thread list across every base, the same way it shows one library — a thread whose
+        base was deleted, or one started before bases were separable, still has to appear
+        somewhere, and "the oldest base in the tenant" was never a place a person chose.
 
         Counts and previews are computed in SQL so the list view never loads whole threads.
         """
-        models = (await self.db.scalars(
-            select(ConversationModel)
-            .where(ConversationModel.knowledge_base_id == knowledge_base_id)
-            .order_by(ConversationModel.updated_at.desc())
-        )).all()
+        statement = select(ConversationModel).order_by(ConversationModel.updated_at.desc())
+        if knowledge_base_id is not None:
+            statement = statement.where(
+                ConversationModel.knowledge_base_id == knowledge_base_id
+            )
+        models = (await self.db.scalars(statement)).all()
         if not models:
             return []
 

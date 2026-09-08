@@ -30,7 +30,6 @@ from src.domain.entities import MessageRole
 from src.infrastructure.repositories import (
     ChunkSignalRepository,
     ConversationRepository,
-    KnowledgeBaseRepository,
     MessageFeedbackRepository,
 )
 
@@ -79,18 +78,20 @@ async def list_conversations(
     db: Annotated[AsyncSession, Depends(get_db)],
     knowledge_base_id: UUID | None = None,
 ) -> list[ConversationSummarySchema]:
-    """Threads started in one base, or in the workspace default when none is named.
+    """Threads started in one base, or every thread in the workspace when none is named.
 
     Scoped by the base a thread was *started* in rather than by its attachment set: a thread
-    should appear in one place in the sidebar, and "started in" is the only answer that stays
+    should appear in one place in the list, and "started in" is the only answer that stays
     stable when bases are attached and detached later.
+
+    Unnamed means the whole workspace. It used to mean the default base, which quietly hid
+    every thread started anywhere else from a client that had not chosen a base yet.
     """
-    if knowledge_base_id is None:
-        knowledge_base_id = (await KnowledgeBaseRepository(db).ensure_default()).id
     rows = await ConversationRepository(db).list_for_knowledge_base(knowledge_base_id)
     return [
         ConversationSummarySchema(
             id=conversation.id,
+            knowledge_base_id=conversation.knowledge_base_id,
             title=conversation.title,
             message_count=message_count,
             preview=preview,

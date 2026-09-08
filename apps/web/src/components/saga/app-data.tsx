@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import { useConversationsStore } from "@/stores/conversations-store";
+import { useKnowledgeBasesStore } from "@/stores/knowledge-bases-store";
 import { useSourcesStore } from "@/stores/sources-store";
 
 /**
@@ -14,6 +15,10 @@ import { useSourcesStore } from "@/stores/sources-store";
  */
 export function AppData(): null {
   useEffect(() => {
+    // Bases first in intent, not in order: the header states a count and the composer
+    // names what it is answering from, so both are wanted on every screen rather than only
+    // on the ones that list bases.
+    void useKnowledgeBasesStore.getState().ensureLoaded();
     void useSourcesStore.getState().ensureLoaded();
     void useConversationsStore.getState().ensureLoaded();
   }, []);

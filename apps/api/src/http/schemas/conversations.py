@@ -23,6 +23,9 @@ class ConversationSummarySchema(BaseModel):
     """List view — enough to recognise a thread without loading it."""
 
     id: UUID
+    #: The base this thread was started in. The client draws it as a colour beside the
+    #: title, because one list now spans every base.
+    knowledge_base_id: UUID
     title: str
     message_count: int
     preview: str

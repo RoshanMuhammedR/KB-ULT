@@ -166,8 +166,11 @@ export function ConversationList({ activeId }: { activeId?: string }) {
                         : "border border-transparent hover:bg-muted"
                     )}
                   >
-                    <span className="line-clamp-2 text-[13px] font-semibold">
-                      {conversation.title}
+                    <span className="flex items-start gap-2">
+                      <BaseDot baseId={conversation.knowledge_base_id} />
+                      <span className="line-clamp-2 text-[13px] font-semibold">
+                        {conversation.title}
+                      </span>
                     </span>
                     <span className="mt-1 line-clamp-1 block text-[12px] text-muted-foreground">
                       {conversation.preview}
@@ -213,6 +216,26 @@ export function ConversationList({ activeId }: { activeId?: string }) {
         />
       ) : null}
     </div>
+  );
+}
+
+/**
+ * The colour of the base a thread was started in.
+ *
+ * Renders nothing when the base is gone or not loaded yet, rather than a grey placeholder:
+ * an absent dot says less than a dot of the wrong colour would say wrongly.
+ */
+function BaseDot({ baseId }: { baseId: string }) {
+  const base = useKnowledgeBasesStore((state) =>
+    state.bases.find((item) => item.id === baseId)
+  );
+  if (!base) return null;
+  return (
+    <span
+      title={base.name}
+      aria-hidden
+      className={cn("mt-1.5 size-2 shrink-0 rounded-full", baseDotClass(base))}
+    />
   );
 }
 
