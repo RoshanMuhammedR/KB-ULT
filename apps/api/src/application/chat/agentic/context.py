@@ -120,10 +120,31 @@ class ContextAssembler:
 
         for document in expanded:
             block_text = document.page_content
+            # The first block used to be admitted at any size, via `and citations`. That
+            # exempted exactly the case the budget exists for: parent expansion replaces a
+            # 450-token child with its whole section, and nothing caps a parent's size on the
+            # way in, so one oversized section could carry the prompt past the model's limit
+            # on its own. The comment below claimed a generation call could never fail on
+            # overflow; for that case it could.
+            #
+            # Truncating rather than dropping, because dropping the top-ranked passage would
+            # answer the question from its second-best evidence without saying so. A truncated
+            # best passage is still the best passage.
+            if len(block_text) / _CHARS_PER_TOKEN > self.token_budget:
+                keep = int(self.token_budget * _CHARS_PER_TOKEN)
+                logger.warning(
+                    "context_block_truncated",
+                    chunk_id=document.metadata.get(CHUNK_ID),
+                    original_chars=len(block_text),
+                    kept_chars=keep,
+                )
+                block_text = block_text[:keep]
+                document = Document(page_content=block_text, metadata=document.metadata)
+
             cost = len(block_text) / _CHARS_PER_TOKEN
             if used + cost > self.token_budget and citations:
                 # Everything below here is lower-ranked than what already fits. Dropping
-                # from the bottom is why a generation call can never fail on overflow.
+                # from the bottom is what keeps the prompt inside the budget.
                 dropped += 1
                 continue
 
