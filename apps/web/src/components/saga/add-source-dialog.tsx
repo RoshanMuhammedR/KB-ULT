@@ -6,6 +6,7 @@ import { typeCopy, type SourceType } from "@kb/shared";
 import { Button, Input, Label, Pill, SourceIcon } from "@kb/ui";
 import type { KnowledgeAsset } from "@/types/api";
 import * as api from "@/lib/api";
+import { useKnowledgeBasesStore } from "@/stores/knowledge-bases-store";
 
 const ADD_OPTIONS: {
   type: SourceType;
@@ -62,6 +63,9 @@ export function AddSourceDialog({
   onClose: () => void;
   onAdded: (asset: KnowledgeAsset) => void;
 }) {
+  // The base being viewed. A source belongs somewhere specific, and "wherever the workspace
+  // default happens to be" is not an answer a user would recognise.
+  const selectedBaseId = useKnowledgeBasesStore((state) => state.selectedId);
   const [chosen, setChosen] = useState<SourceType | null>(null);
   const [url, setUrl] = useState("");
   const [noteTitle, setNoteTitle] = useState("");
@@ -92,7 +96,8 @@ export function AddSourceDialog({
 
     for (const file of files) {
       try {
-        onAdded(await api.uploadFile(file));
+        // Into the base being viewed, not the workspace default.
+        onAdded(await api.uploadFile(file, selectedBaseId));
       } catch (err) {
         failures.push(
           `${file.name}: ${err instanceof Error ? err.message : "couldn't be added"}`
@@ -113,7 +118,7 @@ export function AddSourceDialog({
     setBusy(true);
     setError(null);
     try {
-      onAdded(await api.ingestUrl(url.trim()));
+      onAdded(await api.ingestUrl(url.trim(), selectedBaseId));
       onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : "That link couldn't be added.");

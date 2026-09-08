@@ -270,3 +270,17 @@ export type WorkspaceMemory = {
   last_used_at: string | null;
   created_at: string | null;
 };
+
+
+// ---- Knowledge bases -----------------------------------------------------
+/**
+ * One library of sources. A workspace can have several, and a chat attaches any number of
+ * them at once.
+ */
+export type KnowledgeBase = {
+  id: string;
+  name: string;
+  created_at: string | null;
+  /** How many current sources it holds — what makes a base recognisable in the switcher. */
+  source_count: number;
+};

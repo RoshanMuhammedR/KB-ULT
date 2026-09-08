@@ -4,6 +4,7 @@ import { create } from "zustand";
 import { countByState, sourceTitle } from "@kb/shared";
 import type { KnowledgeAsset } from "@/types/api";
 import * as api from "@/lib/api";
+import { useKnowledgeBasesStore } from "@/stores/knowledge-bases-store";
 import { follow, followAll, stopAll, unfollow } from "@/lib/ingestion-poller";
 import { toast } from "@/stores/toast-store";
 
@@ -27,6 +28,14 @@ type SourcesState = {
   loaded: boolean;
   /** First load. Idempotent, so StrictMode's double mount makes one request, not two. */
   ensureLoaded: () => Promise<void>;
+  /**
+   * Re-fetch for the currently selected knowledge base.
+   *
+   * Distinct from `ensureLoaded`, which is idempotent by design and would do nothing here.
+   * Switching base is exactly the case where the cached list is for the wrong corpus, so it
+   * has to be discarded rather than kept.
+   */
+  refresh: () => Promise<void>;
   /** Register a just-created source and start following its ingestion. */
   track: (asset: KnowledgeAsset) => void;
   upsert: (asset: KnowledgeAsset) => void;
@@ -73,11 +82,20 @@ export const useSourcesStore = create<SourcesState>()((set, get) => {
     loading: true,
     loaded: false,
 
+    refresh: async () => {
+      set({ loaded: false, loading: true });
+      inFlight = null;
+      await get().ensureLoaded();
+    },
+
     ensureLoaded: () => {
       if (get().loaded) return Promise.resolve();
       inFlight ??= (async () => {
         try {
-          const assets = await api.listAssets();
+          // Scoped to the selected base, like the thread list. Read at call time so this
+          // store does not re-render on every switcher change.
+          const { selectedId } = useKnowledgeBasesStore.getState();
+          const assets = await api.listAssets(selectedId);
           commit(assets);
           set({ loaded: true });
           // Resume following anything still in flight, e.g. after a reload.

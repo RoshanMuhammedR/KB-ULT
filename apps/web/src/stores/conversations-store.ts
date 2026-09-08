@@ -3,6 +3,7 @@
 import { create } from "zustand";
 import type { ConversationSummary } from "@/types/api";
 import * as api from "@/lib/api";
+import { useKnowledgeBasesStore } from "@/stores/knowledge-bases-store";
 
 type ConversationsState = {
   conversations: ConversationSummary[];
@@ -39,7 +40,10 @@ export const useConversationsStore = create<ConversationsState>()((set, get) => 
 
   refresh: async () => {
     try {
-      set({ conversations: await api.listConversations(), loaded: true });
+      // Scoped to the selected base. Read at call time rather than subscribed to, so this
+      // store does not re-render on every switcher change — the switcher calls `refresh()`.
+      const { selectedId } = useKnowledgeBasesStore.getState();
+      set({ conversations: await api.listConversations(selectedId), loaded: true });
     } catch {
       // The list is secondary to the thread you're reading; a failure here stays quiet
       // rather than throwing an error banner over a working conversation.

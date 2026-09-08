@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Citation, Conversation, Message } from "@/types/api";
 import * as api from "@/lib/api";
+import { useKnowledgeBasesStore } from "@/stores/knowledge-bases-store";
 
 const EMPTY: Conversation = {
   id: "",
@@ -127,7 +128,11 @@ export function useAsk({
             // the badge simply never appears, which is why nothing here is required.
             onVerified: (grounding) => patchAssistant({ grounding })
           },
-          controller.signal
+          controller.signal,
+          true,
+          // Every base the user has attached. Read at call time so asking does not
+          // re-subscribe this hook to the switcher.
+          useKnowledgeBasesStore.getState().attachedIds
         );
         setStreamingId(null);
         onSettled?.();

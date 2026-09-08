@@ -18,6 +18,7 @@ import type {
   AnswerTrace,
   GroundingReport,
   MemoryStatus,
+  KnowledgeBase,
   Rating,
   WorkspaceMemory
 } from "@/types/api";
@@ -140,8 +141,35 @@ export async function logout(): Promise<void> {
 }
 
 // ---- Documents / sources -------------------------------------------------
-export function listAssets(): Promise<KnowledgeAsset[]> {
-  return request<KnowledgeAsset[]>("/documents");
+/** Every knowledge base in this workspace. Creates the first one if there are none. */
+export function listKnowledgeBases(): Promise<KnowledgeBase[]> {
+  return request<KnowledgeBase[]>("/knowledge-bases");
+}
+
+export function createKnowledgeBase(name: string): Promise<KnowledgeBase> {
+  return request<KnowledgeBase>("/knowledge-bases", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name })
+  });
+}
+
+export function renameKnowledgeBase(id: string, name: string): Promise<KnowledgeBase> {
+  return request<KnowledgeBase>(`/knowledge-bases/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name })
+  });
+}
+
+/** Deletes the base and everything in it. Always confirm before calling. */
+export function deleteKnowledgeBase(id: string): Promise<void> {
+  return request<void>(`/knowledge-bases/${id}`, { method: "DELETE" });
+}
+
+export function listAssets(knowledgeBaseId?: string | null): Promise<KnowledgeAsset[]> {
+  const scope = knowledgeBaseId ? `?knowledge_base_id=${knowledgeBaseId}` : "";
+  return request<KnowledgeAsset[]>(`/documents${scope}`);
 }
 
 // Upload in three steps: ask for a signed URL, PUT the file straight to object storage,
@@ -150,21 +178,29 @@ export function listAssets(): Promise<KnowledgeAsset[]> {
 // storage. The multipart route below is kept as a fallback for the window where an older
 // API is still serving (a deploy in progress), and for anything that cannot reach storage
 // directly.
-export async function uploadFile(file: File): Promise<KnowledgeAsset> {
+export async function uploadFile(
+  file: File,
+  knowledgeBaseId?: string | null
+): Promise<KnowledgeAsset> {
   const contentType = file.type || "application/octet-stream";
   let ticket: UploadUrlResponse;
   try {
     ticket = await request<UploadUrlResponse>(
       "/documents/upload-url",
       // Sending the size means an over-limit file is refused now, not after uploading it.
-      jsonBody({ filename: file.name, content_type: contentType, size_bytes: file.size })
+      jsonBody({
+        filename: file.name,
+        content_type: contentType,
+        size_bytes: file.size,
+        knowledge_base_id: knowledgeBaseId ?? null
+      })
     );
   } catch (error) {
     // 404/405 means this API doesn't have the endpoint yet. A 400 is a real rejection (an
     // unsupported file type) and must surface as itself rather than being retried a second
     // way that will fail identically.
     if (error instanceof ApiError && (error.status === 404 || error.status === 405)) {
-      return uploadFileMultipart(file);
+      return uploadFileMultipart(file, knowledgeBaseId);
     }
     throw error;
   }
@@ -183,7 +219,7 @@ export async function uploadFile(file: File): Promise<KnowledgeAsset> {
     // from this origin, which is configuration living outside this repo. Rather than break
     // uploading entirely if that has not been set up, fall back to the route that goes
     // through the API — slower and memory-bound, but it works.
-    return uploadFileMultipart(file);
+    return uploadFileMultipart(file, knowledgeBaseId);
   }
   if (!put.ok) {
     throw new ApiError(put.status, "The file could not be uploaded. Please try again.");
@@ -195,14 +231,25 @@ export async function uploadFile(file: File): Promise<KnowledgeAsset> {
   );
 }
 
-export function uploadFileMultipart(file: File): Promise<KnowledgeAsset> {
+export function uploadFileMultipart(
+  file: File,
+  knowledgeBaseId?: string | null
+): Promise<KnowledgeAsset> {
   const formData = new FormData();
   formData.append("file", file);
+  // The base travels in the multipart body the browser is already sending.
+  if (knowledgeBaseId) formData.append("knowledge_base_id", knowledgeBaseId);
   return request<KnowledgeAsset>("/documents/upload", { method: "POST", body: formData });
 }
 
-export function ingestUrl(url: string): Promise<KnowledgeAsset> {
-  return request<KnowledgeAsset>("/documents/ingest-url", jsonBody({ url }));
+export function ingestUrl(
+  url: string,
+  knowledgeBaseId?: string | null
+): Promise<KnowledgeAsset> {
+  return request<KnowledgeAsset>(
+    "/documents/ingest-url",
+    jsonBody({ url, knowledge_base_id: knowledgeBaseId ?? null })
+  );
 }
 
 export function getAsset(assetId: string): Promise<KnowledgeAsset> {
@@ -246,8 +293,11 @@ export function askQuestion(question: string): Promise<ChatResponse> {
 }
 
 // ---- Conversations -------------------------------------------------------
-export function listConversations(): Promise<ConversationSummary[]> {
-  return request<ConversationSummary[]>("/conversations");
+export function listConversations(
+  knowledgeBaseId?: string | null
+): Promise<ConversationSummary[]> {
+  const scope = knowledgeBaseId ? `?knowledge_base_id=${knowledgeBaseId}` : "";
+  return request<ConversationSummary[]>(`/conversations${scope}`);
 }
 
 export function getConversation(conversationId: string): Promise<Conversation> {
@@ -325,7 +375,9 @@ export async function streamAnswer(
   question: string,
   handlers: StreamHandlers,
   signal?: AbortSignal,
-  retry = true
+  retry = true,
+  /** Bases to answer from. Omitted means whatever the thread is already attached to. */
+  knowledgeBaseIds?: string[] | null
 ): Promise<void> {
   const target = conversationId ?? "new";
   const headers = new Headers({ "Content-Type": "application/json", Accept: "text/event-stream" });
@@ -335,14 +387,18 @@ export async function streamAnswer(
   const response = await fetch(`${API_URL}/conversations/${target}/messages`, {
     method: "POST",
     headers,
-    body: JSON.stringify({ question }),
+    body: JSON.stringify(
+      knowledgeBaseIds?.length
+        ? { question, knowledge_base_ids: knowledgeBaseIds }
+        : { question }
+    ),
     cache: "no-store",
     signal
   });
 
   if (response.status === 401 && retry) {
     if (await tryRefresh()) {
-      return streamAnswer(conversationId, question, handlers, signal, false);
+      return streamAnswer(conversationId, question, handlers, signal, false, knowledgeBaseIds);
     }
     redirectToLogin();
     throw new ApiError(401, "Your session has expired. Please sign in again.");

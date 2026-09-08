@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { useState, type ReactNode } from "react";
 import { Brain, Library, Menu, MessagesSquare, Moon, Sun, UserRound, X } from "lucide-react";
 import { Logo, Pill, cn, useTheme } from "@kb/ui";
+import { BaseSwitcher } from "@/components/saga/base-switcher";
 import { useAuthStore } from "@/stores/auth-store";
 import { useSourcesStore } from "@/stores/sources-store";
 
@@ -27,6 +28,10 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   const nav = (
     <nav aria-label="Product" className="flex flex-col gap-1">
+      {/* Above the links, because everything below is scoped by it. */}
+      <div className="mb-2">
+        <BaseSwitcher onNavigate={() => setOpen(false)} />
+      </div>
       {links.map((link) => {
         // "Ask" also owns /c/[id], so a thread keeps the right nav item lit.
         const active = link.exact
