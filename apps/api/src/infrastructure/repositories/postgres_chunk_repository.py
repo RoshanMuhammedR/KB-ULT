@@ -8,7 +8,12 @@ from sqlalchemy.orm import aliased, joinedload
 
 from src.core.text import sanitize_json_for_storage, sanitize_text_for_storage
 from src.domain.entities import AssetStatus, Chunk, Embedding
-from src.infrastructure.database.models import ChunkModel, EmbeddingModel, KnowledgeAssetModel
+from src.infrastructure.database.models import (
+    ChunkModel,
+    EmbeddingModel,
+    KnowledgeAssetBaseModel,
+    KnowledgeAssetModel,
+)
 from src.infrastructure.repositories.mappers import chunk_to_domain
 from src.infrastructure.repositories.unit_of_work import commit_or_flush
 
@@ -204,11 +209,22 @@ class EmbeddingRepository:
             .join(EmbeddingModel, EmbeddingModel.chunk_id == ChunkModel.id)
             .join(KnowledgeAssetModel, KnowledgeAssetModel.id == ChunkModel.knowledge_asset_id)
             .options(joinedload(ChunkModel.asset))
-            # `IN`, not `==`: a chat can have several bases attached at once. Postgres
-            # plans this as a bitmap over the same `knowledge_base_id` index, so the HNSW
-            # scan on `embeddings` is unaffected — the vector index is reached through the
-            # join either way.
-            .where(KnowledgeAssetModel.knowledge_base_id.in_(knowledge_base_ids))
+            # Membership, not the column the asset was uploaded with. A source can sit in
+            # several bases, so "is this searchable right now" is a question about the
+            # attached set and the membership table, not about where the file first landed.
+            #
+            # `EXISTS` rather than a join: joining would multiply a chunk by its number of
+            # memberships, so a source in three attached bases would be retrieved three
+            # times and out-rank everything else purely for being well filed. Postgres runs
+            # this as a semi-join over `ix_asset_bases_base` and stops at the first hit.
+            .where(
+                select(KnowledgeAssetBaseModel.id)
+                .where(
+                    KnowledgeAssetBaseModel.knowledge_asset_id == KnowledgeAssetModel.id,
+                    KnowledgeAssetBaseModel.knowledge_base_id.in_(knowledge_base_ids),
+                )
+                .exists()
+            )
             .where(KnowledgeAssetModel.superseded_at.is_(None))
             .where(KnowledgeAssetModel.status == AssetStatus.READY.value)
         )

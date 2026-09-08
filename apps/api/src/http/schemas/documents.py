@@ -18,7 +18,12 @@ class IngestionJobSchema(BaseModel):
 
 class KnowledgeAssetSchema(BaseModel):
     id: UUID
+    #: The base this source was uploaded into. Kept as history and as what the library
+    #: groups by; `base_ids` is what actually decides where it is searchable.
     knowledge_base_id: UUID
+    #: Every base this source is a member of. Empty means it is filed nowhere — still in the
+    #: library, still readable, simply not searched.
+    base_ids: list[UUID] = []
     lineage_id: UUID
     version: int
     filename: str
@@ -101,3 +106,9 @@ class CompleteUploadRequest(BaseModel):
 
     filename: str = Field(min_length=1, max_length=512)
     content_type: str | None = Field(default=None, max_length=255)
+
+
+class AssetBaseMembershipRequest(BaseModel):
+    """Which base to put a source in, or take it out of."""
+
+    knowledge_base_id: UUID

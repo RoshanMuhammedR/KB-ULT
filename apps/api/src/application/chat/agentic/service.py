@@ -69,6 +69,7 @@ class AgenticChatService:
         memory_service=None,
         memory_queue=None,
         memory_distill_every_n_turns: int = 3,
+        follow_ups=None,
     ) -> None:
         self.kb_repo = kb_repo
         self.conversation_repo = conversation_repo
@@ -88,6 +89,9 @@ class AgenticChatService:
         self.memory_service = memory_service
         self.memory_queue = memory_queue
         self.memory_distill_every_n_turns = memory_distill_every_n_turns
+        # None disables suggestions, which is how the setting is expressed at the
+        # composition seam rather than as a flag checked on the answer path.
+        self.follow_ups = follow_ups
 
     async def ask_stream(
         self,
@@ -247,6 +251,16 @@ class AgenticChatService:
             )
             finalised = True
             yield ("verified", report.to_wire())
+
+            # After `verified`, because a suggestion is the least important thing here and
+            # must not delay the badge. Inside the `try`: unlike the work above, nobody is
+            # owed a suggestion, so a reader who has left loses nothing by not getting one.
+            if self.follow_ups is not None:
+                suggestions = await self.follow_ups.suggest(
+                    question, answer, assembled.citations
+                )
+                if suggestions:
+                    yield ("suggestions", suggestions)
         finally:
             if not finalised:
                 await self._finalise(

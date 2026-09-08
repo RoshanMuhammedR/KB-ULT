@@ -51,7 +51,9 @@ class KnowledgeBaseRepository:
         )).all()
         return [kb_to_domain(row) for row in rows]
 
-    async def create(self, name: str) -> KnowledgeBase:
+    async def create(
+        self, name: str, description: str | None = None, colour: str | None = None
+    ) -> KnowledgeBase:
         """Add a base. Raises `ValueError` when the name is already taken in this tenant.
 
         `uq_knowledge_base_tenant_name` is scoped to `(tenant_id, name)` rather than to
@@ -68,15 +70,32 @@ class KnowledgeBaseRepository:
         if existing is not None:
             raise ValueError(f"A knowledge base called {clean!r} already exists")
 
-        model = KnowledgeBaseModel(name=clean, owner_id=None)
+        model = KnowledgeBaseModel(
+            name=clean,
+            description=(description or "").strip() or None,
+            colour=(colour or "").strip() or None,
+            owner_id=None,
+        )
         self.db.add(model)
         await self._commit()
         await self.db.refresh(model)
         return kb_to_domain(model)
 
-    async def rename(self, knowledge_base_id: UUID, name: str) -> KnowledgeBase:
-        clean = name.strip()
-        if not clean:
+    async def update(
+        self,
+        knowledge_base_id: UUID,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        colour: str | None = None,
+    ) -> KnowledgeBase:
+        """Change a base's name, description or colour. Omitted fields are left alone.
+
+        `None` means "not supplied" and empty-string means "clear it", which is the only way
+        a client can remove a description it no longer wants without a separate route.
+        """
+        clean = name.strip() if name is not None else None
+        if name is not None and not clean:
             raise ValueError("A knowledge base needs a name")
 
         model = (await self.db.scalars(
@@ -85,16 +104,21 @@ class KnowledgeBaseRepository:
         if model is None:
             raise ValueError("Knowledge base not found")
 
-        clash = (await self.db.scalars(
-            select(KnowledgeBaseModel).where(
-                KnowledgeBaseModel.name == clean,
-                KnowledgeBaseModel.id != knowledge_base_id,
-            )
-        )).first()
-        if clash is not None:
-            raise ValueError(f"A knowledge base called {clean!r} already exists")
+        if clean is not None:
+            clash = (await self.db.scalars(
+                select(KnowledgeBaseModel).where(
+                    KnowledgeBaseModel.name == clean,
+                    KnowledgeBaseModel.id != knowledge_base_id,
+                )
+            )).first()
+            if clash is not None:
+                raise ValueError(f"A knowledge base called {clean!r} already exists")
+            model.name = clean
 
-        model.name = clean
+        if description is not None:
+            model.description = description.strip() or None
+        if colour is not None:
+            model.colour = colour.strip() or None
         await self._commit()
         await self.db.refresh(model)
         return kb_to_domain(model)

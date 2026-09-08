@@ -33,6 +33,7 @@ from src.infrastructure.repositories import (
 from src.infrastructure.database.session import get_db
 from src.application.ingestion.service import IngestionService
 from src.http.schemas.documents import (
+    AssetBaseMembershipRequest,
     AssetCitationSchema,
     CompleteUploadRequest,
     IngestUrlRequest,
@@ -71,6 +72,7 @@ async def _to_schema(
     file_storage: IFileStorage | None = None,
     job: IngestionJob | None = None,
     passage_count: int = 0,
+    base_ids: list[UUID] | None = None,
 ) -> KnowledgeAssetSchema:
     """Map an asset row to its wire schema.
 
@@ -97,6 +99,7 @@ async def _to_schema(
     return KnowledgeAssetSchema(
         id=asset.id,
         knowledge_base_id=asset.knowledge_base_id,
+        base_ids=base_ids or [],
         lineage_id=asset.lineage_id,
         version=asset.version,
         filename=asset.filename,
@@ -137,10 +140,20 @@ async def list_assets(
         knowledge_base_id = (await KnowledgeBaseRepository(db).ensure_default()).id
     assets = await KnowledgeAssetRepository(db).list_current(knowledge_base_id)
     # One grouped count for the whole list, rather than a query per row.
-    counts = await ChunkRepository(db).count_by_asset([asset.id for asset in assets])
+    asset_ids = [asset.id for asset in assets]
+    counts = await ChunkRepository(db).count_by_asset(asset_ids)
+    # One query for the whole page rather than one per row, the same batching the counts use.
+    memberships = await KnowledgeAssetRepository(db).bases_for(asset_ids)
     # No `file_storage`: the library list renders names and statuses, not file contents, so
     # it needs no signed URLs. Clicking through to a source calls /download for one.
-    return [await _to_schema(asset, passage_count=counts.get(asset.id, 0)) for asset in assets]
+    return [
+        await _to_schema(
+            asset,
+            passage_count=counts.get(asset.id, 0),
+            base_ids=memberships.get(asset.id, []),
+        )
+        for asset in assets
+    ]
 
 
 @router.get("/{asset_id}", response_model=KnowledgeAssetSchema)
@@ -156,7 +169,14 @@ async def get_asset(
         raise HTTPException(status_code=404, detail="KnowledgeAsset not found")
     job = await IngestionJobRepository(db).latest_for_asset(asset_id)
     counts = await ChunkRepository(db).count_by_asset([asset.id])
-    return await _to_schema(asset, file_storage, job, passage_count=counts.get(asset.id, 0))
+    memberships = await KnowledgeAssetRepository(db).bases_for([asset.id])
+    return await _to_schema(
+        asset,
+        file_storage,
+        job,
+        passage_count=counts.get(asset.id, 0),
+        base_ids=memberships.get(asset.id, []),
+    )
 
 
 @router.get("/{asset_id}/download")
@@ -324,6 +344,57 @@ async def upload_document(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return await _to_schema(asset, file_storage)
+
+
+@router.post("/{asset_id}/bases", response_model=KnowledgeAssetSchema)
+async def add_asset_to_base(
+    asset_id: UUID,
+    request: AssetBaseMembershipRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> KnowledgeAssetSchema:
+    """File an existing source in another base.
+
+    No re-upload, no re-ingestion: the passages and their embeddings already exist, and
+    membership is what decides where they are searchable. That is the whole point of the
+    join — one contract can be in Legal and in Onboarding without being embedded twice.
+
+    Adding it where it already is succeeds and changes nothing, so a double click is not an
+    error the user has to understand.
+    """
+    assets = KnowledgeAssetRepository(db)
+    asset = await assets.get(asset_id)
+    if asset is None:
+        raise HTTPException(status_code=404, detail="Source not found")
+    if await KnowledgeBaseRepository(db).get(request.knowledge_base_id) is None:
+        # Another tenant's base is "not found", never "forbidden": saying forbidden would
+        # confirm the id exists.
+        raise HTTPException(status_code=404, detail="Knowledge base not found")
+
+    await assets.add_to_base(asset_id, request.knowledge_base_id)
+    memberships = await assets.bases_for([asset_id])
+    return await _to_schema(asset, base_ids=memberships.get(asset_id, []))
+
+
+@router.delete("/{asset_id}/bases/{knowledge_base_id}", response_model=KnowledgeAssetSchema)
+async def remove_asset_from_base(
+    asset_id: UUID,
+    knowledge_base_id: UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> KnowledgeAssetSchema:
+    """Take a source out of one base. It stays in the others, and stays in the library.
+
+    Removing the last membership is allowed. A source filed nowhere is still the user's
+    file — readable, downloadable, simply not searched — and refusing would make deletion
+    the only way to unfile something.
+    """
+    assets = KnowledgeAssetRepository(db)
+    asset = await assets.get(asset_id)
+    if asset is None:
+        raise HTTPException(status_code=404, detail="Source not found")
+
+    await assets.remove_from_base(asset_id, knowledge_base_id)
+    memberships = await assets.bases_for([asset_id])
+    return await _to_schema(asset, base_ids=memberships.get(asset_id, []))
 
 
 @router.post("/upload-url", response_model=UploadUrlResponse)

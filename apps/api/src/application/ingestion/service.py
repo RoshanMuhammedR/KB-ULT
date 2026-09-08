@@ -501,6 +501,11 @@ class IngestionService:
                     version = previous.version + 1 if previous else 1
 
                     asset = await self.asset_repo.create_pending(build(lineage_id, version))
+                    # Inside the same transaction as the asset. A source with no membership
+                    # row is invisible to retrieval — it would ingest, embed, cost money and
+                    # then never be searched — so it must not be possible to have one
+                    # without the other.
+                    await self.asset_repo.add_to_base(asset.id, knowledge_base_id)
                     job = await self.job_repo.create(IngestionJob(asset_id=asset.id))
                     await self._enqueue(asset.id)
                     await self._record(asset, "queued", event_message, job_id=job.id)

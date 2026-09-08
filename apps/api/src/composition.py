@@ -317,6 +317,11 @@ def build_agentic_chat_service(db: AsyncSession, settings: Settings) -> AgenticC
         memory_service=build_memory_service(db, settings),
         memory_queue=_memory_queue(settings),
         memory_distill_every_n_turns=settings.memory_distill_every_n_turns,
+        follow_ups=(
+            FollowUpSuggester(fast, max_suggestions=settings.follow_ups_max)
+            if settings.follow_ups_enabled
+            else None
+        ),
     )
 
 

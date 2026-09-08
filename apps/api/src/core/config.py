@@ -147,6 +147,12 @@ class Settings(BaseSettings):
     # asymmetry is what keeps the prior from being a ratchet that only ever goes up.
     feedback_downvote_weight: float = 3.0
 
+    # Next questions to offer after an answer, generated from the passages that were
+    # actually retrieved. One extra fast-model call per answered question, made after the
+    # answer has streamed, so it costs money but not perceived latency.
+    follow_ups_enabled: bool = True
+    follow_ups_max: int = 3
+
     # --- Workspace memory ---
     # Facts that outlive a thread, injected as background into future prompts.
     #

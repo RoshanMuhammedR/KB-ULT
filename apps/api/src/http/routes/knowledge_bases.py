@@ -21,7 +21,7 @@ from src.domain.entities import KnowledgeBase
 from src.http.schemas.knowledge_bases import (
     CreateKnowledgeBaseRequest,
     KnowledgeBaseSchema,
-    RenameKnowledgeBaseRequest,
+    UpdateKnowledgeBaseRequest,
 )
 from src.infrastructure.database.session import get_db
 from src.infrastructure.repositories import KnowledgeAssetRepository, KnowledgeBaseRepository
@@ -33,6 +33,8 @@ def _schema(kb: KnowledgeBase, counts: dict[UUID, int] | None = None) -> Knowled
     return KnowledgeBaseSchema(
         id=kb.id,
         name=kb.name,
+        description=kb.description,
+        colour=kb.colour,
         created_at=kb.created_at,
         source_count=(counts or {}).get(kb.id, 0),
     )
@@ -79,7 +81,9 @@ async def create_knowledge_base(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> KnowledgeBaseSchema:
     try:
-        base = await KnowledgeBaseRepository(db).create(request.name)
+        base = await KnowledgeBaseRepository(db).create(
+            request.name, request.description, request.colour
+        )
     except ValueError as exc:
         # A duplicate name is the caller's to fix, not a server fault. 409 rather than 400:
         # the request is well-formed and conflicts with something that already exists.
@@ -88,13 +92,19 @@ async def create_knowledge_base(
 
 
 @router.patch("/{knowledge_base_id}", response_model=KnowledgeBaseSchema)
-async def rename_knowledge_base(
+async def update_knowledge_base(
     knowledge_base_id: UUID,
-    request: RenameKnowledgeBaseRequest,
+    request: UpdateKnowledgeBaseRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> KnowledgeBaseSchema:
+    """Change a base's name, description or colour. Omitted fields are left alone."""
     try:
-        base = await KnowledgeBaseRepository(db).rename(knowledge_base_id, request.name)
+        base = await KnowledgeBaseRepository(db).update(
+            knowledge_base_id,
+            name=request.name,
+            description=request.description,
+            colour=request.colour,
+        )
     except ValueError as exc:
         # "not found" and "name taken" are both ValueError from the repository; the message
         # distinguishes them and the status should too.

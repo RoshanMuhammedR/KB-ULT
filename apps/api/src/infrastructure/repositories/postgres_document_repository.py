@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.core.exceptions import DuplicateAssetVersionError
 from src.core.text import sanitize_json_for_storage, sanitize_text_for_storage
 from src.domain.entities import KnowledgeAsset
-from src.infrastructure.database.models import KnowledgeAssetModel
+from src.infrastructure.database.models import KnowledgeAssetBaseModel, KnowledgeAssetModel
 from src.infrastructure.repositories.mappers import asset_to_domain, documents_to_storage
 from src.infrastructure.repositories.unit_of_work import commit_or_flush
 
@@ -19,6 +19,61 @@ from src.infrastructure.repositories.unit_of_work import commit_or_flush
 class KnowledgeAssetRepository:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
+
+    async def bases_for(self, asset_ids: list[UUID]) -> dict[UUID, list[UUID]]:
+        """Which bases each source is a member of, in one query for a whole list."""
+        if not asset_ids:
+            return {}
+        rows = (await self.db.execute(
+            select(
+                KnowledgeAssetBaseModel.knowledge_asset_id,
+                KnowledgeAssetBaseModel.knowledge_base_id,
+            ).where(KnowledgeAssetBaseModel.knowledge_asset_id.in_(asset_ids))
+        )).all()
+        memberships: dict[UUID, list[UUID]] = {}
+        for asset_id, base_id in rows:
+            memberships.setdefault(asset_id, []).append(base_id)
+        return memberships
+
+    async def add_to_base(self, asset_id: UUID, knowledge_base_id: UUID) -> None:
+        """Put an existing source in another base. Adding it twice is a no-op.
+
+        An ORM insert so `before_flush` stamps tenancy; this happens on a click, not per
+        answer, so the round trip is not worth hand-writing tenancy for.
+        `uq_asset_base_membership` is the backstop.
+        """
+        existing = (await self.db.scalars(
+            select(KnowledgeAssetBaseModel).where(
+                KnowledgeAssetBaseModel.knowledge_asset_id == asset_id,
+                KnowledgeAssetBaseModel.knowledge_base_id == knowledge_base_id,
+            )
+        )).first()
+        if existing is not None:
+            return
+        self.db.add(
+            KnowledgeAssetBaseModel(
+                knowledge_asset_id=asset_id, knowledge_base_id=knowledge_base_id
+            )
+        )
+        await self._commit()
+
+    async def remove_from_base(self, asset_id: UUID, knowledge_base_id: UUID) -> None:
+        """Take a source out of one base. It stays in the others, and stays in the library.
+
+        Removing the last membership is allowed: a source belonging to no base is still the
+        user's file, still readable, and simply not searched. Refusing would make the only way
+        to unfile something a deletion.
+        """
+        row = (await self.db.scalars(
+            select(KnowledgeAssetBaseModel).where(
+                KnowledgeAssetBaseModel.knowledge_asset_id == asset_id,
+                KnowledgeAssetBaseModel.knowledge_base_id == knowledge_base_id,
+            )
+        )).first()
+        if row is None:
+            return
+        await self.db.delete(row)
+        await self._commit()
 
     async def count_by_knowledge_base(self) -> dict[UUID, int]:
         """Current source counts for every base in the tenant, in one query.
@@ -29,21 +84,40 @@ class KnowledgeAssetRepository:
         """
         rows = (await self.db.execute(
             select(
-                KnowledgeAssetModel.knowledge_base_id,
-                func.count(KnowledgeAssetModel.id),
+                KnowledgeAssetBaseModel.knowledge_base_id,
+                func.count(KnowledgeAssetBaseModel.knowledge_asset_id),
+            )
+            .join(
+                KnowledgeAssetModel,
+                KnowledgeAssetModel.id == KnowledgeAssetBaseModel.knowledge_asset_id,
             )
             .where(KnowledgeAssetModel.superseded_at.is_(None))
-            .group_by(KnowledgeAssetModel.knowledge_base_id)
+            .group_by(KnowledgeAssetBaseModel.knowledge_base_id)
         )).all()
         return {kb_id: int(count) for kb_id, count in rows}
 
-    async def list_current(self, knowledge_base_id: UUID) -> list[KnowledgeAsset]:
-        rows = (await self.db.scalars(
+    async def list_current(self, knowledge_base_id: UUID | None) -> list[KnowledgeAsset]:
+        """Sources in one base, or every source in the workspace when given None.
+
+        Membership, not the upload column: a source added to this base later belongs here as
+        much as one uploaded into it. `None` is the whole library, which is where a source
+        belonging to no base is still visible — unfiling something must not hide it.
+        """
+        statement = (
             select(KnowledgeAssetModel)
-            .where(KnowledgeAssetModel.knowledge_base_id == knowledge_base_id)
             .where(KnowledgeAssetModel.superseded_at.is_(None))
             .order_by(desc(KnowledgeAssetModel.created_at))
-        )).all()
+        )
+        if knowledge_base_id is not None:
+            statement = statement.where(
+                select(KnowledgeAssetBaseModel.id)
+                .where(
+                    KnowledgeAssetBaseModel.knowledge_asset_id == KnowledgeAssetModel.id,
+                    KnowledgeAssetBaseModel.knowledge_base_id == knowledge_base_id,
+                )
+                .exists()
+            )
+        rows = (await self.db.scalars(statement)).all()
         return [asset_to_domain(row) for row in rows]
 
     async def get(self, asset_id: UUID) -> KnowledgeAsset | None:

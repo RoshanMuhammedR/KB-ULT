@@ -117,6 +117,11 @@ class KnowledgeBaseModel(TenantScoped, Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # A token name — "amber", "slate" — not a hex value. What amber looks like is the
+    # client's business and differs between light and dark; storing the hex would freeze one
+    # theme's palette into the database.
+    colour: Mapped[str | None] = mapped_column(String(32), nullable=True)
     owner_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
@@ -465,6 +470,35 @@ class ConversationKnowledgeBaseModel(TenantScoped, Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     conversation_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False
+    )
+    knowledge_base_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("knowledge_bases.id", ondelete="CASCADE"), nullable=False
+    )
+    created_at = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class KnowledgeAssetBaseModel(TenantScoped, Base):
+    """Which knowledge bases a source is a member of.
+
+    `knowledge_assets.knowledge_base_id` still records the base a source was *uploaded into* —
+    NOT NULL, every row has one, and it is what the library groups by. This is membership on
+    top of that, so one contract can sit in Legal and in Onboarding without being ingested,
+    chunked and embedded twice.
+    """
+
+    __tablename__ = "knowledge_asset_bases"
+    __table_args__ = (
+        UniqueConstraint(
+            "knowledge_asset_id", "knowledge_base_id", name="uq_asset_base_membership"
+        ),
+        # Retrieval goes from a base to its assets on every query, so that is the direction
+        # that needs an index of its own; the unique constraint covers the other.
+        Index("ix_asset_bases_base", "knowledge_base_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    knowledge_asset_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("knowledge_assets.id", ondelete="CASCADE"), nullable=False
     )
     knowledge_base_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("knowledge_bases.id", ondelete="CASCADE"), nullable=False

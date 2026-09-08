@@ -73,6 +73,8 @@ def kb_to_domain(model: KnowledgeBaseModel) -> KnowledgeBase:
     return KnowledgeBase(
         id=model.id,
         name=model.name,
+        description=model.description,
+        colour=model.colour,
         owner_id=model.owner_id,
         created_at=model.created_at,
         updated_at=model.updated_at,
