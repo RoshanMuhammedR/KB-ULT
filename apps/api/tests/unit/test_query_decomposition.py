@@ -315,3 +315,61 @@ if __name__ == "__main__":
     import unittest
 
     unittest.main()
+
+
+class SiblingChildrenTest(IsolatedAsyncioTestCase):
+    """Two children of one section are one citation and two passages.
+
+    Collapsing them to a single citation is right for the reader. Dropping the sibling
+    entirely was not: it was invisible to the eval's recall — so a multi-hop case whose two
+    expected chunks shared a section was capped at 0.5 however well retrieval had done — and
+    invisible to `_record_signals`, so the learned prior never learned from it.
+    """
+
+    async def test_both_matched_children_survive_as_one_citation(self) -> None:
+        from src.application.chat.agentic.context import ContextAssembler
+        from src.domain.entities import Chunk
+        from src.retrieval.langchain.retrievers import PARENT_ID
+
+        parent_id = uuid4()
+        parent = Chunk(id=parent_id, text="The whole section, both halves of it.")
+
+        class _Repo:
+            async def list_parents(self, ids):
+                return {parent_id: parent}
+
+        siblings = [
+            Document(
+                page_content="first half",
+                metadata={CHUNK_ID: "child-a", PARENT_ID: str(parent_id), SCORE: 0.9},
+            ),
+            Document(
+                page_content="second half",
+                metadata={CHUNK_ID: "child-b", PARENT_ID: str(parent_id), SCORE: 0.8},
+            ),
+        ]
+
+        assembled = await ContextAssembler(_Repo(), token_budget=8000).assemble(siblings)
+
+        # One citation for the reader...
+        self.assertEqual(len(assembled.citations), 1)
+        # ...and both passages still accounted for.
+        self.assertEqual(
+            sorted(assembled.citations[0].matched_chunk_ids), ["child-a", "child-b"]
+        )
+        self.assertEqual(
+            sorted(assembled.wire_citations[0]["matched_chunk_ids"]), ["child-a", "child-b"]
+        )
+
+    async def test_an_unexpanded_document_still_reports_its_own_id(self) -> None:
+        from src.application.chat.agentic.context import ContextAssembler
+
+        class _Repo:
+            async def list_parents(self, ids):
+                return {}
+
+        lone = [Document(page_content="text", metadata={CHUNK_ID: "solo", SCORE: 0.9})]
+
+        assembled = await ContextAssembler(_Repo(), token_budget=8000).assemble(lone)
+
+        self.assertEqual(assembled.citations[0].matched_chunk_ids, ["solo"])

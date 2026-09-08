@@ -167,7 +167,17 @@ async def run_case(case: dict[str, Any], tenant_id: str, user_id: str) -> CaseRe
                 if event == "delta":
                     answer_parts.append(str(payload))
                 elif event == "citations":
-                    result.retrieved = [c["chunk_id"] for c in payload if c.get("chunk_id")]
+                    # `matched_chunk_ids`, not just `chunk_id`. Several children of one
+                    # section collapse into a single citation, so reading only the labelled
+                    # id made the siblings invisible — a multi-hop case whose two expected
+                    # chunks shared a section was capped at 0.5 recall however well retrieval
+                    # had actually done. Falls back for answers written before the field.
+                    result.retrieved = [
+                        chunk_id
+                        for citation in payload
+                        for chunk_id in (citation.get("matched_chunk_ids") or [citation.get("chunk_id")])
+                        if chunk_id
+                    ]
                 elif event == "done":
                     result.hops = payload.get("hops", 0)
                     result.exit_reason = payload.get("exit_reason", "")

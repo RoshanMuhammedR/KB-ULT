@@ -360,18 +360,19 @@ class AgenticChatService:
         for ordinal in report.cited_ordinals:
             if not 1 <= ordinal <= len(citations):
                 continue
-            chunk_id = citations[ordinal - 1].chunk_id
-            if not chunk_id:
-                continue
-            with suppress(ValueError, AttributeError):
-                events.append(
-                    ChunkSignalEvent(
-                        chunk_id=UUID(chunk_id),
-                        cited=1,
-                        supported=0 if ordinal in unsupported else 1,
-                        unsupported=1 if ordinal in unsupported else 0,
+            # Every passage behind the citation, not only the one it is labelled with. Two
+            # children of one section collapse into a single citation, and crediting only the
+            # first meant the sibling never earned a signal however often it was cited.
+            for chunk_id in citations[ordinal - 1].matched_chunk_ids:
+                with suppress(ValueError, AttributeError):
+                    events.append(
+                        ChunkSignalEvent(
+                            chunk_id=UUID(chunk_id),
+                            cited=1,
+                            supported=0 if ordinal in unsupported else 1,
+                            unsupported=1 if ordinal in unsupported else 0,
+                        )
                     )
-                )
 
         try:
             await self.signal_repo.record(events)

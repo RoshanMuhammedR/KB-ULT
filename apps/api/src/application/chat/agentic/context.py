@@ -28,6 +28,11 @@ from src.retrieval.langchain.retrievers import (
 
 logger = structlog.get_logger(__name__)
 
+#: Every child chunk of one section that matched this query. A citation names one section, but
+#: several of its children can be hits, and all of them are evidence — for the eval's recall
+#: and for the learned relevance prior. Before this they were dropped on the floor.
+MATCHED_CHUNK_IDS = "matched_chunk_ids"
+
 # Rough chars-per-token. Deliberately pessimistic: overestimating the budget truncates a
 # little early, underestimating it fails the generation call outright.
 _CHARS_PER_TOKEN = 3.5
@@ -46,11 +51,23 @@ class Citation:
     def chunk_id(self) -> str:
         return self.document.metadata.get(CHUNK_ID, "")
 
+    @property
+    def matched_chunk_ids(self) -> list[str]:
+        """Every passage behind this citation, not only the one it is labelled with."""
+        merged = self.document.metadata.get(MATCHED_CHUNK_IDS)
+        if merged:
+            return [chunk_id for chunk_id in merged if chunk_id]
+        return [self.chunk_id] if self.chunk_id else []
+
     def to_wire(self) -> dict:
         metadata = self.document.metadata
         return {
             "asset_id": metadata.get(ASSET_ID),
             "chunk_id": metadata.get(CHUNK_ID),
+            # Usually just `[chunk_id]`. Longer when several children of one section matched:
+            # they collapse to a single citation for the reader, and every one of them is
+            # still a passage that earned its place.
+            "matched_chunk_ids": metadata.get(MATCHED_CHUNK_IDS) or [metadata.get(CHUNK_ID)],
             "filename": metadata.get(FILENAME),
             "source_type": metadata.get("source_type"),
             "locator": metadata.get(LOCATOR),
@@ -135,6 +152,7 @@ class ContextAssembler:
 
         expanded: list[Document] = []
         seen_parents: set[str] = set()
+        by_parent: dict[str, Document] = {}
         for document in documents:
             parent_id = document.metadata.get(PARENT_ID)
             parent = parents.get(UUID(parent_id)) if parent_id else None
@@ -144,17 +162,32 @@ class ContextAssembler:
             # Two children of one section expand to the same parent. Send it once: the
             # second copy would consume budget to say what the first already said, and it
             # would give one section two citation numbers.
+            #
+            # But the other children are *recorded*, not forgotten. Dropping them outright
+            # meant a passage that matched alongside a sibling contributed nothing anywhere:
+            # it was invisible to the eval's recall (so a multi-hop case whose two expected
+            # chunks shared one section was capped at 0.5 however good retrieval was), and
+            # invisible to `_record_signals`, so the learned prior never learned from it.
             if parent_id in seen_parents:
+                by_parent[parent_id].metadata[MATCHED_CHUNK_IDS].append(
+                    document.metadata.get(CHUNK_ID)
+                )
                 continue
             seen_parents.add(parent_id)
-            expanded.append(
-                Document(
-                    page_content=parent.text,
-                    # The child's metadata is kept: its locator is where the *match* was,
-                    # which is what a citation should point the reader at.
-                    metadata={**document.metadata, "expanded_from_child": True},
-                )
+            block = Document(
+                page_content=parent.text,
+                # The child's metadata is kept: its locator is where the *match* was,
+                # which is what a citation should point the reader at.
+                metadata={
+                    **document.metadata,
+                    "expanded_from_child": True,
+                    # Every child of this section that matched. The first is the one the
+                    # locator and excerpt describe.
+                    MATCHED_CHUNK_IDS: [document.metadata.get(CHUNK_ID)],
+                },
             )
+            by_parent[parent_id] = block
+            expanded.append(block)
         return expanded
 
     @staticmethod
