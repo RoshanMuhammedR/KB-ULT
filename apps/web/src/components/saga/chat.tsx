@@ -981,7 +981,7 @@ export function CitationCard({
             {Math.round(citation.score * 100)}% relevance
           </span>
         </span>
-        <span className="mt-1.5 line-clamp-3 block text-[13px] leading-relaxed text-muted-foreground">
+        <span className="mt-1.5 line-clamp-3 block font-serif text-[13px] italic leading-relaxed text-muted-foreground">
           “{citation.excerpt}”
         </span>
       </span>
@@ -1020,40 +1020,68 @@ const SUGGESTIONS = [
 
 export function NewConversationEmpty({ onPick }: { onPick: (question: string) => void }) {
   const ready = useSourcesStore((state) => state.counts.ready);
+  const bases = useKnowledgeBasesStore((state) => state.bases);
+  const attachedIds = useKnowledgeBasesStore((state) => state.attachedIds);
+  const attached = bases.filter((base) => attachedIds.includes(base.id));
 
   if (ready === 0) {
     return (
-      <EmptyState
-        icon={MoreHorizontal}
-        title="Nothing to ask yet"
-        body="Your library is empty, so there's nothing for Saga to answer from. Add a PDF, a deck, some notes, a recording or a YouTube link to begin."
-        action={
-          <Link
-            href="/library"
-            className="inline-flex h-10 items-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary-active"
-          >
-            Add your first source
-          </Link>
-        }
-      />
+      <div className="mx-auto max-w-2xl px-5 py-16 md:py-24">
+        <EmptyState
+          icon={MoreHorizontal}
+          title="Nothing to ask yet"
+          body="Your library is empty, so there's nothing for Saga to answer from. Add a PDF, a deck, some notes, a recording or a YouTube link to begin."
+          action={
+            <Link
+              href="/library"
+              className="inline-flex h-10 items-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary-active"
+            >
+              Add your first source
+            </Link>
+          }
+        />
+      </div>
     );
   }
 
   return (
     <div className="mx-auto max-w-2xl px-5 py-16 text-center md:py-24">
-      <h2 className="text-display-lg">Ask your library.</h2>
+      <span
+        aria-hidden
+        className="mx-auto flex size-12 items-center justify-center rounded-2xl border border-primary-soft-border bg-primary-soft text-primary"
+      >
+        <Sparkles className="size-6" />
+      </span>
+      <h2 className="mt-5 text-display-lg">Ask your library.</h2>
       <p className="mx-auto mt-3 max-w-lg text-[15px] text-muted-foreground">
-        {ready} {ready === 1 ? "source is" : "sources are"} ready. Every answer comes
-        back with the passages behind it, and you can open any of them at the exact page or
-        timestamp.
+        {ready} {ready === 1 ? "source is" : "sources are"} ready. Every answer comes back with
+        the passages behind it, and you can open any of them at the exact page or timestamp.
       </p>
+
+      {/* Which bases, spelled out. Two identical-looking questions can get different answers
+          depending on what is attached, and this is the only moment before asking where that
+          is worth saying. */}
+      {attached.length > 0 ? (
+        <div className="mt-5 flex flex-wrap items-center justify-center gap-1.5">
+          {attached.map((base) => (
+            <span
+              key={base.id}
+              className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-2.5 py-1 text-[11px] font-medium"
+            >
+              <span aria-hidden className={cn("size-2 rounded-full", baseDotClass(base))} />
+              {base.name}
+            </span>
+          ))}
+        </div>
+      ) : null}
+
       <ul className="mt-8 space-y-2 text-left">
         {SUGGESTIONS.map((suggestion) => (
           <li key={suggestion}>
             <button
               type="button"
               onClick={() => onPick(suggestion)}
-              className="w-full rounded-md border border-border bg-card px-4 py-3 text-left text-[14px] transition-colors hover:border-border-strong"
+              className="w-full rounded-xl border border-border-soft bg-card px-4 py-3 text-left text-[14px] transition-colors hover:border-primary hover:bg-primary-soft/40"
             >
               {suggestion}
             </button>

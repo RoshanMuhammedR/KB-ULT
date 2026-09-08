@@ -93,7 +93,10 @@
   --radius: 0.5rem;
 
   --background: oklch(0.982 0.002 248);
-  --canvas-soft: oklch(1 0 0);
+  /* Recessed, not lighter. Every use is a surface set *into* something — a strip
+     inside a card, a dashed empty box, a code block — and cards here are pure white,
+     so a lighter tone would have nothing to sit against. */
+  --canvas-soft: oklch(0.963 0.003 229);
   --foreground: oklch(0.239 0 0);
   --card: oklch(1 0 0);
   --card-foreground: oklch(0.239 0 0);

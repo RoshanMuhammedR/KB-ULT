@@ -297,7 +297,7 @@ export default function SourceViewerPage() {
                       }`}
                     >
                       <span className="font-semibold">{formatLocator(item.locator)}</span>
-                      <span className="mt-1 line-clamp-2 block text-muted-foreground">
+                      <span className="mt-1 line-clamp-2 block font-serif italic text-muted-foreground">
                         “{item.excerpt}”
                       </span>
                     </button>
