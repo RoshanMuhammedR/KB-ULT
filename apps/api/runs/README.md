@@ -48,3 +48,19 @@ context did not cover it. Later runs separate that from a genuine invention; see
 
 `p50` above 13s is dominated by the cases that spend two hops. Nine of 33 exited `max_hops`,
 each paying a full extra retrieval, rerank and grade cycle before answering anyway.
+
+## On adding alternates after a run
+
+`single-backend-hosting` scored 0.00 for three runs while answering the question correctly
+and citing two passages that answer it as completely as the ones the dataset named — the
+repo's file map (`api/ ← the entire backend`) and the architecture summary (`/api/generate` —
+the *only* server code we own). Those were added as alternates.
+
+This is the kind of edit that can quietly become p-hacking, so the rule is: **add an
+alternate only after reading the passage and finding that it genuinely answers the
+question.** Not because it was retrieved, not because it moves a number. A passage that is
+merely topical is a miss and should stay a miss.
+
+`multi-ai-stack` scored 0.00 in the same runs and was left alone: it cited the pitch and a
+flow diagram, neither of which names the model or the gateway. That one is a real retrieval
+failure and the number should say so.

@@ -62,7 +62,9 @@
     "kind": "single_hop",
     "expected_chunks": [
       "734ed772-92c9-43de-8b50-37e5ea52807d",
-      "6d5a7d5d-4b9b-45e1-bb83-56eaabe5b315"
+      "6d5a7d5d-4b9b-45e1-bb83-56eaabe5b315",
+      "96285436-418b-40c7-8917-510be45bd3a0",
+      "92fe99e1-d43b-4360-9ebe-15cfb0bff583"
     ],
     "reference_answer": "Vercel serverless functions \u2014 one file, no infrastructure, deployed with the frontend and scaling to zero.",
     "expect_fallback": false,
