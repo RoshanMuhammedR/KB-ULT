@@ -73,7 +73,7 @@ from src.application.chat.agentic import (
     RetrievalLoop,
 )
 from src.processing.chunking import StructureAwareChunker
-from src.retrieval.langchain.query import QueryResolver, QueryRewriter, SufficiencyChecker
+from src.retrieval.langchain.query import QueryDecomposer, QueryResolver, QueryRewriter, SufficiencyChecker
 from src.retrieval.langchain.rerank import ScoringReranker
 from src.retrieval.retriever import Retriever
 
@@ -289,6 +289,9 @@ def build_agentic_chat_service(db: AsyncSession, settings: Settings) -> AgenticC
             prior_settings=settings,
         ),
         resolver=QueryResolver(fast),
+        # Runs on the fast model, and only for a question that looks compound — a cheap
+        # conjunction pre-check means an ordinary question pays nothing for this.
+        decomposer=QueryDecomposer(fast),
         # Memory's budget is SUBTRACTED here rather than added on top, so enabling memory
         # cannot push a previously-fitting answer over the context limit. The assembler is
         # deliberately not given the memory repository: it would let a remembered sentence

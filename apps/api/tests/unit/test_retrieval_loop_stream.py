@@ -21,12 +21,19 @@ class _Reranker:
 
 
 class _Sufficiency:
-    """Answers `sufficient` from a scripted list, one entry per hop."""
+    """Answers `sufficient` from a scripted list, one entry per hop.
+
+    `parts` is accepted and recorded rather than ignored: the real checker is asked which
+    numbered parts of a compound question went unanswered, and a fake that quietly dropped
+    the argument would hide the loop failing to pass it.
+    """
 
     def __init__(self, verdicts):
         self.verdicts = list(verdicts)
+        self.seen_parts: list[list[str] | None] = []
 
-    async def check(self, question, passages):
+    async def check(self, question, passages, parts=None):
+        self.seen_parts.append(parts)
         sufficient = self.verdicts.pop(0) if self.verdicts else True
         return Sufficiency(sufficient=sufficient, missing="" if sufficient else "the pricing table")
 

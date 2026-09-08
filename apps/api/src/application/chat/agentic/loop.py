@@ -70,10 +70,35 @@ class LoopState:
     #: themselves — memory is explicitly never cited, so the trace says it happened without
     #: making it look like a source.
     memories_used: int = 0
+    #: The sub-questions this question was split into, from `QueryDecomposer`. Empty means it
+    #: was never split, which is not the same as "it has no parts".
+    parts: list[str] = field(default_factory=list)
+    #: Parts the grader says the retrieved passages do not answer. Drives the second hop, and
+    #: tells the answer prompt what to admit it could not cover — previously the only signal
+    #: was `exit_reason == "sufficient"`, which claimed completeness on exactly the
+    #: half-answered questions.
+    uncovered_parts: list[str] = field(default_factory=list)
+    #: True when a sufficiency verdict was a fail-open fallback rather than a judgement.
+    #: Without it an unreachable grader is indistinguishable from approval.
+    grader_degraded: bool = False
 
     @property
     def hop_count(self) -> int:
         return len(self.hops)
+
+    @property
+    def complete(self) -> bool:
+        """Whether the answer can claim to cover the whole question.
+
+        Not `exit_reason == "sufficient"`. That was true on every multi-hop case in the
+        golden set — the grader approved after one hop with half the evidence — so
+        `INCOMPLETE_CONTEXT_RULE`, the one instruction that makes the model admit a gap, was
+        withheld from exactly the answers that needed it. A half-answer was delivered with
+        full confidence.
+        """
+        if self.uncovered_parts:
+            return False
+        return self.exit_reason == "sufficient"
 
     @property
     def found_anything(self) -> bool:
@@ -92,6 +117,11 @@ class LoopState:
             "exit_reason": self.exit_reason,
             "degraded": self.degraded,
             "memories_used": self.memories_used,
+            "parts": self.parts,
+            "uncovered_parts": self.uncovered_parts,
+            # Distinct from `degraded`, which is the reranker. A grader that fell open said
+            # "sufficient" without judging, and that must be visible in the trace and to eval.
+            "grader_degraded": self.grader_degraded,
         }
 
 
@@ -161,13 +191,35 @@ class RetrievalLoop:
         strategy = "initial"
         consecutive_empty = 0
 
+        # The parts this question is really asking. One entry for an ordinary question, so
+        # the loop below is the same shape either way. `state.parts` is set by the caller
+        # from `QueryDecomposer`; an empty list means "nobody split it", not "no parts".
+        parts = state.parts or [query]
+        # What hop 1 searches for. A compound question searches each part separately, because
+        # one embedding over two subjects lands between them and the lexical arm ANDs terms no
+        # single passage contains.
+        searches = list(parts)
+
         while state.hop_count < self.max_hops:
             hop = state.hop_count + 1
             yield (
                 "status",
                 {"stage": "searching", "hop": hop, "of": self.max_hops, "strategy": strategy},
             )
-            candidates = await self._fetch(query, lexical_query, knowledge_base_id)
+            # One retrieval per outstanding part, merged. For a single-part question this is
+            # exactly the one call it always was.
+            candidates = []
+            seen_candidates: set[str] = set()
+            for search in searches:
+                # The keyword hint belongs to the whole question, so it is only meaningful
+                # when the whole question is what is being searched.
+                lexical = lexical_query if len(searches) == 1 else search
+                for document in await self._fetch(search, lexical, knowledge_base_id):
+                    key = document.metadata.get(CHUNK_ID) or document.page_content[:80]
+                    if key in seen_candidates:
+                        continue
+                    seen_candidates.add(key)
+                    candidates.append(document)
 
             yield (
                 "status",
@@ -188,8 +240,15 @@ class RetrievalLoop:
                 {"stage": "grading", "hop": hop, "of": self.max_hops, "kept": len(state.documents)},
             )
             verdict = await self.sufficiency.check(
-                state.question, [d.page_content for d in state.documents]
+                state.question, [d.page_content for d in state.documents], parts
             )
+            # Recorded on the state, not just the trace: the answer prompt reads it to decide
+            # whether to admit a gap, and `exit_reason == "sufficient"` was previously the
+            # only signal — which said "complete" on exactly the half-answered questions.
+            state.uncovered_parts = [
+                parts[i - 1] for i in verdict.uncovered_parts if 1 <= i <= len(parts)
+            ]
+            state.grader_degraded = state.grader_degraded or verdict.degraded
             state.hops.append(
                 HopRecord(
                     hop=hop,
@@ -218,8 +277,20 @@ class RetrievalLoop:
                 state.exit_reason = "max_hops"
                 break
 
-            query, strategy = await self.rewriter.rewrite(query)
-            lexical_query = query
+            if state.uncovered_parts:
+                # Search precisely what the grader said is missing. The old path rewrote the
+                # whole question with a "decompose" strategy that kept the first clause and
+                # threw the rest away — so hop 2 re-searched the half hop 1 already had.
+                searches = list(state.uncovered_parts)
+                query = searches[0]
+                strategy = "uncovered"
+            else:
+                query, strategy = await self.rewriter.rewrite(query)
+                searches = [query]
+                # Not `lexical_query = query`: on the `hyde` branch `query` is now an invented
+                # 2-4 sentence passage, and `websearch_to_tsquery` ANDs every term in it, so
+                # the lexical arm was guaranteed to return nothing on every second hop.
+                lexical_query = keywords or query
             logger.info("retrieval_rewrite", hop=hop, strategy=strategy, query=query)
             yield (
                 "status",

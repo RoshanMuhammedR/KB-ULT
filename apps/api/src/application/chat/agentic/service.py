@@ -60,6 +60,7 @@ class AgenticChatService:
         chunk_repo,
         loop: RetrievalLoop,
         resolver: QueryResolver,
+        decomposer=None,
         assembler: ContextAssembler,
         grounding: GroundingChecker,
         llm_provider,
@@ -74,6 +75,9 @@ class AgenticChatService:
         self.chunk_repo = chunk_repo
         self.loop = loop
         self.resolver = resolver
+        # None means "never split a question", which is how the old single-retrieval
+        # behaviour is expressed rather than as a flag checked on the answer path.
+        self.decomposer = decomposer
         self.assembler = assembler
         self.grounding = grounding
         self.llm_provider = llm_provider
@@ -134,10 +138,18 @@ class AgenticChatService:
         if self.memory_service is not None:
             memories = await self.memory_service.recall(knowledge_base.id, resolved.keywords)
 
+        # Split before retrieving, not after a failed hop. A compound question retrieves for
+        # neither half otherwise: the embedding lands between the two subjects and the lexical
+        # arm ANDs terms no single passage contains.
+        parts = [resolved.query]
+        if self.decomposer is not None:
+            parts = await self.decomposer.decompose(resolved.query)
+
         state = LoopState(
             question=question,
             resolved_query=resolved.query,
             memories_used=len(memories),
+            parts=parts,
         )
         async for event in self.loop.stream(state, knowledge_base.id, keywords=resolved.keywords):
             yield event
@@ -160,9 +172,11 @@ class AgenticChatService:
             resolved.query,
             assembled.blocks,
             history=turns,
-            # `max_hops` means the loop ran out of attempts with context it never judged
-            # sufficient — the answer should say so rather than imply completeness.
-            complete=state.exit_reason == "sufficient",
+            # "Every part of the question is covered", not "the grader approved". The grader
+            # approved every multi-hop question in the golden set after one hop with half the
+            # evidence, which withheld the admit-the-gap rule from exactly the answers that
+            # needed it. See `LoopState.complete`.
+            complete=state.complete,
             memories=[memory.content for memory in memories] or None,
         )
 
