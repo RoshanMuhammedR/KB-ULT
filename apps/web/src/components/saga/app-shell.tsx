@@ -83,9 +83,12 @@ function TopBar({ pathname }: { pathname: string }) {
           </span>
         </Link>
 
+        {/* Scrolls rather than wraps or overflows the header. Three tabs plus four controls
+            do not fit a phone, and a horizontally scrolling *page* is the worst of the ways
+            that can go. */}
         <nav
           aria-label="Sections"
-          className="flex min-w-0 items-center gap-1 rounded-xl bg-muted p-1"
+          className="flex min-w-0 items-center gap-1 overflow-x-auto rounded-xl bg-muted p-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
         >
           {TABS.map((tab) =>
             tab.href === "/" ? (
@@ -108,7 +111,9 @@ function TopBar({ pathname }: { pathname: string }) {
       </div>
 
       <div className="flex shrink-0 items-center gap-2">
-        <IconButton label="Take the tour" onClick={startTour}>
+        {/* Hidden on a phone, where the header has room for four controls and there are
+            six. The tour is the one a returning user needs least. */}
+        <IconButton label="Take the tour" onClick={startTour} className="hidden sm:inline-flex">
           <HelpCircle className="size-4" aria-hidden />
         </IconButton>
 
@@ -250,10 +255,12 @@ function ChatTab({ active }: { active: boolean }) {
 function IconButton({
   label,
   onClick,
+  className,
   children
 }: {
   label: string;
   onClick: () => void;
+  className?: string;
   children: ReactNode;
 }) {
   return (
@@ -262,7 +269,10 @@ function IconButton({
       onClick={onClick}
       title={label}
       aria-label={label}
-      className="rounded-full border border-border p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+      className={cn(
+        "rounded-full border border-border p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground",
+        className
+      )}
     >
       {children}
     </button>

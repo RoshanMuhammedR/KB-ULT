@@ -4,7 +4,7 @@ import { useCallback } from "react";
 import {
   ChatError,
   Composer,
-  ConversationList,
+  ThreadsPanel,
   NewConversationEmpty,
   Thread
 } from "@/components/saga/chat";
@@ -35,10 +35,8 @@ export default function AskPage() {
   const started = conversation.messages.length > 0;
 
   return (
-    <div className="flex h-full min-h-0 lg:grid lg:grid-cols-[280px_1fr]">
-      <div className="hidden min-h-0 lg:block">
-        <ConversationList />
-      </div>
+    <div className="flex h-full min-h-0 flex-col lg:grid lg:grid-cols-[280px_1fr]">
+      <ThreadsPanel />
 
       <div className="flex min-h-0 w-full flex-col">
         <div className="min-h-0 flex-1 overflow-y-auto">

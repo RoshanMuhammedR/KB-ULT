@@ -4,7 +4,7 @@ import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { Pencil, Trash2 } from "lucide-react";
 import { Button, ConfirmDialog, Input, Skeleton } from "@kb/ui";
-import { ChatError, Composer, ConversationList, Thread } from "@/components/saga/chat";
+import { ChatError, Composer, ThreadsPanel, Thread } from "@/components/saga/chat";
 import type { Conversation } from "@/types/api";
 import * as api from "@/lib/api";
 import { useConversationsStore } from "@/stores/conversations-store";
@@ -91,10 +91,8 @@ export default function ConversationPage() {
   }
 
   return (
-    <div className="flex h-full min-h-0 lg:grid lg:grid-cols-[280px_1fr]">
-      <div className="hidden min-h-0 lg:block">
-        <ConversationList activeId={conversationId} />
-      </div>
+    <div className="flex h-full min-h-0 flex-col lg:grid lg:grid-cols-[280px_1fr]">
+      <ThreadsPanel activeId={conversationId} />
 
       <div className="flex min-h-0 w-full flex-col">
         <header className="flex shrink-0 items-center gap-2 border-b border-border-soft bg-card px-5 py-3 md:px-8">

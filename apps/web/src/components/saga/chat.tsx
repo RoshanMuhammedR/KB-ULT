@@ -13,6 +13,7 @@ import {
   Paperclip,
   Pencil,
   RefreshCw,
+  PanelLeft,
   Search,
   Send,
   Sparkles,
@@ -56,7 +57,58 @@ import { toast } from "@/stores/toast-store";
 
 /* ----------------------------- Conversation list ---------------------------- */
 
-export function ConversationList({ activeId }: { activeId?: string }) {
+/**
+ * The thread list, in whichever form the screen has room for.
+ *
+ * A column beside the conversation on a wide screen; a button and a drawer below that. The
+ * tab bar replaced the old hamburger nav, and without this there is no route to an existing
+ * thread on a phone at all — the list is not decoration, it is the only way back.
+ */
+export function ThreadsPanel({ activeId }: { activeId?: string }) {
+  const [open, setOpen] = useState(false);
+  const count = useConversationsStore((state) => state.conversations.length);
+
+  return (
+    <>
+      <div className="hidden min-h-0 lg:block">
+        <ConversationList {...(activeId ? { activeId } : {})} />
+      </div>
+
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="flex shrink-0 items-center gap-2 border-b border-border-soft bg-card px-4 py-2.5 text-left text-[13px] font-medium text-muted-foreground lg:hidden"
+      >
+        <PanelLeft className="size-4" aria-hidden />
+        Conversations
+        {count > 0 ? <span className="text-muted-soft">({count})</span> : null}
+      </button>
+
+      {open ? (
+        <div className="fixed inset-0 z-40 flex lg:hidden">
+          <button
+            type="button"
+            aria-label="Close conversations"
+            className="absolute inset-0 cursor-default bg-foreground/30"
+            onClick={() => setOpen(false)}
+          />
+          <div className="relative z-10 flex w-[86%] max-w-80 flex-col bg-card shadow-2xl">
+            <ConversationList {...(activeId ? { activeId } : {})} onNavigate={() => setOpen(false)} />
+          </div>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+export function ConversationList({
+  activeId,
+  onNavigate
+}: {
+  activeId?: string;
+  /** Called when a link inside is followed, so a drawer holding this can close. */
+  onNavigate?: () => void;
+}) {
   const conversations = useConversationsStore((state) => state.conversations);
   const loading = useConversationsStore((state) => state.loading);
   const rename = useConversationsStore((state) => state.rename);
@@ -103,6 +155,7 @@ export function ConversationList({ activeId }: { activeId?: string }) {
       <div className="space-y-3 border-b border-border-soft p-3">
         <Link
           href="/"
+          onClick={onNavigate}
           className="flex items-center justify-center gap-2 rounded-xl bg-primary px-3 py-2 text-sm font-medium text-primary-foreground shadow-xs transition-colors hover:bg-primary-active"
         >
           <MessageSquarePlus className="size-4" aria-hidden /> New conversation
@@ -159,6 +212,7 @@ export function ConversationList({ activeId }: { activeId?: string }) {
                 ) : (
                   <Link
                     href={`/c/${conversation.id}`}
+                    onClick={onNavigate}
                     className={cn(
                       "block rounded-xl px-3 py-2.5 pr-16 transition-colors",
                       activeId === conversation.id
