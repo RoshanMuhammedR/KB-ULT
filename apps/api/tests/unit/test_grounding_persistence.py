@@ -95,11 +95,26 @@ class CitedOrdinalsTest(IsolatedAsyncioTestCase):
         self.assertEqual(report.unsupported_ordinals, [2])
 
     def test_cited_ordinals_stays_out_of_the_wire_shape(self) -> None:
-        """It is a server-side signal, and this dict is written to a row on every answer."""
+        """It is a server-side signal, and this dict is written to a row on every answer.
+
+        The set is pinned rather than just asserting the absence, because this dict is both
+        the SSE frame and the stored `messages.grounding` column — anything added here is
+        paid for on every answer and in every row, so a new key should be a decision rather
+        than a drift.
+        """
         report = GroundingReport(checked=1, supported=1, cited_ordinals=[1])
 
         self.assertEqual(
-            set(report.to_wire()), {"verified", "checked", "supported", "unsupported", "invalid"}
+            set(report.to_wire()),
+            {
+                "verified",
+                "checked",
+                "supported",
+                "unsupported",
+                "invalid",
+                "uncited_sentences",
+                "unchecked",
+            },
         )
 
 

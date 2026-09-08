@@ -93,6 +93,12 @@ class CaseResult:
     checked: int = 0
     supported: int = 0
     unsupported: int = 0
+    #: Sentences that asserted something and cited nothing. Not a verdict — an uncited
+    #: sentence may be true — but it is the shape a confident invention takes, so it is
+    #: reported rather than folded into a rate.
+    uncited_sentences: int = 0
+    #: Claims the grounding judge could not be reached for.
+    unchecked: int = 0
 
     @property
     def recall(self) -> float | None:
@@ -175,8 +181,15 @@ async def run_case(case: dict[str, Any], tenant_id: str, user_id: str) -> CaseRe
                     result.unsupported = len(payload.get("unsupported", [])) + len(
                         payload.get("invalid", [])
                     )
-                    if result.checked:
-                        result.verified = bool(payload.get("verified"))
+                    result.uncited_sentences = payload.get("uncited_sentences", 0)
+                    result.unchecked = payload.get("unchecked", 0)
+                    # `verified` is now tri-state on the wire: None means nothing was
+                    # checkable. Read it straight rather than re-deriving it from `checked`
+                    # — the old `if result.checked:` guard is exactly why the harness could
+                    # not see that the server was reporting `verified: True` for answers it
+                    # had never checked. A harness that repairs the value it is measuring
+                    # cannot measure it.
+                    result.verified = payload.get("verified")
             result.answer = "".join(answer_parts)
     except Exception as exc:  # noqa: BLE001 - one bad case must not end the run
         result.error = f"{type(exc).__name__}: {exc}"
@@ -255,6 +268,19 @@ def summarise(results: list[CaseResult], cases: list[dict]) -> dict[str, Any]:
         # one that is collapsing onto a workspace's greatest hits pushes it up while recall
         # holds steady, which is exactly the case no other metric here would catch.
         "citation_concentration": _citation_concentration(results),
+        # Answers the server reported a positive verdict on without checking anything. Must
+        # be 0. It is a self-check on the harness as much as on the pipeline: the metric
+        # exists because the previous version of this file silently corrected the value it
+        # was supposed to be measuring.
+        "verified_without_checking": sum(
+            1 for r in results if r.verified is True and r.checked == 0
+        ),
+        # Sentences across the run that asserted something and cited nothing. Read it, do not
+        # gate on it: some uncited sentences are honest refusals. A jump is worth looking at.
+        "uncited_sentences": sum(r.uncited_sentences for r in results),
+        # Claims lost to an unreachable judge. A non-zero value means grounded_rate is
+        # measured over less than the whole run and should be read with that in mind.
+        "unchecked_claims": sum(r.unchecked for r in results),
         # Answers that made no cited claim at all. A refusal looks like this and so does an
         # answer written from the model's own knowledge, so this is a number to read rather
         # than gate on: a rise means either more honest refusals or more uncited assertion,
@@ -325,6 +351,8 @@ def compare(current: dict, baseline: dict) -> list[str]:
         ("mrr", True),
         ("grounded_rate", True),
         ("citation_concentration", False),
+        ("verified_without_checking", False),
+        ("uncited_sentences", False),
         ("refused_without_falling_back", False),
         ("unsupported_citations", False),
         ("p50_latency_ms", False),

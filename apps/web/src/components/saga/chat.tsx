@@ -688,7 +688,26 @@ function TraceRow({ label, detail }: { label: string; detail: string }) {
  * before the report arrived, the answer stands on its citations as it always did.
  */
 function VerifiedBadge({ grounding }: { grounding?: GroundingReport | null }) {
-  if (!grounding || grounding.checked === 0) return null;
+  if (!grounding) return null;
+
+  const unsupported = grounding.unsupported.length + grounding.invalid.length;
+
+  // An answer citing only invented ordinals has `checked === 0` — nothing could be checked,
+  // because none of the numbers pointed at a real passage. That is the most alarming outcome
+  // this checker can produce, and the old `checked === 0` guard silently swallowed it.
+  if (grounding.invalid.length > 0) {
+    return (
+      <Pill>
+        <AlertTriangle className="size-3" aria-hidden />
+        {grounding.invalid.length} citation{grounding.invalid.length === 1 ? "" : "s"} point at
+        no source
+      </Pill>
+    );
+  }
+
+  // Nothing checkable: the answer cited nothing, or the judge was unreachable. Say nothing
+  // rather than imply a verdict in either direction.
+  if (grounding.checked === 0) return null;
 
   if (grounding.verified) {
     return (
@@ -698,7 +717,6 @@ function VerifiedBadge({ grounding }: { grounding?: GroundingReport | null }) {
     );
   }
 
-  const unsupported = grounding.unsupported.length + grounding.invalid.length;
   return (
     <Pill>
       <Info className="size-3" aria-hidden />

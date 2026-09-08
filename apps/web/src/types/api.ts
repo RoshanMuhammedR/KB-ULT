@@ -234,13 +234,23 @@ export type AnswerTrace = {
  * of the response.
  */
 export type GroundingReport = {
-  verified: boolean;
+  /**
+   * Three states, not two. `null` means nothing was checkable — the answer cited nothing, or
+   * the judge could not be reached. Previously this was a bare boolean and an unchecked
+   * answer reported `true`, which the badge only avoided showing because of a separate
+   * `checked === 0` guard.
+   */
+  verified: boolean | null;
   checked: number;
   supported: number;
   /** Ordinals whose passage did not support the claim. */
   unsupported: number[];
   /** Ordinals the answer cited that were never offered to it. */
   invalid: number[];
+  /** Sentences that asserted something and cited nothing. Not verified either way. */
+  uncited_sentences?: number;
+  /** Claims the judge could not be reached for. Absent on answers written before this. */
+  unchecked?: number;
 };
 
 // ---- Workspace memory ----------------------------------------------------
