@@ -11,6 +11,15 @@ measurements. Run it before a change and after, and keep the numbers.
     python scripts/eval.py --dataset scripts/datasets/golden.json --tenant <uuid> --user <uuid>
     python scripts/eval.py ... --out runs/after.json --baseline runs/before.json
     python scripts/eval.py ... --fail-under recall_at_k=0.7,grounded_rate=0.9
+    python scripts/eval.py ... --repeat 3 --out runs/baseline.json    # with its own spread
+
+**Use `--repeat` for anything you intend to compare against.** Four LLM components sit in the
+answer path - resolution, decomposition, reranking, grading - and each may decide differently
+on identical input. Three single runs of this dataset read 0.88, 0.94 and 0.88 for
+`recall_at_k` with changes landing in between, and there was no way to tell which of those
+moves were caused by the changes. A run recorded with `--repeat` carries its standard
+deviation, and `--baseline` then marks any smaller delta as `noise` instead of letting it be
+read as a result.
 
 Two flags exist specifically to judge the learned relevance prior, which cannot be evaluated
 by running the same questions repeatedly — doing that measures how well it memorised them:
@@ -351,6 +360,62 @@ def _distribution(values: list[Any]) -> dict[str, int]:
     return dict(sorted(counts.items()))
 
 
+def aggregate(summaries: list[dict]) -> dict:
+    """Fold repeated runs of the same dataset into one summary carrying its own spread.
+
+    **The harness needs this to be worth trusting.** Four LLM components sit in the answer
+    path — resolution, decomposition, reranking, grading — and each is free to decide
+    differently on identical input. Across three single runs of this dataset `recall_at_k`
+    read 0.88, 0.94 and 0.88 with changes landing in between, and there was no way to tell
+    which of those moves were caused by the changes and which were the pipeline disagreeing
+    with itself. A harness that cannot separate a result from its noise cannot settle the
+    question it exists to settle.
+
+    Numeric metrics become `{mean, min, max, stdev, runs}`. Everything else — distributions,
+    per-kind blocks, case counts — is taken from the first run, since those are structural
+    rather than measured.
+
+    `stdev` is the population standard deviation over the runs, which is what `compare` reads
+    to decide whether a delta is bigger than the pipeline's own disagreement with itself.
+    """
+    if not summaries:
+        return {}
+    if len(summaries) == 1:
+        return summaries[0]
+
+    merged = dict(summaries[0])
+    merged["runs"] = len(summaries)
+
+    for metric in summaries[0]:
+        values = [s.get(metric) for s in summaries]
+        if any(not isinstance(v, (int, float)) or isinstance(v, bool) for v in values):
+            continue
+        merged[metric] = {
+            "mean": round(statistics.fmean(values), 4),
+            "min": min(values),
+            "max": max(values),
+            # Population, not sample: these are all the runs there were, not a sample of some
+            # larger set of runs.
+            "stdev": round(statistics.pstdev(values), 4),
+            "runs": len(values),
+        }
+    return merged
+
+
+def _value(metric_value):
+    """The number to compare, whether the run recorded a bare value or an aggregate."""
+    if isinstance(metric_value, dict):
+        return metric_value.get("mean")
+    return metric_value
+
+
+def _noise(metric_value) -> float:
+    """How much this metric moved between identical runs. Zero when unknown."""
+    if isinstance(metric_value, dict):
+        return metric_value.get("stdev") or 0.0
+    return 0.0
+
+
 def compare(current: dict, baseline: dict) -> list[str]:
     """Say plainly which way each number moved. A change that improves recall and doubles
     p95 latency is a trade-off to decide on, not a regression to block — so this reports
@@ -370,12 +435,22 @@ def compare(current: dict, baseline: dict) -> list[str]:
         ("answered_when_it_should_not_have", False),
         ("fell_back_when_it_should_not_have", False),
     ):
-        now, before = current.get(metric), baseline.get(metric)
+        now = _value(current.get(metric))
+        before = _value(baseline.get(metric))
         if now is None or before is None:
             continue
+
         delta = now - before
+        # The noise floor: how much this metric moves between identical runs. A change
+        # smaller than the pipeline's own disagreement with itself is not a result, however
+        # much one would like it to be. Both sides contribute, so a baseline taken with
+        # `--repeat` protects every later comparison against it.
+        floor = max(_noise(current.get(metric)), _noise(baseline.get(metric)))
+
         if abs(delta) < 1e-9:
             marker = "="
+        elif abs(delta) <= floor:
+            marker = f"noise (+/-{floor:g})"
         elif (delta > 0) == higher_is_better:
             marker = "better"
         else:
@@ -414,7 +489,10 @@ def check_thresholds(summary: dict[str, Any], thresholds: dict[str, float]) -> l
         if metric not in summary:
             failures.append(f"  {metric:38} not reported by this run")
             continue
-        value = summary[metric]
+        # `_value` unwraps an aggregate from `--repeat`. Gating on the mean is the point of
+        # repeating: a run that scrapes over the bar by luck should not pass, and one that
+        # dips under it by luck should not fail.
+        value = _value(summary[metric])
         if value is None:
             failures.append(f"  {metric:38} not measured (floor {floor})")
         elif value < floor:
@@ -471,6 +549,16 @@ async def main() -> int:
     parser.add_argument("--out", type=Path, help="Write the summary here for later comparison")
     parser.add_argument("--baseline", type=Path, help="Compare against a previous summary")
     parser.add_argument(
+        "--repeat",
+        type=int,
+        default=1,
+        metavar="N",
+        help="Run the whole dataset N times and report each metric's mean and spread. Four "
+        "LLM components sit in the answer path, so identical input does not give identical "
+        "output; without this, no delta smaller than the pipeline's own disagreement with "
+        "itself can honestly be attributed to a change.",
+    )
+    parser.add_argument(
         "--warm",
         type=int,
         default=0,
@@ -518,10 +606,25 @@ async def main() -> int:
             f"concentration={pass_summary['citation_concentration']}\n"
         )
 
-    print(f"Running {len(scored_cases)} cases...\n")
-    results = await run_all(scored_cases, args.tenant, args.user)
+    summaries = []
+    for attempt in range(max(1, args.repeat)):
+        label = (
+            f"Run {attempt + 1}/{args.repeat} of {len(scored_cases)} cases..."
+            if args.repeat > 1
+            else f"Running {len(scored_cases)} cases..."
+        )
+        print(label + "\n")
+        # Only the first run prints per-case lines; the rest would bury the summary.
+        results = await run_all(scored_cases, args.tenant, args.user, quiet=attempt > 0)
+        summaries.append(summarise(results, scored_cases))
+        if args.repeat > 1:
+            latest = summaries[-1]
+            print(
+                f"  recall={latest['recall_at_k']} mrr={latest['mrr']} "
+                f"grounded={latest['grounded_rate']} p50={latest['p50_latency_ms']}\n"
+            )
 
-    summary = summarise(results, scored_cases)
+    summary = aggregate(summaries)
     print("\n" + json.dumps(summary, indent=2))
 
     if args.out:
