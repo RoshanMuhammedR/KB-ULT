@@ -145,6 +145,17 @@ def build_hybrid_retriever(
     `ts_rank_cd` is unbounded and corpus-dependent, so any attempt to normalise them into a
     common scale is an invented mapping that drifts as the corpus grows. Ranks need no such
     mapping, and an item found by *both* arms outranks one found brilliantly by only one.
+
+    **Known fragility, worth fixing properly.** `EnsembleRetriever.arank_fusion` runs the two
+    arms under `asyncio.gather`, and both share this request's single `AsyncSession` — which
+    SQLAlchemy explicitly does not support for concurrent use. It survives only because the
+    connection is already established by the time retrieval runs, so the two greenlets
+    serialise on it by luck rather than design. Anything that ends the transaction earlier in
+    the request re-exposes it: a mid-answer `commit()` returns the connection to the pool and
+    the two arms then race to provision a new one, which fails the whole answer with
+    "this session is provisioning a new connection". That is exactly what a `commit` in
+    `MemoryRepository.touch` did. The durable fix is a session per arm; until then, nothing
+    on the answer path may commit before this point.
     """
     from langchain_classic.retrievers import EnsembleRetriever
 

@@ -169,7 +169,19 @@ class MemoryRepository:
         await commit_or_flush(self.db)
 
     async def touch(self, memory_ids: list[UUID]) -> None:
-        """Mark memories as used, so a stale one is visibly stale in the UI."""
+        """Mark memories as used, so a stale one is visibly stale in the UI.
+
+        **Flushes, never commits**, unlike every other write here — and the difference is not
+        stylistic. Recall happens mid-answer, before retrieval runs. `commit_or_flush` would
+        commit outside a unit of work, ending the transaction and returning the connection to
+        the pool; the two arms of `EnsembleRetriever` then run concurrently on the same
+        `AsyncSession` and race to provision a new one, which SQLAlchemy refuses with
+        "this session is provisioning a new connection". That took the whole answer down
+        through the stream backstop, so a memory being recalled broke the question.
+
+        The enclosing `session_scope()` commits on clean exit, so the timestamp still lands.
+        Losing it when the answer fails is correct anyway: the memory was never used.
+        """
         if not memory_ids:
             return
         rows = (await self.db.scalars(
@@ -178,7 +190,7 @@ class MemoryRepository:
         now = datetime.now(timezone.utc)
         for row in rows:
             row.last_used_at = now
-        await commit_or_flush(self.db)
+        await self.db.flush()
 
     async def delete(self, memory_id: UUID) -> None:
         """A hard delete. "Forget this" has to actually forget, or the feature is a lie."""
