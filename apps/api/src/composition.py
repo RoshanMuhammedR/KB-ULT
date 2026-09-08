@@ -268,6 +268,9 @@ def build_agentic_chat_service(db: AsyncSession, settings: Settings) -> AgenticC
                 build_cache(settings),
                 model=settings.aicredits_embedding_model,
                 ttl_seconds=settings.embedding_cache_ttl_seconds,
+                # In the key and checked on read: a gateway serving a different width under
+                # the same model id would otherwise hand pgvector a mismatched vector.
+                dimensions=settings.embedding_dimensions,
             ),
             reranker=ScoringReranker(
                 fast,

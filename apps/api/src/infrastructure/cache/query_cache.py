@@ -41,29 +41,72 @@ def _digest(*parts: str) -> str:
 class EmbeddingCache:
     """Content-addressed embedding cache, wrapping any `IEmbedder`.
 
-    Keyed on `sha256(text) + model`, so it is correct across tenants and across documents:
-    the same paragraph in two files embeds once. The model id is in the key because two
-    models produce different vectors for identical text, and serving one where the other was
-    expected corrupts the index silently.
+    Keyed on `sha256(text) + model + dimensions`, so it is correct across tenants and across
+    documents: the same paragraph in two files embeds once. The model id is in the key because
+    two models produce different vectors for identical text, and serving one where the other
+    was expected corrupts the index silently.
+
+    **Dimensions are in the key too, and were not.** A gateway can serve a different vector
+    width under the same model id, and `embedding_dimensions` is a setting someone can change.
+    Either way the cache would have handed back a vector of the wrong length under an
+    unchanged key, and pgvector would have been asked to compare it against a column of a
+    different width — a runtime failure whose cause is three layers away from where it shows.
+
+    The length is also checked on read. A key can only collide if the content, model and
+    dimensions all match, so a wrong-length hit means something else wrote that key; returning
+    it would let whatever did so choose the query vector for every tenant asking that question.
     """
 
-    def __init__(self, inner, cache: ICache, *, model: str, ttl_seconds: int) -> None:
+    def __init__(
+        self, inner, cache: ICache, *, model: str, ttl_seconds: int, dimensions: int | None = None
+    ) -> None:
         self.inner = inner
         self.cache = cache
         self.model = model
         self.ttl_seconds = ttl_seconds
+        self.dimensions = dimensions
 
     async def embed_query(self, text: str) -> list[float]:
-        key = system_cache_key("embedding", self.model, _digest(text))
+        key = system_cache_key(
+            "embedding", self.model, str(self.dimensions or "default"), _digest(text)
+        )
         hit = await self.cache.get(key)
         if hit:
-            try:
-                return json.loads(hit)
-            except json.JSONDecodeError:
-                logger.warning("embedding_cache_corrupt", key=key)
+            cached = self._valid(hit, key)
+            if cached is not None:
+                return cached
 
         vector = await self.inner.embed_query(text)
         await self.cache.set(key, json.dumps(vector), ttl_seconds=self.ttl_seconds)
+        return vector
+
+    def _valid(self, hit: str, key: str) -> list[float] | None:
+        """A cached vector, or None if it cannot be trusted.
+
+        Anything unusable is treated as a miss rather than raised: the real embedder is one
+        call away, and failing a question over a bad cache entry would be a worse outcome
+        than paying for it again.
+        """
+        try:
+            vector = json.loads(hit)
+        except json.JSONDecodeError:
+            logger.warning("embedding_cache_corrupt", key=key, reason="not_json")
+            return None
+
+        if not isinstance(vector, list) or not all(isinstance(v, (int, float)) for v in vector):
+            logger.warning("embedding_cache_corrupt", key=key, reason="not_a_vector")
+            return None
+
+        if self.dimensions and len(vector) != self.dimensions:
+            logger.warning(
+                "embedding_cache_corrupt",
+                key=key,
+                reason="wrong_dimensions",
+                got=len(vector),
+                expected=self.dimensions,
+            )
+            return None
+
         return vector
 
     async def embed_texts(self, texts: list[str]):
