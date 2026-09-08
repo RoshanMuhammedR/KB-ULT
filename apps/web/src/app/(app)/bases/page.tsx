@@ -180,7 +180,9 @@ export default function BasesPage() {
                         </div>
                       </div>
 
-                      <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+                      {/* Revealed on hover on a pointer device, but always there on touch, where there
+                          is no hover and these were the only way to rename or delete a base. */}
+                      <div className="flex shrink-0 items-center gap-1 transition-opacity md:opacity-0 md:focus-within:opacity-100 md:group-hover:opacity-100">
                         <IconAction label={`Edit ${base.name}`} onClick={() => setEditing(base)}>
                           <Pencil className="size-3.5" aria-hidden />
                         </IconAction>

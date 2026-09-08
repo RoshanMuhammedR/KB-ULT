@@ -89,13 +89,29 @@ export function useAsk({
       abort.current = controller;
       const conversationId = conversation.id || null;
 
-      const patchAssistant = (patch: Partial<Message>) =>
+      // The id this answer is under right now.
+      //
+      // It changes exactly once, when `done` swaps the optimistic id for the one the server
+      // assigned, and every patch after that has to follow it.
+      let liveId = assistantId;
+
+      const patchAssistant = (patch: Partial<Message>) => {
+        // Captured here, at call time — deliberately NOT read from `liveId` inside the
+        // updater. React runs an updater during the next render, by which point `liveId` has
+        // already moved on, so the `done` patch would be matched against the very id it was
+        // about to install and would match nothing. That was the bug: `done` silently did
+        // nothing, and `verified` and `suggestions` then had no message to attach to either.
+        // Live answers showed no trace, no verified badge and no follow-up questions; the
+        // trace and badge came back on a reload, because they are persisted, and the
+        // suggestions never came back at all, because they are not.
+        const matchId = liveId;
         setConversation((current) => ({
           ...current,
           messages: current.messages.map((message) =>
-            message.id === assistantId ? { ...message, ...patch } : message
+            message.id === matchId ? { ...message, ...patch } : message
           )
         }));
+      };
 
       try {
         let streamed = "";
@@ -115,14 +131,20 @@ export function useAsk({
             },
             onCitations: (citations: Citation[]) => patchAssistant({ citations }),
             onStatus: (status) => patchAssistant({ status }),
-            onDone: (done) =>
+            onDone: (done) => {
+              // `message_id` is null on the paths that answer without persisting a message —
+              // the "who are you" bypass, for one. Keeping the optimistic id there is not a
+              // fallback, it is the only correct answer: a null id would break the React key
+              // and point delete and feedback at nothing.
               patchAssistant({
-                id: done.message_id,
+                ...(done.message_id ? { id: done.message_id } : {}),
                 insufficient_context: done.insufficient_context,
                 trace: done.trace ?? null,
                 // The answer is complete, so there is no stage left to report.
                 status: null
-              }),
+              });
+              if (done.message_id) liveId = done.message_id;
+            },
             // Arrives after `done`, on the same connection: the answer is already on
             // screen and this resolves its badge in place. If the connection ends first
             // the badge simply never appears, which is why nothing here is required.

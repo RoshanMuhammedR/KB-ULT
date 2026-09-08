@@ -242,7 +242,9 @@ export function ConversationList({
                     </span>
                   </Link>
                 )}
-                <div className="absolute top-2 right-2 hidden gap-1 group-hover:flex group-focus-within:flex">
+                {/* Shown on touch, revealed on hover on a pointer device. Hidden-until-hover was
+                    the only way to rename or delete a thread, and a phone has no hover. */}
+                <div className="absolute top-2 right-2 flex gap-1 md:hidden md:group-hover:flex md:group-focus-within:flex">
                   <IconButton
                     label={`Rename ${conversation.title}`}
                     onClick={() => {
@@ -854,11 +856,14 @@ function AnswerTracePanel({
   grounding?: GroundingReport | null;
 }) {
   const [open, setOpen] = useState(false);
-  if (!trace || trace.hops.length === 0) return null;
+  // Same reasoning as the badge below: `trace` is a stored JSON column, so its arrays are
+  // read defensively rather than assumed.
+  const hopList = trace?.hops ?? [];
+  if (hopList.length === 0) return null;
 
-  const hops = trace.hops.length;
+  const hops = hopList.length;
   const summary = `${hops} ${hops === 1 ? "search" : "searches"}${
-    trace.degraded ? " · ranking unavailable" : ""
+    trace?.degraded ? " · ranking unavailable" : ""
   }`;
 
   return (
@@ -879,8 +884,8 @@ function AnswerTracePanel({
 
       {open ? (
         <ol className="mt-2 space-y-1.5 border-l border-border pl-3 text-muted-foreground">
-          <TraceRow label="Understood" detail={trace.resolved_query} />
-          {trace.memories_used ? (
+          <TraceRow label="Understood" detail={trace?.resolved_query ?? ""} />
+          {trace?.memories_used ? (
             // The only place memory surfaces in an answer. It is never a citation — there is
             // no passage behind it to open — so it is disclosed here and nowhere else.
             <TraceRow
@@ -890,7 +895,7 @@ function AnswerTracePanel({
               } from earlier conversations`}
             />
           ) : null}
-          {trace.hops.map((hop) => (
+          {hopList.map((hop) => (
             <TraceHopRows key={hop.hop} hop={hop} multiple={hops > 1} />
           ))}
           {grounding && grounding.checked > 0 ? (
@@ -947,17 +952,22 @@ function TraceRow({ label, detail }: { label: string; detail: string }) {
 function VerifiedBadge({ grounding }: { grounding?: GroundingReport | null }) {
   if (!grounding) return null;
 
-  const unsupported = grounding.unsupported.length + grounding.invalid.length;
+  // `grounding` is a stored JSON column, and its shape has already changed once in this
+  // repo — `uncited_sentences` and `unchecked` were added after rows existed without them.
+  // A row from a different version must not take the whole conversation down with it:
+  // `undefined.length` throws during render, there is no error boundary between this badge
+  // and the page, and the failure is a blank screen on a thread that reads perfectly well.
+  const invalid = grounding.invalid ?? [];
+  const unsupported = (grounding.unsupported ?? []).length + invalid.length;
 
   // An answer citing only invented ordinals has `checked === 0` — nothing could be checked,
   // because none of the numbers pointed at a real passage. That is the most alarming outcome
   // this checker can produce, and the old `checked === 0` guard silently swallowed it.
-  if (grounding.invalid.length > 0) {
+  if (invalid.length > 0) {
     return (
       <Pill>
         <AlertTriangle className="size-3" aria-hidden />
-        {grounding.invalid.length} citation{grounding.invalid.length === 1 ? "" : "s"} point at
-        no source
+        {invalid.length} citation{invalid.length === 1 ? "" : "s"} point at no source
       </Pill>
     );
   }

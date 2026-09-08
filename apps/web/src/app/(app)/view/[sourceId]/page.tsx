@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { ArrowLeft, ChevronLeft, ChevronRight } from "lucide-react";
-import { formatLocator, sourceTitle, typeCopy } from "@kb/shared";
+import { formatLocator, relevanceLabel, sourceTitle, typeCopy } from "@kb/shared";
 import { Button, Label, Panel, Pill, Skeleton, SourceIcon, buttonClass } from "@kb/ui";
 import type { Citation, Conversation, KnowledgeAsset, Passage } from "@/types/api";
 import * as api from "@/lib/api";
@@ -263,9 +263,11 @@ export default function SourceViewerPage() {
               <>
                 <div className="mt-3 flex flex-wrap items-center gap-2">
                   <Pill>{formatLocator(citation.locator)}</Pill>
-                  <span className="text-[12px] text-muted-foreground">
-                    {Math.round(citation.score * 100)}% relevance
-                  </span>
+                  {relevanceLabel(citation.score) ? (
+                    <span className="text-[12px] text-muted-foreground">
+                      {relevanceLabel(citation.score)}
+                    </span>
+                  ) : null}
                 </div>
                 <p className="mt-3 text-[13px] leading-relaxed text-muted-foreground">
                   Saga retrieved this passage because it was among the closest matches to your

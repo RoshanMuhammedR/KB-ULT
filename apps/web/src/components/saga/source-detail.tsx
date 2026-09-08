@@ -9,6 +9,7 @@ import {
   isProcessing,
   progressFraction,
   relative,
+  relevanceLabel,
   sourceTitle,
   statusCopy,
   typeCopy
@@ -332,7 +333,10 @@ export function SourceDetail({
                 </div>
               ))}
               <div className="flex justify-between gap-4">
-                <dt className="text-muted-foreground">Cited by</dt>
+                {/* Not "Cited by": the panel directly below is titled "Answers that cited
+                    this", and the two meanings sat two inches apart. This one is about how a
+                    citation addresses a place in the file. */}
+                <dt className="text-muted-foreground">Citations point to</dt>
                 <dd className="text-right font-medium">
                   {typeCopy[source.source_type]?.locator ?? "position"}
                 </dd>
@@ -374,9 +378,9 @@ export function SourceDetail({
                       </span>
                       <span className="mt-1.5 flex items-center gap-2">
                         <Pill>{formatLocator(citation.locator)}</Pill>
-                        {citation.score !== null ? (
+                        {relevanceLabel(citation.score) ? (
                           <span className="text-[12px] text-muted-foreground">
-                            {Math.round(citation.score * 100)}% relevance
+                            {relevanceLabel(citation.score)}
                           </span>
                         ) : null}
                       </span>

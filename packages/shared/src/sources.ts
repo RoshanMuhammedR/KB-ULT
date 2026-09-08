@@ -118,6 +118,20 @@ export function statusTone(status: string): StatusTone {
   return statusCopy[status as SourceStatus]?.tone ?? "active";
 }
 
+/**
+ * "91% relevance", or nothing at all.
+ *
+ * A score is genuinely optional — `AssetCitationSchema.score` is `float | None`, and an
+ * answer given before scores were recorded has none. Multiplying that by 100 renders
+ * "NaN% relevance" beside a real passage, which reads as a broken product rather than as a
+ * missing number. Returning null lets the caller draw nothing instead.
+ */
+export function relevanceLabel(score: number | null | undefined): string | null {
+  return typeof score === "number" && Number.isFinite(score)
+    ? `${Math.round(score * 100)}% relevance`
+    : null;
+}
+
 export function formatLocator(locator: Locator): string {
   if (!locator) return "Whole document";
   if (locator.type === "page") return `Page ${locator.value}`;
