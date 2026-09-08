@@ -107,7 +107,20 @@ class AgenticChatService:
             logger.exception("agentic_stream_failed", error=str(exc))
             yield ("delta", fallback.FAILED)
             yield ("citations", [])
-            yield ("done", {"insufficient_context": True, "message_id": None, "user_message_id": None})
+            yield (
+                "done",
+                {
+                    "insufficient_context": True,
+                    "message_id": None,
+                    "user_message_id": None,
+                    # Say that this was a crash, not an answer. The template reads the same to
+                    # a person either way, but an automated reader could not tell the
+                    # difference: the eval harness has its own try/except that this backstop
+                    # made unreachable, so `summary["errors"]` stayed 0 through any internal
+                    # failure and `--fail-under` did not gate on the worst outcome there is.
+                    "error": type(exc).__name__,
+                },
+            )
 
     async def _ask(
         self,
@@ -217,25 +230,28 @@ class AgenticChatService:
             # no second write. The streaming path below fills it in afterwards.
             grounding=report.to_wire() if report else None,
         )
-        yield ("done", self._done(user_message, assistant, insufficient=False, state=state))
-
-        # After `done`, so it cannot delay the answer. The client resolves the badge in
-        # place when this arrives, and simply never shows one if the connection ended first.
-        if report is None:
-            report = await self.grounding.check(answer, assembled.citations)
-            # Persist before yielding: the check has already been paid for, and a client
-            # that hangs up between these two lines should still keep the result. The
-            # reverse order would lose it exactly when the user is most likely to reload.
-            try:
-                await self.conversation_repo.set_grounding(assistant.id, report.to_wire())
-            except Exception:  # noqa: BLE001 - a badge that failed to save is not a failed answer
-                logger.warning("grounding_persist_failed", message_id=str(assistant.id))
-
-        await self._record_signals(report, assembled.citations)
-        await self._maybe_distil(
-            bases[0] if bases else None, question, answer, conversation.id, assistant.id, turn
-        )
-        yield ("verified", report.to_wire())
+        # Everything after this yield is owed work, not optional work — and a generator only
+        # resumes when its consumer pulls again. A user navigating away on `done`, which is
+        # the common case, used to throw GeneratorExit here and silently skip the grounding
+        # check, its persistence, the learned-prior signal and the memory distillation. So
+        # `chunk_signals` was being populated only by people who waited, which is a selection
+        # bias on the very signal the relevance prior consumes.
+        #
+        # `finally` runs on `aclose()` too, so the work happens either way. It may await
+        # there; it may not yield, which is why `verified` is yielded inside the `try`.
+        finalised = False
+        try:
+            yield ("done", self._done(user_message, assistant, insufficient=False, state=state))
+            report = await self._finalise(
+                report, answer, assembled, conversation, assistant, question, bases, turn
+            )
+            finalised = True
+            yield ("verified", report.to_wire())
+        finally:
+            if not finalised:
+                await self._finalise(
+                    report, answer, assembled, conversation, assistant, question, bases, turn
+                )
 
     # --- terminal paths -------------------------------------------------------------
 
@@ -393,6 +409,32 @@ class AgenticChatService:
             )
         except Exception:  # noqa: BLE001 - a worker that is down must not break answering
             logger.warning("memory_distill_enqueue_failed")
+
+    async def _finalise(
+        self, report, answer, assembled, conversation, assistant, question, bases, turn
+    ):
+        """Grounding, its persistence, the relevance signal and memory distillation.
+
+        Everything the answer owes but the reader does not wait for. Called from the `try`
+        on the ordinary path and from the `finally` when the client hung up, so a disconnect
+        costs the badge on screen and nothing else.
+
+        Every step guards itself, so one failing does not skip the others.
+        """
+        if report is None:
+            report = await self.grounding.check(answer, assembled.citations)
+            # Persist before yielding `verified`: the check has already been paid for, and a
+            # client that hangs up between those two points should still keep the result.
+            try:
+                await self.conversation_repo.set_grounding(assistant.id, report.to_wire())
+            except Exception:  # noqa: BLE001 - a badge that failed to save is not a failed answer
+                logger.warning("grounding_persist_failed", message_id=str(assistant.id))
+
+        await self._record_signals(report, assembled.citations)
+        await self._maybe_distil(
+            bases[0] if bases else None, question, answer, conversation.id, assistant.id, turn
+        )
+        return report
 
     async def _record_signals(self, report, citations) -> None:
         """Attribute the answer's outcome back to the passages it was written from.

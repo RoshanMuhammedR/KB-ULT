@@ -28,8 +28,14 @@ _GREETING = re.compile(
     r"[\s!.,]*$",
     re.IGNORECASE,
 )
+# Anchored to the *whole* utterance, not merely contained in it. With `.search` this swallowed
+# real questions: "How do you work out the notice period?" and "What can you do with the export
+# API?" both matched, and both were answered with a canned line about what the assistant is,
+# having retrieved nothing and persisted nothing. A question that happens to open with these
+# words and then goes on to ask something is a question about the corpus.
 _ABOUT_THE_ASSISTANT = re.compile(
-    r"\b(who are you|what are you|what can you do|how do you work|are you (an? )?(ai|bot|human))\b",
+    r"^\W*(who are you|what are you|what can you do|how do you work|"
+    r"are you (an? )?(ai|bot|human))\W*$",
     re.IGNORECASE,
 )
 
@@ -52,7 +58,7 @@ def needs_retrieval(question: str) -> bool:
         return False
     if _GREETING.match(stripped):
         return False
-    return not _ABOUT_THE_ASSISTANT.search(stripped)
+    return not _ABOUT_THE_ASSISTANT.match(stripped)
 
 
 class ResolvedQuery(BaseModel):

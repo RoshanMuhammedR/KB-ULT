@@ -191,6 +191,12 @@ async def run_case(case: dict[str, Any], tenant_id: str, user_id: str) -> CaseRe
                     result.hops = payload.get("hops", 0)
                     result.exit_reason = payload.get("exit_reason", "")
                     result.fell_back = bool(payload.get("insufficient_context"))
+                    # `ask_stream` catches every internal failure and yields a normal-looking
+                    # `done`, so the `except` below is unreachable for anything that happens
+                    # inside the pipeline. Without reading this the harness reported zero
+                    # errors through a total crash, and `--fail-under` could not gate on it.
+                    if payload.get("error"):
+                        result.error = f"pipeline: {payload['error']}"
                 elif event == "verified":
                     # Retrieval recall says the right passage was found; this says the
                     # answer written from it actually follows from it. A pipeline can
