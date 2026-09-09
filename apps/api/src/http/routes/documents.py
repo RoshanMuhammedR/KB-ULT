@@ -15,7 +15,7 @@ from fastapi import (
     status,
 )
 from fastapi.responses import RedirectResponse
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.config import get_settings
 from src.domain.entities import IngestionJob
@@ -131,7 +131,7 @@ async def _to_schema(
 
 @router.get("", response_model=list[KnowledgeAssetSchema])
 async def list_assets(
-    db: Annotated[Session, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db)],
     knowledge_base_id: UUID | None = None,
 ) -> list[KnowledgeAssetSchema]:
     """Sources in one base, or in the workspace default when none is named."""
@@ -159,7 +159,7 @@ async def list_assets(
 @router.get("/{asset_id}", response_model=KnowledgeAssetSchema)
 async def get_asset(
     asset_id: UUID,
-    db: Annotated[Session, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db)],
     file_storage: Annotated[IFileStorage, Depends(get_file_storage)],
 ) -> KnowledgeAssetSchema:
     # Single-asset read used by the frontend to poll ingestion progress. Includes the
@@ -182,7 +182,7 @@ async def get_asset(
 @router.get("/{asset_id}/download")
 async def download_asset(
     asset_id: UUID,
-    db: Annotated[Session, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db)],
     file_storage: Annotated[IFileStorage, Depends(get_file_storage)],
     transcript: bool = False,
 ) -> Response:
@@ -223,7 +223,7 @@ async def download_asset(
 @router.get("/{asset_id}/events", response_model=list[JobEventSchema])
 async def list_asset_events(
     asset_id: UUID,
-    db: Annotated[Session, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db)],
 ) -> list[JobEventSchema]:
     # The persisted worker log for one asset (all attempts), expanded in the /jobs
     # dashboard. Ordered oldest-first by the repository.
@@ -244,7 +244,7 @@ async def list_asset_events(
 @router.get("/{asset_id}/passages", response_model=list[PassageSchema])
 async def list_passages(
     asset_id: UUID,
-    db: Annotated[Session, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db)],
     around: int | None = None,
     window: int = 2,
 ) -> list[PassageSchema]:
@@ -273,7 +273,7 @@ async def list_passages(
 @router.get("/{asset_id}/citations", response_model=list[AssetCitationSchema])
 async def list_asset_citations(
     asset_id: UUID,
-    db: Annotated[Session, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db)],
 ) -> list[AssetCitationSchema]:
     """Every persisted answer that cited this source — the "answers that cited this" panel.
 
@@ -372,7 +372,16 @@ async def add_asset_to_base(
 
     await assets.add_to_base(asset_id, request.knowledge_base_id)
     memberships = await assets.bases_for([asset_id])
-    return await _to_schema(asset, base_ids=memberships.get(asset_id, []))
+    # The client replaces its copy of the row with whatever comes back, so this has to be a
+    # whole asset and not just the part that changed. `_to_schema` defaults the passage
+    # count to 0, which would blank "24 passages" in the library the moment you filed
+    # something — a source losing its contents because it gained a base.
+    counts = await ChunkRepository(db).count_by_asset([asset_id])
+    return await _to_schema(
+        asset,
+        passage_count=counts.get(asset_id, 0),
+        base_ids=memberships.get(asset_id, []),
+    )
 
 
 @router.delete("/{asset_id}/bases/{knowledge_base_id}", response_model=KnowledgeAssetSchema)
@@ -394,7 +403,12 @@ async def remove_asset_from_base(
 
     await assets.remove_from_base(asset_id, knowledge_base_id)
     memberships = await assets.bases_for([asset_id])
-    return await _to_schema(asset, base_ids=memberships.get(asset_id, []))
+    counts = await ChunkRepository(db).count_by_asset([asset_id])
+    return await _to_schema(
+        asset,
+        passage_count=counts.get(asset_id, 0),
+        base_ids=memberships.get(asset_id, []),
+    )
 
 
 @router.post("/upload-url", response_model=UploadUrlResponse)
@@ -479,7 +493,7 @@ async def retry_asset(
 async def rename_asset(
     asset_id: UUID,
     request: RenameKnowledgeAssetRequest,
-    db: Annotated[Session, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db)],
     file_storage: Annotated[IFileStorage, Depends(get_file_storage)],
 ) -> KnowledgeAssetSchema:
     try:
@@ -492,7 +506,7 @@ async def rename_asset(
 @router.delete("/{asset_id}", status_code=204)
 async def delete_asset(
     asset_id: UUID,
-    db: Annotated[Session, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db)],
     file_storage: Annotated[IFileStorage, Depends(get_file_storage)],
 ) -> None:
     repo = KnowledgeAssetRepository(db)

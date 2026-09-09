@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.domain.entities import JobStatus
 from src.http.schemas.jobs import JobSummarySchema
@@ -14,7 +14,7 @@ router = APIRouter(prefix="/jobs", tags=["jobs"])
 
 
 @router.get("", response_model=list[JobSummarySchema])
-async def list_jobs(db: Annotated[Session, Depends(get_db)]) -> list[JobSummarySchema]:
+async def list_jobs(db: Annotated[AsyncSession, Depends(get_db)]) -> list[JobSummarySchema]:
     # Recent ingestion jobs for the monitoring dashboard, each joined to its asset's
     # filename. The filenames come back in ONE query rather than one per job: the row count
     # is bounded by `list_recent`, but an N+1 that is small today is still an N+1.
