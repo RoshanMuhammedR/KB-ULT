@@ -123,6 +123,41 @@ jobs:
             ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} \
             'set -eu; PW=$(grep "^KB_DB_PASSWORD=" /opt/stack/data/.env | cut -d= -f2- | tr -d "\""); [ -n "$PW" ] || { echo "KB_DB_PASSWORD missing from /opt/stack/data/.env" >&2; exit 1; }; printf "APP_DB_PASSWORD=%s\n" "$PW" >> /opt/stack/kb/.env'
 
+      # Reclaim disk BEFORE pulling, not after deploying.
+      #
+      # `deploy.sh` prunes on its success path with `--filter until=72h`, which at this push
+      # cadence reclaims nothing: every image on the box is younger than the window. So the
+      # disk only ever grew — four images per commit, ~3.2GB a push — until it filled and
+      # `docker compose pull` started failing with "no space left on device".
+      #
+      # That failure is silent in a specific way. `set -e` aborts deploy.sh before it writes
+      # anything to the deploy log, so the newest row stays the last *successful* one. Five
+      # consecutive deploys failed this way and the only symptom was a fix that had been
+      # merged, built, and pushed to the registry, and was not running.
+      #
+      # Scoped to this project's images, on a host shared with other stacks, and never to an
+      # image a running container holds — which is what keeps deploy.sh's rollback target
+      # alive until the new version is healthy.
+      - name: Reclaim disk on the VPS before pulling
+        env:
+          SSHPASS: ${{ secrets.VPS_SSH_PASSWORD }}
+        run: |
+          sshpass -e ssh -p ${{ secrets.VPS_PORT }} -o StrictHostKeyChecking=no \
+            ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} 'set -eu
+            IN_USE=$(docker ps --format "{{.Image}}" | sort -u)
+            docker images --format "{{.Repository}}:{{.Tag}}" \
+              | grep -E "/kb-(api|web|website):" \
+              | while read -r ref; do
+                  printf "%s\n" "$IN_USE" | grep -qxF "$ref" && continue
+                  echo "removing $ref"
+                  docker rmi "$ref" >/dev/null 2>&1 || true
+                done
+            docker image prune -f >/dev/null 2>&1 || true
+            df -h / | tail -1
+            AVAIL=$(df -BG --output=avail / | tail -1 | tr -dc "0-9")
+            # Named, before the pull, rather than a confusing mid-layer write error after it.
+            [ "${AVAIL:-0}" -ge 8 ] || { echo "Only ${AVAIL}G free on / - refusing to deploy" >&2; exit 1; }'
+
       - name: Run the shared deploy script on the VPS
         env:
           SSHPASS: ${{ secrets.VPS_SSH_PASSWORD }}
