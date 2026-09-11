@@ -6,6 +6,7 @@ import { ABOUT, SECTION } from "@/lib/content";
 import { rich } from "@/lib/rich";
 import { InteractiveGrid } from "@/components/ui/interactive-grid";
 import { PixelPattern } from "@/components/ui/pixel-pattern";
+import { AboutCard } from "./about-card";
 import { Grounding } from "./grounding";
 
 /**
@@ -82,6 +83,7 @@ export function About() {
           <PixelPattern surface="dark" />
           <InteractiveGrid />
           <h2 className="t-xl about-section__title">{rich(ABOUT)}</h2>
+          <AboutCard />
         </div>
       </section>
       <Grounding />

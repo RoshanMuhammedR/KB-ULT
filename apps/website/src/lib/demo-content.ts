@@ -53,3 +53,6 @@ export const DEMO_LIBRARY: { title: string; source_type: SourceType }[] = [
   { title: "Freight market outlook 2026", source_type: "youtube" },
   { title: "Discovery notes — Rotterdam", source_type: "markdown" }
 ];
+
+/** The question the hero's terminal types out; the citations above are what it retrieves. */
+export const DEMO_QUESTION = "What drove the margin decline at Northwind in Q2?";

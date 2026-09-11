@@ -57,7 +57,9 @@ export function HowItWorks() {
             scrollTrigger: {
               trigger: container,
               endTrigger: section,
-              start: desktop ? "top top" : "bottom bottom",
+              // Held from the top when it fits the screen, else from its bottom edge, so no step
+              // is ever held below the fold.
+              start: desktop ? () => (container.offsetHeight > window.innerHeight ? "bottom bottom" : "top top") : "bottom bottom",
               end: "bottom top",
               pin: true,
               scrub: true,

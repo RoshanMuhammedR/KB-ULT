@@ -4,12 +4,12 @@ import { useRef } from "react";
 import { fontsReady, gsap, SplitText, useGSAP } from "@/lib/gsap";
 import { GROUNDING } from "@/lib/content";
 import { Button } from "@/components/ui/button";
-import { createGroundingScene, initialGroundingState } from "@/components/webgl/grounding-scene";
+import { createGroundingScene, FINAL_SHIFT, initialGroundingState } from "@/components/webgl/grounding-scene";
 import { useThreeScene } from "@/components/webgl/use-three-scene";
 
 /**
  * Seven and a half screens of scroll for one idea. The threads drift in with their labels
- * while the statement holds the corner; then they fuse into the one highlighted thread, the
+ * while the statement holds the corner; then they draw together into a single point, the
  * statement falls away, and the headline and the way in take its place.
  */
 export function Grounding() {
@@ -44,7 +44,7 @@ export function Grounding() {
         timeline
           .fromTo(state, { enter: 12 }, { enter: -0.5, duration: 0.6, ease: "power1" }, 0)
           .fromTo(state, { fuse: 0 }, { fuse: 1, enter: -1.5, duration: 0.4, ease: "power1.inOut", immediateRender: false }, 0.6)
-          .fromTo(state, { shiftX: 0 }, { shiftX: mobile ? 0 : -0.5, duration: 0.2, ease: "power1.inOut", immediateRender: false }, 0.9)
+          .fromTo(state, { shiftX: 0 }, { shiftX: mobile ? 0 : -FINAL_SHIFT, duration: 0.2, ease: "power1.inOut", immediateRender: false }, 0.9)
           .fromTo(state, { highlight: 0 }, { highlight: 1, duration: 0.08, ease: "power1.inOut", immediateRender: false }, 0.92)
           .fromTo(state, { highlightLabel: 1 }, { highlightLabel: 0, duration: 0.04, ease: "power1.inOut", immediateRender: false }, 0.96);
 

@@ -11,9 +11,12 @@ import { toColor, type SceneHandle } from "./use-three-scene";
 
 /**
  * Threads of light, one per kind of source, drifting in from the left with a label riding
- * each head - then, as the section scrolls, fusing into the single highlighted thread.
+ * each head - then, as the section scrolls, drawing together into one point just ahead of
+ * the headline.
  *
- * The section's scroll timeline tweens `state`; this only ever reads it.
+ * A thread is a single run of points, and its dot and label are placed from that run's last
+ * point, so neither can come loose from it. The section's scroll timeline tweens `state`;
+ * this only ever reads it.
  */
 
 export type GroundingLine = {
@@ -21,13 +24,16 @@ export type GroundingLine = {
   seed: number;
   amplitude: number;
   positionShift: number;
+  /** Where the thread crosses the frame's edge once they have converged: a fraction of the
+      frame's height (its width on phones), positive above the focus (right of it on phones). */
+  spread: number;
   highlighted?: boolean;
 };
 
 export type GroundingState = {
   /** How far the heads still have to travel in; 12 is off-screen left. */
   enter: number;
-  /** 0 = loose threads, 1 = one thread. */
+  /** 0 = loose threads, 1 = drawn together into the focus. */
   fuse: number;
   shiftX: number;
   /** The highlighted head's final brightening. */
@@ -45,15 +51,27 @@ export const initialGroundingState = (): GroundingState => ({
   mobile: false
 });
 
-// Each thread is evaluated over VALUES steps but drawn through every third one: the wave
-// is aliased by that sampling into the long, lazy bends the threads are meant to have.
-const VALUES = 100;
+/** How far the group slides left in the last beat, as the headline slides in beside it. */
+export const FINAL_SHIFT = 0.5;
+
 const POINTS = 33;
+// Points sit 0.75 apart along a thread, but its wave advances three of its own steps per
+// point: the undersampling aliases it into the long, lazy bends the threads are meant to
+// have, and straightens them as they come in.
+const STEP = 0.75;
 const FOV = 75;
 const DISTANCE = 5;
+// Converged, a thread's offset from the focus grows as 1 - e^(-K v^P), v being the distance
+// back from the focus over the distance to the frame's edge: the threads arrive tangent and
+// tight, and open into a fan toward the edge.
+const FAN_K = 1.4;
+const FAN_P = 2.28;
+const FAN_NORM = 1 - Math.exp(-FAN_K);
+// How far ahead of the headline the focus sits, in px.
+const FOCUS_GAP = 32;
 
-const cube = (x: number) => x * x * x;
 const lerp = THREE.MathUtils.lerp;
+const fan = (v: number) => (1 - Math.exp(-FAN_K * Math.pow(v, FAN_P))) / FAN_NORM;
 
 export function createGroundingScene(
   renderer: THREE.WebGLRenderer,
@@ -86,7 +104,15 @@ export function createGroundingScene(
     );
     dot.scale.setScalar(config.highlighted ? 3.5 : 1);
     group.add(line, dot);
-    return { config, geometry, material, line, dot, label: labels[index] ?? null, segments: new Float32Array((POINTS - 1) * 6) };
+    return {
+      config,
+      geometry,
+      material,
+      dot,
+      label: labels[index] ?? null,
+      points: new Float32Array(POINTS * 3),
+      segments: new Float32Array((POINTS - 1) * 6)
+    };
   });
 
   const composer = new EffectComposer(renderer);
@@ -97,69 +123,81 @@ export function createGroundingScene(
 
   let width = 1;
   let height = 1;
-  let viewWidth = 1; // the frame's width in world units at the threads' depth
+  // The frame's size in world units at the threads' depth.
+  let viewWidth = 1;
+  let viewHeight = 1;
+  let disposed = false;
+  // Where the threads meet, in px within the frame: just ahead of the headline's first line,
+  // or just above the headline on phones, where it runs along the bottom.
+  const focus = { x: 0, y: 0 };
   const anchor = new THREE.Vector3();
-  const point = [0, 0, 0];
 
-  const sample = (config: GroundingLine, r: number, phase: number, wobble: number) => {
-    const { fuse, enter } = state;
-    const wave = Math.sin((r - phase) * (1 - 0.002 * enter) * 2);
-    const amplitude = lerp(config.amplitude, 0, cube(fuse));
-    const base = -0.25 * VALUES + 0.25 * r - enter;
-    const loose = base + wobble + config.positionShift;
-    const fused = base - (1 - 0.06 * viewWidth);
-    const along = lerp(loose, fused, fuse);
-    const bend = cube(Math.sin((r / VALUES) * 4 * Math.PI) * Math.sin(2 * config.amplitude) * 1.5) * fuse;
-    const acrossValue = bend + wave * amplitude;
-    const depth = lerp(0.1 * wave, (1 - fuse) * wave + 0.5, fuse);
-    if (state.mobile) {
-      point[0] = acrossValue;
-      point[1] = -along;
+  const measure = () => {
+    focus.x = width * 0.515;
+    focus.y = height * 0.5;
+    const block = host.querySelector<HTMLElement>(".data-viz-section__center");
+    const title = host.querySelector<HTMLElement>(".data-viz-section__center-title");
+    if (!block || !title) return;
+    const frame = container.getBoundingClientRect();
+    const box = block.getBoundingClientRect();
+    const style = getComputedStyle(block);
+    if (window.matchMedia("(max-width: 767px)").matches) {
+      focus.x = width / 2;
+      focus.y = Math.max(height * 0.3, box.top - frame.top - FOCUS_GAP);
     } else {
-      point[0] = along;
-      point[1] = acrossValue;
+      const size = parseFloat(getComputedStyle(title).fontSize) || 36;
+      focus.x = box.left - frame.left + parseFloat(style.paddingLeft) - FOCUS_GAP;
+      // The middle of the headline's first line, which is 1.15 high.
+      focus.y = box.top - frame.top + parseFloat(style.paddingTop) + size * 0.575;
     }
-    point[2] = depth;
-    return point;
   };
+  // The headline's box settles once the webfont is in.
+  document.fonts?.ready.then(() => {
+    if (!disposed) measure();
+  });
 
   const update = (time: number) => {
     group.position.x = state.shiftX;
     group.updateMatrixWorld();
-    const rest = 1 - state.fuse;
+    const { enter, fuse, mobile } = state;
+    const rest = 1 - fuse;
+    const frequency = 2 * (1 - 0.002 * enter);
+
+    // The focus in world units as the threads see it, before the group's last slide; and how
+    // far it is from there back to the edge they come in from.
+    const fx = (focus.x / width - 0.5) * viewWidth;
+    const fy = (0.5 - focus.y / height) * viewHeight;
+    const focusAlong = mobile ? -fy : fx + FINAL_SHIFT;
+    const focusAcross = mobile ? fx : fy;
+    const reach = Math.max(1, mobile ? viewHeight / 2 - fy : fx + viewWidth / 2);
+    const breadth = mobile ? viewWidth : viewHeight;
 
     for (const thread of threads) {
-      const { config, segments } = thread;
+      const { config, points, segments } = thread;
       const phase = (time + config.seed) * 0.8;
       const wobble = Math.sin(phase + config.seed / 100);
+      const spread = config.spread * breadth;
 
-      let px = 0;
-      let py = 0;
-      let pz = 0;
       for (let k = 0; k < POINTS; k++) {
-        const x = sample(config, 3 * k, phase, wobble)[0];
-        const y = sample(config, 3 * k + 1, phase, wobble)[1];
-        const z = sample(config, 3 * k + 2, phase, wobble)[2];
-        if (k > 0) {
-          const o = (k - 1) * 6;
-          segments[o] = px;
-          segments[o + 1] = py;
-          segments[o + 2] = pz;
-          segments[o + 3] = x;
-          segments[o + 4] = y;
-          segments[o + 5] = z;
-        }
-        px = x;
-        py = y;
-        pz = z;
+        const back = (POINTS - 1 - k) * STEP;
+        const wave = Math.sin((3 * k - phase) * frequency);
+        const along = lerp(STEP * k - 25 - enter + wobble + config.positionShift, focusAlong - back, fuse);
+        const across = lerp(wave * config.amplitude, focusAcross + spread * fan(back / reach), fuse);
+        const o = k * 3;
+        points[o] = mobile ? across : along;
+        points[o + 1] = mobile ? -along : across;
+        points[o + 2] = 0.1 * wave * rest;
       }
+      for (let k = 1; k < POINTS; k++) segments.set(points.subarray((k - 1) * 3, (k + 1) * 3), (k - 1) * 6);
       const start = thread.geometry.attributes.instanceStart as THREE.InterleavedBufferAttribute;
       (start.data.array as Float32Array).set(segments);
       start.data.needsUpdate = true;
 
-      const hx = sample(config, VALUES - 3, phase, wobble)[0];
-      const hy = sample(config, VALUES - 2, phase, wobble)[1];
-      const hz = sample(config, VALUES - 1, phase, wobble)[2];
+      // The head is the thread's own last point.
+      const head = (POINTS - 1) * 3;
+      const hx = points[head];
+      const hy = points[head + 1];
+      const hz = points[head + 2];
       thread.dot.position.set(hx, hy, hz + (config.highlighted ? 0.008 : 0.001));
       if (config.highlighted) {
         (thread.dot.material as THREE.MeshBasicMaterial).color.copy(headColor).lerp(lastColor, state.highlight);
@@ -167,6 +205,7 @@ export function createGroundingScene(
 
       const label = thread.label;
       if (label) {
+        // Riding just above its head; the others sink onto their dots as they fade.
         anchor.set(hx, hy + 0.2 * (config.highlighted ? 1 : rest), hz).applyMatrix4(group.matrixWorld).project(camera);
         const x = (anchor.x * 0.5 + 0.5) * width;
         const y = (0.5 - anchor.y * 0.5) * height;
@@ -182,7 +221,7 @@ export function createGroundingScene(
       height = h;
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
-      const viewHeight = 2 * DISTANCE * Math.tan(THREE.MathUtils.degToRad(FOV / 2));
+      viewHeight = 2 * DISTANCE * Math.tan(THREE.MathUtils.degToRad(FOV / 2));
       viewWidth = viewHeight * camera.aspect;
       for (const thread of threads) {
         thread.material.resolution.set(w, h);
@@ -191,12 +230,14 @@ export function createGroundingScene(
       composer.setPixelRatio(pixelRatio);
       composer.setSize(w, h);
       bloom.resolution.set(w, h);
+      measure();
     },
     frame(time) {
       update(time);
       composer.render();
     },
     dispose() {
+      disposed = true;
       for (const thread of threads) {
         thread.geometry.dispose();
         thread.material.dispose();

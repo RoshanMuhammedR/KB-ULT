@@ -1,26 +1,31 @@
 "use client";
 
-import { useRef, useState } from "react";
-import { gsap, ScrollTrigger, useGSAP } from "@/lib/gsap";
+import { useRef, useState, type CSSProperties } from "react";
+import { gsap, prefersReducedMotion, ScrollTrigger, useGSAP } from "@/lib/gsap";
 import { NAV_SPY } from "@/lib/content";
 import { SmartLink } from "@/components/ui/smart-link";
 
 /**
- * The section index in the bottom-left corner. The current section's label fills with the
- * accent as you read through it; it stays out of the way over the hero and the footer, and
- * darkens over the light sections.
+ * The section index, as a rail in the left margin: a segment per section, the current one
+ * filling with the accent as you read through it while its name runs down the margin. It
+ * lives in the gutter the copy never enters, so it can't sit on top of anything; hover or
+ * focus it and the labels slide out. It stays out of the way over the hero and the footer,
+ * and darkens over the light sections.
  */
 export function NavSpy() {
   const ref = useRef<HTMLElement>(null);
+  const currentRef = useRef<HTMLSpanElement>(null);
   const [active, setActive] = useState<string | null>(null);
   const [hidden, setHidden] = useState(true);
   const [light, setLight] = useState(false);
+  const current = NAV_SPY.find((item) => item.id === active)?.label ?? "";
 
   useGSAP(
     () => {
       const root = ref.current;
       if (!root) return;
-      const sections = gsap.utils.toArray<HTMLElement>(".js-section-spy");
+      // Every section on the page: a selector here would be scoped to the rail itself.
+      const sections = Array.from(document.querySelectorAll<HTMLElement>(".js-section-spy"));
       const links = sections.map((section) => root.querySelector<HTMLElement>(`[data-spy="${section.id}"]`));
       const resetOthers = (keep: number) =>
         links.forEach((link, index) => index !== keep && link?.style.setProperty("--scroll-progress", "0"));
@@ -86,26 +91,45 @@ export function NavSpy() {
     { scope: ref }
   );
 
+  // The margin's name tunes in to each new section. It is written only from here, so React
+  // never holds a text node the scramble has replaced.
+  useGSAP(
+    () => {
+      const element = currentRef.current;
+      if (!element) return;
+      if (!current || prefersReducedMotion()) {
+        element.textContent = current;
+        return;
+      }
+      gsap.to(element, { duration: 0.7, ease: "none", overwrite: true, scrambleText: { text: current, chars: "01", speed: 0.6 } });
+    },
+    { dependencies: [current] }
+  );
+
   return (
     <nav
       ref={ref}
       className={["nav-spy", hidden ? "is-hidden" : "", light ? "light" : ""].filter(Boolean).join(" ")}
       aria-label="Sections"
     >
-      <ul className="nav-spy__list">
-        {NAV_SPY.map((item) => (
-          <li key={item.id} className="nav-spy__item">
+      <ol className="nav-spy__list">
+        {NAV_SPY.map((item, index) => (
+          <li key={item.id} className="nav-spy__item" style={{ "--i": index } as CSSProperties}>
             <SmartLink
               href={`#${item.id}`}
               data-spy={item.id}
               className={`nav-spy__link${active === item.id ? " is-active" : ""}`}
               aria-current={active === item.id ? "true" : undefined}
             >
-              {item.label}
+              <span className="nav-spy__track" aria-hidden="true">
+                <span className="nav-spy__fill" />
+              </span>
+              <span className="nav-spy__label">{item.label}</span>
             </SmartLink>
           </li>
         ))}
-      </ul>
+      </ol>
+      <span ref={currentRef} className="nav-spy__current" aria-hidden="true" />
     </nav>
   );
 }

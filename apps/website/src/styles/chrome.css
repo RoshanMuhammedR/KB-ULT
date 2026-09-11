@@ -521,16 +521,15 @@
 
 /* ---------- scroll-spy ---------- */
 
+/* A rail in the left gutter: the copy always starts a full padding in, well clear of its two
+   pixels of track. */
 .nav-spy {
   position: fixed;
-  bottom: calc(var(--spacing) * 10);
-  left: 3.25%;
+  top: 50%;
+  left: max(10px, calc(var(--padding) / 2 - 7px));
   z-index: var(--z-nav-spy);
   display: none;
-  padding: calc(var(--spacing) * 3.5) calc(var(--spacing) * 5);
-  border-radius: 5px;
-  -webkit-backdrop-filter: blur(5px);
-  backdrop-filter: blur(5px);
+  translate: 0 -50%;
   transition: opacity 0.4s var(--ease-power4);
 }
 @media (min-width: 48rem) {
@@ -546,7 +545,7 @@
 .nav-spy__list {
   display: flex;
   flex-direction: column;
-  row-gap: calc(var(--spacing) * 2.5);
+  row-gap: 6px;
 }
 .nav-spy__item {
   position: relative;
@@ -554,34 +553,90 @@
 
 .nav-spy__link {
   position: relative;
-  display: inline-block;
+  display: flex;
+  align-items: center;
+  padding-right: 16px;
   font-family: var(--font-mono);
-  font-size: 17px;
+  font-size: 11px;
   font-weight: 700;
   line-height: 1;
+  letter-spacing: 0;
   text-transform: uppercase;
-  color: color-mix(in oklab, var(--ink) 60%, transparent);
+  color: color-mix(in oklab, var(--ink) 45%, transparent);
   cursor: pointer;
   transition: color 0.3s var(--ease-power4);
 }
-/* Fills left to right with the active section's own scroll progress. */
-.nav-spy__link::before {
-  content: "";
-  position: absolute;
-  top: -15%;
-  left: -2%;
-  z-index: -1;
-  width: 104%;
-  height: 130%;
-  background-color: var(--signal);
-  transform: scaleX(var(--scroll-progress, 0));
-  transform-origin: 0;
-}
-.nav-spy__link:hover {
-  color: color-mix(in oklab, var(--ink) 80%, transparent);
-}
+.nav-spy__link:hover,
+.nav-spy__link:focus-visible,
 .nav-spy__link.is-active {
   color: var(--ink);
+}
+
+/* Each segment fills top to bottom with its own section's scroll progress. */
+.nav-spy__track {
+  position: relative;
+  flex-shrink: 0;
+  width: 2px;
+  height: 26px;
+  background-color: color-mix(in oklab, var(--ink) 18%, transparent);
+}
+.nav-spy__fill {
+  position: absolute;
+  inset: 0;
+  background-color: var(--signal);
+  box-shadow: var(--glow);
+  transform: scaleY(var(--scroll-progress, 0));
+  transform-origin: 50% 0;
+}
+
+/* Out over the page only while the rail is hovered or focused. */
+.nav-spy__label {
+  position: absolute;
+  top: 50%;
+  left: 100%;
+  margin-left: 10px;
+  padding: 6px 8px;
+  white-space: nowrap;
+  color: var(--ink);
+  background-color: color-mix(in oklab, var(--surface) 84%, transparent);
+  border: 1px dashed color-mix(in oklab, var(--ink) 24%, transparent);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  opacity: 0;
+  translate: -8px -50%;
+  pointer-events: none;
+  transition:
+    opacity 0.25s var(--ease-power4),
+    translate 0.25s var(--ease-power4);
+  transition-delay: calc(var(--i, 0) * 30ms);
+}
+.nav-spy__link.is-active .nav-spy__label {
+  border-style: solid;
+  border-color: var(--signal);
+}
+.nav-spy:hover .nav-spy__label,
+.nav-spy:focus-within .nav-spy__label {
+  opacity: 1;
+  translate: 0 -50%;
+  pointer-events: auto;
+}
+
+/* The current section, named down the margin under the rail. */
+.nav-spy__current {
+  position: absolute;
+  top: calc(100% + 16px);
+  left: -4.5px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--signal);
+  text-shadow: var(--glow-text);
+  writing-mode: vertical-rl;
+  rotate: 180deg;
 }
 
 /* ---------- footer ---------- */

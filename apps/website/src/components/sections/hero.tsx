@@ -9,6 +9,7 @@ import { PixelIcon } from "@/components/ui/pixel-icon";
 import { SmartLink } from "@/components/ui/smart-link";
 import { createHeroTube } from "@/components/webgl/hero-tube";
 import { useThreeScene } from "@/components/webgl/use-three-scene";
+import { HeroTerminal } from "./hero-terminal";
 
 export function Hero() {
   const ref = useRef<HTMLElement>(null);
@@ -80,6 +81,7 @@ export function Hero() {
       <div className="main-hero__media">
         <HeroTube />
       </div>
+      <HeroTerminal />
       <div className="main-hero__footer">
         <h1 className="t-2xl main-hero__title js-title">{rich(HERO.title)}</h1>
         <SmartLink className="main-hero__scroll" href={`#${SECTION.about}`}>
