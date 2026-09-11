@@ -89,7 +89,10 @@
   --text-label--letter-spacing: 0.08em;
 }
 
-:root {
+/* `.light` re-applies the light theme inside a dark page, for surfaces that must stay light
+ * whatever the page around them is (the marketing site alternates dark and light sections). */
+:root,
+.light {
   --radius: 0.5rem;
 
   --background: oklch(0.982 0.002 248);
