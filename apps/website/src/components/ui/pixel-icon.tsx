@@ -91,13 +91,3 @@ export function PixelIcon({ name, className }: { name: PixelIconName; className?
     </svg>
   );
 }
-
-/** An icon's lit cells and the grid they sit on, for drawing it a pixel at a time. */
-export function pixelCells(name: PixelIconName) {
-  const rows = ICONS[name];
-  const cells: [number, number][] = [];
-  rows.forEach((row, y) => {
-    for (let x = 0; x < row.length; x++) if (row[x] === "#") cells.push([x, y]);
-  });
-  return { cells, width: rows[0].length, height: rows.length };
-}

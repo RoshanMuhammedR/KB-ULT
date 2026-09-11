@@ -54,7 +54,6 @@ export const HERO = {
 
 /** The hero's terminal: the demo question typed into Saga, and what retrieval finds for it. */
 export const TERMINAL = {
-  label: "Saga://query",
   question: DEMO_QUESTION,
   search: `Searching ${DEMO_LIBRARY.length} sources`,
   passages: DEMO_CITATIONS.map((citation) => ({
@@ -62,8 +61,7 @@ export const TERMINAL = {
     locator: formatLocator(citation.locator),
     score: Math.round(citation.score * 100)
   })),
-  verdict: `${DEMO_CITATIONS.length} passages cleared the bar — answer cited`,
-  states: { query: "Query", search: "Searching", rank: "Ranking", cite: "Cited" }
+  verdict: `${DEMO_CITATIONS.length} passages cleared the bar — answer cited`
 };
 
 export const ABOUT =
@@ -74,8 +72,6 @@ const CITED = DEMO_CITATIONS[0];
 /** Beside the statement: a sentence Saga gave back, the passage it points at, and a question
     the library can't answer. The marked words are the passage's own. */
 export const ABOUT_CARD = {
-  label: "Saga://answer",
-  status: "Cited",
   answer: "Gross margin fell about 180 basis points after Northwind absorbed an 11.2% rise in contracted haulage rates.",
   citation: {
     marker: "[1]",
@@ -155,14 +151,7 @@ export const RETRIEVAL = DEMO_CITATIONS.map((citation) => ({
   label: formatLocator(citation.locator)
 }));
 
-export type PrivacyItem = {
-  index: string;
-  title: string;
-  text: string;
-  icon: "rows" | "lock" | "erase" | "model";
-  /** The readout under its mark on the privacy screen. */
-  status: string;
-};
+export type PrivacyItem = { index: string; title: string; text: string; icon: "rows" | "lock" | "erase" | "model" };
 
 export const PRIVACY = {
   title: "Your documents<br/>stay yours.",
@@ -172,29 +161,25 @@ export const PRIVACY = {
       index: "01",
       title: "Row-level isolation",
       text: "Scoping is a database policy, not a WHERE clause someone can forget. Every account gets its own library, and it is only ever retrieved for you.",
-      icon: "rows",
-      status: "Row policy enforced"
+      icon: "rows"
     },
     {
       index: "02",
       title: "Encrypted at rest",
       text: "Encrypted at rest and in transit: the original files, and the vectors derived from them.",
-      icon: "lock",
-      status: "At rest + in transit"
+      icon: "lock"
     },
     {
       index: "03",
       title: "Deletion means deletion",
       text: "Removing a source removes its passages and its embeddings. Nothing of it stays behind to be found later.",
-      icon: "erase",
-      status: "Passages + vectors purged"
+      icon: "erase"
     },
     {
       index: "04",
       title: "No training on it",
       text: "Your documents are never used to train models. Nothing you add leaves your library to teach anything else.",
-      icon: "model",
-      status: "Excluded from training"
+      icon: "model"
     }
   ] satisfies PrivacyItem[]
 };

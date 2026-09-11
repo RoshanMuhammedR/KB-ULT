@@ -8,16 +8,16 @@ import { useLenis } from "@/components/providers/smooth-scroll";
 import { Button } from "@/components/ui/button";
 import { InteractiveGrid } from "@/components/ui/interactive-grid";
 import { PixelIcon } from "@/components/ui/pixel-icon";
-import { PrivacyScreen } from "./privacy-screen";
 
 const COUNT = PRIVACY.items.length;
-// Screens of scroll the section is held for, all four guarantees together.
+// Screens of scroll the section holds for while the four take their turns.
 const HOLD = COUNT * 0.75;
 
 /**
- * Four guarantees, held on screen while you scroll through them: each takes its turn in the
- * index, its mark redraws on the screen beside it a pixel at a time and a scan runs down it.
- * Picking one scrolls to it. On narrow screens the four become a row of cards.
+ * Four guarantees, as an index. On wide screens the section holds while you scroll through
+ * them: each takes its turn, its mark pinned beside it and its detail settled in the corner,
+ * underlining itself as it is read. Hovering one previews it; picking one scrolls to its turn.
+ * On narrow screens the four become a row of cards.
  */
 export function Privacy() {
   const ref = useRef<HTMLElement>(null);
@@ -54,54 +54,60 @@ export function Privacy() {
             autoSplit: true,
             onSplit: (self) =>
               gsap
-                .timeline({ scrollTrigger: { trigger: section, start: "top 60%", once: true } })
+                .timeline({ scrollTrigger: { trigger: section, start: "top top+=40%", once: true } })
                 .from(self.chars, { opacity: 0, stagger: 0.008, ease: "power2" })
           });
         })
       );
 
-      if (desktop) {
-        const segments = section.querySelectorAll<HTMLElement>(".js-privacy-segment");
-        const screen = section.querySelector<HTMLElement>(".js-privacy-screen");
+      const contents = section.querySelector(".testimonial-section__contents");
+      if (desktop && contents) {
+        const items = gsap.utils.toArray<HTMLElement>(".js-privacy-item", section);
+        const indices = gsap.utils.toArray<HTMLElement>(".js-privacy-index", section);
+        gsap.set([items, contents], { opacity: 0 });
+        const timeline = gsap
+          .timeline({ scrollTrigger: { trigger: section, start: "top top+=55%", once: true } })
+          .to(items, { opacity: 1, stagger: 0.08, ease: "power2.inOut", clearProps: "opacity" });
+        indices.forEach((element, i) => {
+          const text = element.textContent ?? "";
+          timeline.to(element, { scrambleText: { text, chars: "0123456789", speed: 2 } }, 0.125 + i * 0.08);
+        });
+        section.querySelectorAll<HTMLElement>(".js-privacy-title").forEach((element, i) => {
+          const text = element.textContent ?? "";
+          timeline.to(element, { scrambleText: { text, chars: text.replace(/\s/g, ""), speed: 2 } }, 0.25 + i * 0.08);
+        });
+        timeline.to(contents, { opacity: 1, duration: 0.8, ease: "power2.inOut", clearProps: "opacity" }, 0.25);
+
+        // A guarantee's index tunes in again as its turn comes up.
+        const retune = contextSafe((index: number) => {
+          if (prefersReducedMotion()) return;
+          gsap.to(indices[index], {
+            duration: 0.4,
+            overwrite: true,
+            scrambleText: { text: PRIVACY.items[index].index, chars: "0123456789", speed: 2 }
+          });
+        });
+
+        // Held while the four take their turns; the one in turn fills its underline as it's
+        // scrolled through. Shorter than the screen, it holds from its bottom edge, so all of
+        // it is in view.
         let current = 0;
         holdRef.current = ScrollTrigger.create({
           trigger: frame,
-          start: "top top",
+          start: () => (frame.offsetHeight >= window.innerHeight ? "top top" : "bottom bottom"),
           end: () => `+=${window.innerHeight * HOLD}`,
           pin: true,
           invalidateOnRefresh: true,
           onUpdate(self) {
             const steps = self.progress * COUNT;
+            items.forEach((item, i) => item.style.setProperty("--fill", String(gsap.utils.clamp(0, 1, steps - i))));
             const next = Math.min(COUNT - 1, Math.floor(steps));
-            if (next !== current) {
-              current = next;
-              setActive(next);
-            }
-            segments.forEach((segment, i) => segment.style.setProperty("--fill", String(gsap.utils.clamp(0, 1, steps - i))));
-            screen?.style.setProperty("--scan", String(gsap.utils.clamp(0, 1, steps - next)));
+            if (next === current) return;
+            current = next;
+            setActive(next);
+            retune(next);
           }
         });
-
-        // The screen powers on as the section comes up - a line that opens into a picture -
-        // and the index tunes in beside it.
-        if (!prefersReducedMotion()) {
-          const items = section.querySelectorAll(".js-privacy-item");
-          const inner = section.querySelector(".js-privacy-screen-inner");
-          gsap.set(items, { opacity: 0 });
-          const boot = gsap
-            .timeline({ scrollTrigger: { trigger: section, start: "top 55%", once: true } })
-            .fromTo(inner, { scaleX: 0.3, scaleY: 0.005, opacity: 0 }, { scaleX: 1, opacity: 1, duration: 0.3, ease: "power2.out" }, 0)
-            .to(inner, { scaleY: 1, duration: 0.45, ease: "power3.out" }, 0.3)
-            .to(items, { opacity: 1, stagger: 0.08, ease: "power2.inOut", clearProps: "opacity" }, 0.15);
-          section.querySelectorAll<HTMLElement>(".js-privacy-index").forEach((element, i) => {
-            const text = element.textContent ?? "";
-            boot.to(element, { scrambleText: { text, chars: "0123456789", speed: 2 } }, 0.25 + i * 0.08);
-          });
-          section.querySelectorAll<HTMLElement>(".js-privacy-title").forEach((element, i) => {
-            const text = element.textContent ?? "";
-            boot.to(element, { scrambleText: { text, chars: text.replace(/\s/g, ""), speed: 2 } }, 0.35 + i * 0.08);
-          });
-        }
       }
 
       return () => {
@@ -112,7 +118,7 @@ export function Privacy() {
     { scope: ref, dependencies: [desktop], revertOnUpdate: true }
   );
 
-  // Picking a guarantee scrolls to its stretch of the hold, so the page and the index agree.
+  // Picking a guarantee scrolls to its turn, so the page and the index agree.
   const select = (index: number) => {
     const hold = holdRef.current;
     if (!hold) {
@@ -136,49 +142,60 @@ export function Privacy() {
       <div className="testimonial-section__frame">
         <InteractiveGrid />
         <div className="testimonial-section__container">
-          <div className="testimonial-section__copy">
-            <div className="testimonial-section__head">
-              <h2 className="t-2xl testimonial-section__title">{rich(PRIVACY.title)}</h2>
-            </div>
+          <div className="testimonial-section__head">
+            <h2 className="t-2xl testimonial-section__title">{rich(PRIVACY.title)}</h2>
+          </div>
+          <div className="testimonial-section__content">
             {desktop ? (
-              <>
-                <ul className="testimonial-section__list">
-                  {PRIVACY.items.map((item, index) => (
-                    <li
-                      key={item.index}
-                      className={`testimonial-section__item js-privacy-item${active === index ? " is-active" : ""}`}
-                    >
-                      <button
-                        type="button"
-                        className="testimonial-section__item-link"
-                        aria-pressed={active === index}
-                        aria-controls={`privacy-${item.index}`}
-                        onClick={() => select(index)}
+              <div className="testimonial-section__desktop">
+                <div className="testimonial-section__items">
+                  <ul className="testimonial-section__list">
+                    {PRIVACY.items.map((item, index) => (
+                      <li
+                        key={item.index}
+                        className={`testimonial-section__item js-privacy-item${active === index ? " is-active" : ""}`}
+                        onMouseEnter={() => setActive(index)}
                       >
-                        <span className="t-xl testimonial-section__item-index js-privacy-index">{item.index}</span>
-                        <span className="t-xl testimonial-section__item-title js-privacy-title">{item.title}</span>
-                        <span className="testimonial-section__item-icon" aria-hidden="true">
-                          <PixelIcon name="arrow" />
-                        </span>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-                <div className="testimonial-section__details">
+                        <button
+                          type="button"
+                          className="testimonial-section__item-link"
+                          aria-pressed={active === index}
+                          aria-controls={`privacy-${item.index}`}
+                          onFocus={() => setActive(index)}
+                          onClick={() => select(index)}
+                        >
+                          <span className="t-xl testimonial-section__item-index js-privacy-index">{item.index}</span>
+                          <span className="t-xl testimonial-section__item-title js-privacy-title">{item.title}</span>
+                          <span className="testimonial-section__item-icon" aria-hidden="true">
+                            <PixelIcon name="arrow" />
+                          </span>
+                        </button>
+                        <div className="testimonial-section__item-logo-wrap" aria-hidden="true">
+                          <PixelIcon name={item.icon} />
+                          <span className="testimonial-section__item-logo-pin" />
+                          <span className="testimonial-section__item-logo-pin" />
+                          <span className="testimonial-section__item-logo-pin" />
+                          <span className="testimonial-section__item-logo-pin" />
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+                <div className="testimonial-section__contents">
                   {PRIVACY.items.map((item, index) => (
                     <div
                       key={item.index}
                       id={`privacy-${item.index}`}
-                      className={`testimonial-section__detail${active === index ? " is-active" : ""}`}
+                      className={`testimonial-section__content-group${active === index ? " is-active" : ""}`}
                     >
-                      <p className="t-md testimonial-section__detail-text">{item.text}</p>
-                      <p className="t-eye-xs testimonial-section__detail-author">
+                      <p className="t-md testimonial-section__content-text">{item.text}</p>
+                      <p className="t-eye-xs testimonial-section__content-author">
                         {PRIVACY.byline} / {item.index}
                       </p>
                     </div>
                   ))}
                 </div>
-              </>
+              </div>
             ) : (
               <div className="testimonial-section__mobile">
                 <div ref={trackRef} className="testimonial-section__mobile-track">
@@ -208,7 +225,6 @@ export function Privacy() {
               </div>
             )}
           </div>
-          {desktop && <PrivacyScreen active={active} />}
         </div>
       </div>
     </section>
