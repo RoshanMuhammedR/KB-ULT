@@ -1,19 +1,15 @@
-import type { Metadata } from "next";
-import { JetBrains_Mono, Newsreader, Plus_Jakarta_Sans } from "next/font/google";
-import { THEME_SCRIPT } from "@kb/ui";
+import type { Metadata, Viewport } from "next";
+import { Azeret_Mono, Inter_Tight } from "next/font/google";
+import { Loader } from "@/components/chrome/loader";
+import { Noise } from "@/components/chrome/noise";
+import { PageStateProvider } from "@/components/providers/page-state";
+import { SmoothScroll } from "@/components/providers/smooth-scroll";
 import "./globals.css";
 
-// Fed into --font-sans / --font-serif / --font-mono by packages/ui/src/theme.css, which
-// reads these variables rather than naming the families itself.
-const sans = Plus_Jakarta_Sans({
-  subsets: ["latin"],
-  variable: "--font-sans-src",
-  display: "swap"
-});
-// Answer prose and display headings only. Loaded here rather than in a component because
-// next/font has to hoist to a module scope it can statically see.
-const serif = Newsreader({ subsets: ["latin"], variable: "--font-serif-src", display: "swap" });
-const mono = JetBrains_Mono({ subsets: ["latin"], variable: "--font-mono-src", display: "swap" });
+// Fed into --font-sans / --font-mono by src/styles/base.css, which reads these variables
+// rather than naming the families itself (and tightens Inter Tight's tracking to suit).
+const display = Inter_Tight({ subsets: ["latin"], variable: "--font-display-src", display: "swap" });
+const mono = Azeret_Mono({ subsets: ["latin"], weight: ["700"], variable: "--font-mono-src", display: "swap" });
 
 export const metadata: Metadata = {
   title: "Saga — cited answers over your own sources",
@@ -21,14 +17,32 @@ export const metadata: Metadata = {
     "Saga turns your PDFs and links into a private, source-cited knowledge base you can chat with."
 };
 
+export const viewport: Viewport = {
+  themeColor: "#0e0f12",
+  colorScheme: "dark"
+};
+
+// The page is the product's dark theme; sections that need its light theme opt in with `.light`.
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" className={`${sans.variable} ${serif.variable} ${mono.variable}`} suppressHydrationWarning>
-      <head>
-        {/* Applies the stored theme before first paint, so a dark reload never flashes light. */}
-        <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
-      </head>
-      <body>{children}</body>
+    <html lang="en" className={`dark ${display.variable} ${mono.variable}`}>
+      <body>
+        <PageStateProvider>
+          <SmoothScroll>
+            <div className="page__wrap">
+              <div className="page__container">
+                <Loader />
+                <div className="transition__container">
+                  <div className="transition__node">
+                    <Noise />
+                    {children}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </SmoothScroll>
+        </PageStateProvider>
+      </body>
     </html>
   );
 }

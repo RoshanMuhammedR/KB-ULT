@@ -9,18 +9,23 @@
     "test": "echo \"website package has no test step\""
   },
   "dependencies": {
+    "@gsap/react": "^2.1.2",
     "@kb/shared": "workspace:*",
     "@kb/ui": "workspace:*",
+    "gsap": "^3.15.0",
+    "lenis": "^1.3.26",
+    "lucide-react": "^0.575.0",
     "next": "^15.1.4",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "lucide-react": "^0.575.0"
+    "three": "^0.186.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.0.0",
     "@types/node": "^22.10.5",
     "@types/react": "^19.0.2",
     "@types/react-dom": "^19.0.2",
+    "@types/three": "^0.185.4",
     "eslint": "^9.17.0",
     "eslint-config-next": "^15.1.4",
     "tailwindcss": "^4.0.0",

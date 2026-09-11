@@ -1,4 +1,5 @@
 @import "tailwindcss";
 @import "@kb/ui/theme.css";
-@source "../../../../packages/ui/src";
-@source "../../../../packages/shared/src";
+@import "../styles/base.css";
+@import "../styles/chrome.css";
+@import "../styles/sections.css";

@@ -16,12 +16,6 @@ export type DemoCitation = {
   excerpt: string;
 };
 
-export const DEMO_QUESTION = "What drove the margin decline at Northwind in Q2?";
-
-export const DEMO_ANSWER = `Two things, and the filing separates them clearly. The larger share came from freight: contracted haulage rates rose 11% year on year after the Q1 renewals, which Northwind absorbed rather than passing on to shippers already under contract.
-
-The second was mix. Bonded warehousing — the highest-margin line — grew more slowly than general fulfilment, so the blended margin fell even where individual lines held. Management expects the freight effect to persist into Q3 and the mix effect to reverse as the Rotterdam bonded capacity comes online.`;
-
 export const DEMO_CITATIONS: DemoCitation[] = [
   {
     filename: "northwind-q2-2026-10q.pdf",
@@ -59,5 +53,3 @@ export const DEMO_LIBRARY: { title: string; source_type: SourceType }[] = [
   { title: "Freight market outlook 2026", source_type: "youtube" },
   { title: "Discovery notes — Rotterdam", source_type: "markdown" }
 ];
-
-export const DEMO_INSUFFICIENT = `I couldn't answer this from your sources. Nothing in your library discusses pricing strategy closely enough for me to quote it — the closest material is the Meridian onboarding deck, which covers engagement scope but not pricing.`;

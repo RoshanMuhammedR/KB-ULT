@@ -1,0 +1,406 @@
+/*
+ * Tokens, base and type.
+ *
+ * Colour comes from the product's own theme (packages/ui/src/theme.css): the page is its dark
+ * theme, and sections marked `.light` switch to its light theme. The names below re-resolve at
+ * every surface boundary, so one rule (`color: var(--ink)`) reads correctly on either - and the
+ * marketing site can never drift from the app's palette.
+ *
+ * Fluid sizes interpolate linearly between a 402px and a 1920px viewport, so a size reads the
+ * same proportion of the screen on a phone and on a wide monitor.
+ */
+
+:root,
+.light,
+.dark {
+  --surface: var(--background);
+  --surface-raised: var(--card);
+  /* The hero, loader and 404 sit a step below the page's own background. */
+  --surface-deep: color-mix(in oklab, var(--background) 66%, #000);
+  --ink: var(--foreground);
+  --ink-muted: var(--muted-foreground);
+  /* The one accent. The WebGL scenes and the loader read it at runtime, so they follow too. */
+  --signal: var(--primary);
+  --on-signal: var(--primary-foreground);
+  --glow: 0 0 9px color-mix(in oklab, var(--signal) 50%, transparent);
+  --glow-text: 0 0 10px color-mix(in oklab, var(--signal) 85%, transparent);
+}
+
+:root {
+  --font-sans: var(--font-display-src), "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-mono: var(--font-mono-src), ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --fluid: calc((100vw - 402px) / 1518);
+  --text-xs: 0.75rem;
+  --text-sm: clamp(13px, calc(13px + 4 * var(--fluid)), 17px);
+  --text-md: clamp(15px, calc(15px + 5 * var(--fluid)), 20px);
+  --text-lg: clamp(18px, calc(18px + 14 * var(--fluid)), 32px);
+  --text-2lg: clamp(36px, calc(36px + 4 * var(--fluid)), 40px);
+  --text-xl: clamp(25px, calc(25px + 20 * var(--fluid)), 45px);
+  --text-half-xl: clamp(40px, calc(40px + 23 * var(--fluid)), 63px);
+  --text-2xl: clamp(40px, calc(40px + 48 * var(--fluid)), 88px);
+  --text-3xl: clamp(75px, calc(75px + 70 * var(--fluid)), 145px);
+
+  /* Inter Tight stands in for a display grotesk that sets narrower; these two pull it back. */
+  --weight-book: 400;
+  --weight-light: 300;
+  --tracking-display: -0.022em;
+  --tracking-text: -0.008em;
+
+  --padding: clamp(20px, calc(20px + 40 * var(--fluid)), 60px);
+  --padding-lg: clamp(20px, calc(20px + 80 * var(--fluid)), 120px);
+  --v-height: 100svh;
+  --spacing: 0.25rem;
+
+  --ease-power4: cubic-bezier(0.215, 0.61, 0.355, 1);
+
+  --z-loader: 100;
+  --z-nav: 90;
+  --z-nav-spy: 85;
+}
+
+html,
+body {
+  width: 100%;
+  font-family: var(--font-sans);
+}
+
+html {
+  -webkit-text-size-adjust: none;
+}
+
+body {
+  min-height: 100%;
+  background-color: var(--surface);
+  color: var(--ink);
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-tap-highlight-color: transparent;
+}
+
+::selection {
+  background-color: var(--signal);
+  color: var(--on-signal);
+  text-shadow: none;
+}
+
+main,
+section {
+  position: relative;
+  width: 100%;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+:focus-visible {
+  outline: 1px dashed var(--signal);
+  outline-offset: 3px;
+}
+
+/* Lenis: the document scrolls natively, Lenis only smooths it. */
+html.lenis,
+html.lenis body {
+  height: auto;
+}
+.lenis:not(.lenis-autoToggle).lenis-stopped {
+  overflow: clip;
+}
+.lenis [data-lenis-prevent] {
+  overscroll-behavior: contain;
+}
+.lenis.lenis-smooth iframe {
+  pointer-events: none;
+}
+
+/* ---------- type ---------- */
+
+.t-xs {
+  font-size: 11px;
+  font-weight: var(--weight-book);
+  line-height: 1.4;
+}
+
+.t-sm {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-book);
+  line-height: 1.4;
+  letter-spacing: var(--tracking-text);
+}
+
+.t-md {
+  font-size: var(--text-md);
+  font-weight: var(--weight-book);
+  line-height: 1.4;
+  letter-spacing: var(--tracking-text);
+}
+
+.t-lg,
+.t-2lg,
+.t-xl,
+.t-half-xl {
+  font-weight: var(--weight-book);
+  line-height: 1.15;
+  letter-spacing: var(--tracking-display);
+}
+.t-lg {
+  font-size: var(--text-lg);
+}
+.t-2lg {
+  font-size: var(--text-2lg);
+}
+.t-xl {
+  font-size: var(--text-xl);
+}
+.t-half-xl {
+  font-size: var(--text-half-xl);
+}
+
+.t-2xl,
+.t-3xl {
+  font-weight: var(--weight-book);
+  line-height: 1.1;
+  letter-spacing: var(--tracking-display);
+}
+.t-2xl {
+  font-size: var(--text-2xl);
+}
+.t-3xl {
+  font-size: var(--text-3xl);
+}
+
+.t-eye-xs,
+.t-eye-sm {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  line-height: 1;
+  text-transform: uppercase;
+}
+.t-eye-xs {
+  font-size: 11px;
+}
+.t-eye-sm {
+  font-size: var(--text-sm);
+}
+
+/* SplitText output. A word must stay atomic: once its letters are separate boxes, the line
+   could otherwise break between any two of them. */
+.line-mask {
+  overflow: clip;
+}
+.word {
+  display: inline-block;
+}
+.char {
+  display: inline-flex;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+/* ---------- film grain ---------- */
+
+.noise {
+  position: fixed;
+  inset: 0;
+  z-index: 12;
+  pointer-events: none;
+  background-repeat: repeat;
+  background-size: 192px 192px;
+  opacity: 0;
+  transition: opacity 0.5s ease-in-out;
+  animation: noise-shift 0.48s steps(1) infinite;
+}
+
+@keyframes noise-shift {
+  0% {
+    background-position: 0 0;
+  }
+  12.5% {
+    background-position: -71px -113px;
+  }
+  25% {
+    background-position: -149px -37px;
+  }
+  37.5% {
+    background-position: -23px -161px;
+  }
+  50% {
+    background-position: -118px -84px;
+  }
+  62.5% {
+    background-position: -57px -12px;
+  }
+  75% {
+    background-position: -171px -139px;
+  }
+  87.5% {
+    background-position: -96px -58px;
+  }
+}
+
+/* ---------- button ---------- */
+
+.button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  column-gap: calc(var(--spacing) * 5);
+  width: fit-content;
+  padding: calc(var(--spacing) * 4) calc(var(--spacing) * 6.25);
+  color: var(--ink);
+  /* A dashed border drawn in the fill colour over a gradient: the gaps carry the gradient. */
+  background:
+    linear-gradient(var(--surface), var(--surface)) padding-box,
+    linear-gradient(var(--signal), color-mix(in oklab, var(--ink) 30%, transparent)) border-box;
+  border: 1px dashed var(--surface);
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.button::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: 5px;
+  background: linear-gradient(
+    90deg,
+    color-mix(in oklab, var(--signal) 5%, transparent),
+    color-mix(in oklab, var(--signal) 20%, transparent)
+  );
+  box-shadow: 0 2px 15px color-mix(in oklab, var(--signal) 40%, transparent);
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+
+.button__text {
+  position: relative;
+  z-index: 2;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  text-transform: uppercase;
+  white-space: nowrap;
+  letter-spacing: 0;
+}
+
+.button__icon {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: calc(var(--spacing) * 7.75);
+  height: calc(var(--spacing) * 7.75);
+  overflow: hidden;
+  border-radius: 0.375rem;
+  background-color: var(--signal);
+  color: var(--on-signal);
+}
+
+.button__icon-front,
+.button__icon-back {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  transition: transform 0.42s var(--ease-power4);
+}
+.button__icon-front svg {
+  width: calc(var(--spacing) * 3);
+  height: auto;
+}
+.button__icon-back {
+  position: absolute;
+  inset: 0;
+  transform: translate(-100%);
+}
+.button__icon-back svg {
+  width: calc(var(--spacing) * 5);
+  height: auto;
+}
+
+.button--light {
+  background:
+    linear-gradient(var(--surface-raised), var(--surface-raised)) padding-box,
+    linear-gradient(var(--signal), color-mix(in oklab, var(--ink) 50%, transparent)) border-box;
+  border: 2px dotted var(--surface-raised);
+}
+
+.button--sm {
+  padding-block: calc(var(--spacing) * 3.75);
+}
+
+.button--icon {
+  aspect-ratio: 1;
+  padding: calc(var(--spacing) * 2);
+  background: var(--surface);
+  border: 1px dotted var(--ink-muted);
+}
+.button--icon .button__icon {
+  width: calc(var(--spacing) * 5);
+  height: calc(var(--spacing) * 5);
+  background-color: transparent;
+  color: var(--ink);
+}
+.button--icon:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.button--inverted .button__icon-front,
+.button--inverted .button__icon-back {
+  rotate: 180deg;
+}
+.button--inverted .button__icon-back {
+  transform: translate(100%);
+}
+
+@media (hover: hover) {
+  .button:hover::before {
+    opacity: 1;
+  }
+  .button:hover .button__icon-front {
+    transform: translate(100%);
+  }
+  .button:hover .button__icon-back {
+    transform: translate(0);
+  }
+  .button--inverted:hover .button__icon-front {
+    transform: translate(-100%);
+  }
+  .button--icon:not(:disabled):hover {
+    border-color: var(--signal);
+  }
+}
+
+/* Split letters sit in boxes of their own, which drops kerning and ligatures and widens every
+   line a little past the width SplitText measured it at - enough to push a line's last word
+   onto one of its own. Turning both off before the split keeps the measurement true. */
+.main-hero__title,
+.main-hero__description,
+.about-section__title,
+.data-viz-section__center-title,
+.data-viz-section__center-text,
+.services-section__title,
+.services-section__text,
+.testimonial-section__title,
+.call-section__title,
+.call-section__text {
+  font-kerning: none;
+  font-variant-ligatures: none;
+}
