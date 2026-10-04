@@ -24,7 +24,6 @@ from src.core.config import Settings
 from src.domain.entities import SourceType
 from src.domain.interfaces import IFileStorage, IJobQueue
 from src.domain.interfaces.auth import ITokenService
-from src.domain.interfaces.cache import ICache
 from src.http.middleware import BearerTokenAuthenticator
 from src.infrastructure.ai_providers import (
     AICreditsEmbeddingProvider,
@@ -36,7 +35,6 @@ from src.infrastructure.auth import (
     GoogleIdTokenVerifier,
     JwtTokenService,
 )
-from src.infrastructure.cache import EmbeddingCache, RedisCache
 from src.infrastructure.document_parsing import PyMuPDF4LLMAdapter
 from src.infrastructure.langchain_adapters.chat_model import OpenAICompatibleChatAdapter
 from src.infrastructure.langchain_adapters.embeddings import OpenAICompatibleEmbeddingsAdapter
@@ -80,18 +78,6 @@ from src.retrieval.retriever import Retriever
 
 def build_file_storage(settings: Settings) -> IFileStorage:
     return FilebaseAdapter(settings)
-
-
-# One cache client (and its connection pool) is shared process-wide; tenant isolation is
-# in the KEYS (see infrastructure/cache/keys.py), not in separate client instances.
-_cache: RedisCache | None = None
-
-
-def build_cache(settings: Settings) -> ICache:
-    global _cache
-    if _cache is None:
-        _cache = RedisCache(settings.cache_url)
-    return _cache
 
 
 def build_job_queue(db: AsyncAsyncSession | None = None) -> IJobQueue:
@@ -261,17 +247,7 @@ def build_agentic_chat_service(db: AsyncSession, settings: Settings) -> AgenticC
         chunk_repo=chunk_repo,
         loop=RetrievalLoop(
             vector_store=vector_store,
-            # Query embeddings go through the cache: a repeated question is common in a
-            # personal knowledge base, and the vector for a given string never changes.
-            embedding_provider=EmbeddingCache(
-                _build_embedding_provider(settings),
-                build_cache(settings),
-                model=settings.aicredits_embedding_model,
-                ttl_seconds=settings.embedding_cache_ttl_seconds,
-                # In the key and checked on read: a gateway serving a different width under
-                # the same model id would otherwise hand pgvector a mismatched vector.
-                dimensions=settings.embedding_dimensions,
-            ),
+            embedding_provider=_build_embedding_provider(settings),
             reranker=ScoringReranker(
                 fast,
                 top_n=settings.rerank_top_n,

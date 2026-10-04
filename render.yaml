@@ -1,0 +1,65 @@
+# Render Blueprint for the API. Render dashboard -> New -> Blueprint -> this repo.
+#
+# One free web service runs both the HTTP API and the ingestion worker (RUN_WORKER_IN_PROCESS):
+# Render has no free background-worker tier. It sleeps after 15 idle minutes; queued jobs
+# wait in Postgres and run on the next wake-up.
+#
+# The two Next apps are on Vercel; the marketing site's rewrites send /api/* here, so the
+# browser only ever talks to https://saga.dedyn.io.
+services:
+  - type: web
+    name: saga-api
+    runtime: docker
+    plan: free
+    # Same region as the Supabase project (ap-southeast-1).
+    region: singapore
+    repo: https://github.com/RoshanMuhammedR/KB-ULT
+    branch: main
+    dockerfilePath: ./apps/api/Dockerfile
+    dockerContext: ./apps/api
+    healthCheckPath: /health
+    autoDeployTrigger: commit
+    buildFilter:
+      include:
+        - apps/api/**
+        - render.yaml
+    envVars:
+      # The image binds 8000; this tells Render where to route.
+      - key: PORT
+        value: "8000"
+      # Migrate + create the kb_app role on boot (docker-entrypoint.sh).
+      - key: RUN_MIGRATIONS
+        value: "1"
+      - key: RUN_WORKER_IN_PROCESS
+        value: "1"
+      - key: REQUIRE_RLS
+        value: "1"
+      # Supabase -> Connect -> Session pooler (port 5432), with the `postgresql+psycopg://`
+      # scheme. Session mode: the queue needs LISTEN/NOTIFY, and RLS needs a per-transaction
+      # setting, both of which the transaction pooler (6543) breaks.
+      - key: DATABASE_URL
+        sync: false
+      # Password of the non-superuser `kb_app` role. Generated once by Render; the entrypoint
+      # sets it on the role and the API derives its ORM URL from it. Nobody needs to see it.
+      - key: APP_DB_PASSWORD
+        generateValue: true
+      - key: JWT_SECRET
+        generateValue: true
+      # The ORM pool and Procrastinate's pool share one process and one small session pooler.
+      - key: DB_POOL_SIZE
+        value: "3"
+      - key: DB_MAX_OVERFLOW
+        value: "2"
+      # Public by design (it ships in the browser bundle too).
+      - key: GOOGLE_CLIENT_ID
+        value: 572160365810-96l81q4l1k4q3bjjcmjb3753h9tpaaa9.apps.googleusercontent.com
+      - key: CORS_ALLOWED_ORIGINS
+        value: https://saga.dedyn.io
+      - key: AICREDITS_API_KEY
+        sync: false
+      - key: FILEBASE_ACCESS_KEY
+        sync: false
+      - key: FILEBASE_SECRET_KEY
+        sync: false
+      - key: FILEBASE_BUCKET_NAME
+        sync: false

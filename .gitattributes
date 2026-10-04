@@ -1,9 +1,7 @@
 # CRLF breaks shebangs on Linux ("bad interpreter"), and Windows checks out CRLF by default.
-# These files run inside containers or on the VPS, so they must stay LF. (The reverse proxy's
-# Caddyfile now lives on the VPS itself, not in this repo, since it's shared across projects.)
+# These files run inside containers or CI, so they must stay LF.
 **/docker-entrypoint.sh     text eol=lf
 **/Dockerfile               text eol=lf
 **/.dockerignore            text eol=lf
+render.yaml                 text eol=lf
 .github/workflows/*.yml     text eol=lf
-deploy/docker-compose.yml   text eol=lf
-deploy/.env.example         text eol=lf

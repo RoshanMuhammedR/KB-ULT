@@ -27,9 +27,6 @@ dependencies = [
   "python-multipart>=0.0.20",
   # Pure Python over lxml/Pillow — no compilation, no ML runtime.
   "python-pptx>=1.0.2",
-  # One client for both environments: local Valkey and the shared production Redis both
-  # speak RESP, and redis-py ships `redis.asyncio`, which the async cache layer needs.
-  "redis>=5.2",
   "sqlalchemy>=2.0.36",
   "structlog>=24.4.0",
   "tiktoken>=0.8.0",

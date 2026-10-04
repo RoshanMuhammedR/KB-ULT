@@ -12,17 +12,16 @@ Every `pnpm` script below runs on Windows, macOS and Linux. The shell-specific l
 | pnpm | 9 | `corepack enable && corepack prepare pnpm@9.15.0 --activate` |
 | Python | **3.11+** | the API's `pyproject.toml` sets `requires-python >= 3.11` |
 | PostgreSQL | 16+ **with the `pgvector` extension** | the first migration runs `CREATE EXTENSION vector` |
-| Valkey or Redis | any recent | optional locally — the cache degrades gracefully if absent |
 
 Installing Python and PostgreSQL+pgvector:
 
 ```bash
 # macOS
 brew install python@3.12 pgvector
-brew install postgresql@16 valkey && brew services start postgresql@16
+brew install postgresql@16 && brew services start postgresql@16
 
 # Debian/Ubuntu  (match the -NN suffix to your server version)
-sudo apt install python3.12 python3.12-venv postgresql-16 postgresql-16-pgvector valkey-server
+sudo apt install python3.12 python3.12-venv postgresql-16 postgresql-16-pgvector
 
 # Windows
 winget install --id Python.Python.3.12 --source winget
@@ -54,7 +53,7 @@ cp .env.example .env       # or: pnpm run setup, which does this for you
 pnpm run setup             # installs JS deps, creates .env, builds apps/api/.venv
 pnpm run db:migrate        # app tables incl. tenants/users/RLS (alembic)
 pnpm run db:queue-schema   # Procrastinate queue tables (one-time, idempotent)
-pnpm run db:app-role       # non-superuser role for RLS (only needed if using APP_DATABASE_URL)
+pnpm run db:app-role       # non-superuser kb_app role (APP_DB_PASSWORD) so RLS applies
 pnpm run dev               # api + web + website (does NOT start the worker)
 pnpm run worker            # in a second terminal: consumes ingestion jobs
 ```
@@ -77,10 +76,9 @@ atomic step and returns a signed-in session; `POST /auth/login` takes an email a
 request sends `Authorization: Bearer <access_token>`. There is no fallback identity: a
 request without a valid token gets a `401`.
 
-Row isolation is enforced by an ORM tenant-filter and, when `APP_DATABASE_URL` points at the
-non-superuser `kb_app` role, by Postgres RLS as well. A **Valkey** cache runs in
-`docker-compose`, but no code path uses it today — the port and adapter are kept for the next
-feature that needs one.
+Row isolation is enforced by an ORM tenant-filter and, when the API connects as the
+non-superuser `kb_app` role (set `APP_DB_PASSWORD`, then `pnpm run db:app-role`), by Postgres
+RLS as well.
 
 Ingestion is asynchronous: `POST /documents/upload` stores the file, enqueues a
 job, and returns `202` with a `queued` asset. The **worker** (`pnpm run worker`)
@@ -99,7 +97,7 @@ Open:
 - API health: http://localhost:8000/health
 
 The product app is served under the `/app` base path even in dev, so it matches production,
-where Caddy routes `/app/*` to it and `/*` to the marketing site on a single port.
+where the marketing site's rewrites route `/app/*` to it on a single origin.
 
 Useful commands:
 
@@ -124,7 +122,7 @@ pnpm run docker:db:queue-schema
 pnpm run docker:db:sql
 ```
 
-For deploying to a server, see [deployment.md](deployment.md).
+For production hosting (Vercel + Render + Supabase), see [deployment.md](deployment.md).
 
 The Docker scripts use `scripts/compose.mjs`, which prefers `docker compose` and
 falls back to `docker-compose`.

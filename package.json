@@ -11,7 +11,7 @@
     "test": "node scripts/run.mjs exec turbo run test",
     "db:migrate": "node scripts/run.mjs venv --cwd apps/api alembic upgrade head",
     "db:queue-schema": "node scripts/run.mjs venv --cwd apps/api procrastinate --app=src.infrastructure.queue.app.app schema --apply",
-    "db:app-role": "node scripts/run.mjs psql --set ON_ERROR_STOP=1 -v app_password=@{APP_DB_PASSWORD:kb_app_password} -v db=@{POSTGRES_DB:kb_new} -f apps/api/scripts/create_app_role.sql",
+    "db:app-role": "node scripts/run.mjs venv --cwd apps/api python scripts/ensure_app_role.py",
     "worker": "node scripts/run.mjs venv --cwd apps/api procrastinate --app=src.infrastructure.queue.app.app worker",
     "worker:dev": "node scripts/run.mjs venv --cwd apps/api watchfiles --target-type command \"procrastinate --app=src.infrastructure.queue.app.app worker\" src",
     "db:reset": "node scripts/run.mjs psql --set ON_ERROR_STOP=1 -c \"DROP SCHEMA public CASCADE; CREATE SCHEMA public;\" && pnpm run db:migrate && pnpm run db:queue-schema && pnpm run db:app-role",
@@ -20,7 +20,7 @@
     "docker:dev": "node scripts/compose.mjs up",
     "docker:db:migrate": "node scripts/compose.mjs run --rm api alembic upgrade head",
     "docker:db:queue-schema": "node scripts/compose.mjs run --rm api procrastinate --app=src.infrastructure.queue.app.app schema --apply",
-    "docker:db:app-role": "node scripts/compose.mjs --stdin apps/api/scripts/create_app_role.sql exec -T db psql -U kb_user -d kb_new -v app_password=@{APP_DB_PASSWORD:kb_app_password} -v db=kb_new",
+    "docker:db:app-role": "node scripts/compose.mjs run --rm api python scripts/ensure_app_role.py",
     "docker:db:sql": "node scripts/compose.mjs exec db psql -U kb_user -d kb_new"
   },
   "devDependencies": {

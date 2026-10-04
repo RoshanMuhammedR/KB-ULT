@@ -1,3 +1,5 @@
+import asyncio
+import contextlib
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -47,7 +49,21 @@ async def lifespan(_: FastAPI):
     # synchronous `.defer()` in request handlers has a live connection pool. Without
     # this, deferring raises AppNotOpen. The worker process opens the app on its own.
     async with queue_app.open_async():
-        yield
+        # On a host with no worker tier the API runs the queue worker itself, on this same
+        # loop. That is safe because ingestion's blocking work (PDF parsing, PPTX reading,
+        # transcript fetches) already runs in threads, and everything else is async I/O.
+        worker = (
+            asyncio.create_task(queue_app.run_worker_async(install_signal_handlers=False))
+            if settings.run_worker_in_process
+            else None
+        )
+        try:
+            yield
+        finally:
+            if worker is not None:
+                worker.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await worker
 
     # Push any buffered spans before the process goes away, or the last question of a
     # deploy is never traced.
@@ -78,7 +94,7 @@ app.add_middleware(
 
 app.add_middleware(
     CORSMiddleware,
-    # Only relevant in local dev: in production Caddy serves the apps and the API from one
+    # Only relevant in local dev: in production Vercel serves the apps and proxies the API on one
     # origin, so browser requests to /api/* are same-origin and never preflight.
     allow_origins=settings.cors_origins,
     allow_credentials=True,

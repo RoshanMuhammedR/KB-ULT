@@ -5,6 +5,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ENV_FILES = tuple(parent / ".env" for parent in reversed(Path(__file__).resolve().parents))
 
+# The non-superuser role ORM sessions connect as (created by scripts/ensure_app_role.py).
+APP_DB_ROLE = "kb_app"
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=(*ENV_FILES, ".env"), extra="ignore")
@@ -13,14 +16,21 @@ class Settings(BaseSettings):
     # RLS backstop: the ORM sessions connect as this NON-superuser role so Postgres
     # Row-Level Security actually applies (superusers bypass RLS). Migrations and the
     # Procrastinate connector keep using `database_url` (superuser) for DDL/queue internals.
-    # Empty => fall back to `database_url` (RLS dormant; the ORM tenant-filter still applies).
+    # Empty => derived from `database_url` + `app_db_password` (see `orm_database_url`).
     app_database_url: str = ""
+    # Password for the app role. scripts/ensure_app_role.py sets it on the role, and
+    # `orm_database_url` builds the ORM's URL from it, so a host only has to hold it once.
+    app_db_password: str = ""
     # Refuse to boot when the ORM role bypasses RLS. A dormant backstop is invisible —
     # every query still returns the right rows because the ORM filter covers it — so the
     # only way a misconfigured APP_DATABASE_URL gets noticed is a startup check. False by
-    # default so local dev boots before `scripts/create_app_role.sql` has been run; set
+    # default so local dev boots before `scripts/ensure_app_role.py` has been run; set
     # REQUIRE_RLS=1 in every deployed environment.
     require_rls: bool = False
+    # Run the Procrastinate worker on the API's own event loop instead of as a separate
+    # process. For hosts with no background-worker tier (Render free); docker compose and
+    # local dev keep the dedicated `worker` service, so this is off by default.
+    run_worker_in_process: bool = False
     # Connection pool. SQLAlchemy's defaults (5 + 10 overflow = 15) are the real
     # concurrency ceiling of this service, not the 40-thread anyio pool that sync routes
     # run in: 40 concurrent requests contend for 15 connections and the 16th waits
@@ -186,7 +196,7 @@ class Settings(BaseSettings):
     filebase_secret_key: str = ""
     filebase_bucket_name: str = "kb-rag-new"
     filebase_endpoint: str = "https://s3.filebase.io"
-    # In production the browser talks to the API same-origin (Caddy routes /api/* to it), so
+    # In production the browser talks to the API same-origin (Vercel proxies /api/* to it), so
     # this only matters in local dev where the Next apps run on their own ports.
     cors_allowed_origins: str = "http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001"
 
@@ -206,25 +216,33 @@ class Settings(BaseSettings):
     # and the apps render no Google button, so local dev works without Google credentials.
     google_client_id: str = ""
 
-    # --- Cache (Valkey) ---
-    # No code path uses the cache today (it backed the removed cross-origin handoff). The
-    # port and adapter are kept for the next thing that needs one.
-    cache_url: str = "redis://localhost:6379/0"
-    # Identical questions are common in a personal knowledge base. 0.97 cosine is close
-    # enough to mean "the same question, differently typed" rather than "a related one".
-    semantic_cache_threshold: float = 0.97
-    semantic_cache_ttl_seconds: int = 3600
-    # How many recent query embeddings to keep per tenant for that comparison. Capped
-    # because each is 1536 floats and the whole point is to be cheaper than a model call.
-    semantic_cache_size: int = 50
-    embedding_cache_ttl_seconds: int = 30 * 24 * 60 * 60
-    rerank_cache_ttl_seconds: int = 3600
-
     # --- Tracing (Langfuse) ---
     # Empty keys disable tracing entirely, so local development and CI need no account.
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
     langfuse_host: str = "https://cloud.langfuse.com"
+
+    @property
+    def orm_database_url(self) -> str:
+        """The URL ORM sessions connect with.
+
+        An explicit APP_DATABASE_URL wins. Otherwise, with APP_DB_PASSWORD set, it is
+        `database_url` with the app role's credentials swapped in — keeping any `.<suffix>`
+        on the username, which is how Supabase's pooler routes a role to its project
+        (`postgres.<ref>` -> `kb_app.<ref>`). With neither, the superuser URL (RLS dormant).
+        """
+        if self.app_database_url:
+            return self.app_database_url
+        if not self.app_db_password:
+            return self.database_url
+
+        from sqlalchemy.engine import make_url
+
+        url = make_url(self.database_url)
+        _, dot, suffix = (url.username or "").partition(".")
+        return url.set(
+            username=f"{APP_DB_ROLE}{dot}{suffix}", password=self.app_db_password
+        ).render_as_string(hide_password=False)
 
     @property
     def cors_origins(self) -> list[str]:

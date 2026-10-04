@@ -30,7 +30,7 @@ Isolation is enforced in **two layers**, both driven from one source of truth �
 
 **Auth.** Ordinary **email + password**. Registration creates a tenant + its owner user atomically. Login looks the user up by email (globally unique, so no tenant selector is needed), verifies the (Argon2id) password, and returns a short-lived **access JWT** (`tid`/`sub`, ~15 min) plus a **rotating refresh token** (stored hashed in Postgres; reuse revokes the family). Every failure path returns one generic 401 — the specific reason is logged server-side only, so the endpoint cannot be used to enumerate accounts. There is no fallback identity: a request without a valid credential is a 401. All auth crypto sits behind ports (`IPasswordHasher`, `ITokenService`) in `infrastructure/auth/`.
 
-**Caching.** Valkey is the cache; tenant-scoped keys must be built with `tenant_cache_key` (`tenant:{tenant_id}:…`), which fails closed without a tenant — cross-tenant cache bleed is structurally impossible. No code path uses the cache today; the port and adapter are kept for the next feature that needs one.
+**Caching.** There is no cache tier. Postgres is the only stateful dependency: the queue, the vectors and the refresh tokens all live in it.
 
 ## Backend Structure
 

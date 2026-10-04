@@ -1,3 +1,5 @@
+# Local backend stack: Postgres + the API + the ingestion worker. The two Next apps run with
+# `pnpm run dev` (production serves them from Vercel, not from containers).
 services:
   db:
     image: pgvector/pgvector:pg16
@@ -15,21 +17,6 @@ services:
       timeout: 5s
       retries: 10
 
-  # Valkey (Redis-protocol compatible). Nothing reads it today — the ICache port and its
-  # adapter are kept for the next feature that needs one, and tenant-scoped keys are
-  # namespaced `tenant:{tenant_id}:...` to prevent cross-tenant cache bleed.
-  cache:
-    image: valkey/valkey:8-alpine
-    ports:
-      - "${CACHE_PORT:-6379}:6379"
-    volumes:
-      - kb_valkey_data:/data
-    healthcheck:
-      test: ["CMD", "valkey-cli", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
   api:
     build:
       context: ./apps/api
@@ -37,11 +24,9 @@ services:
       - .env
     environment:
       DATABASE_URL: postgresql+psycopg://kb_user:kb_password@db:5432/kb_new
-      # ORM sessions connect as the non-superuser role so RLS applies. Run
-      # `pnpm run docker:db:app-role` once to create it. Superuser URL above stays for
-      # migrations/queue internals.
-      APP_DATABASE_URL: postgresql+psycopg://kb_app:${APP_DB_PASSWORD:-kb_app_password}@db:5432/kb_new
-      CACHE_URL: redis://cache:6379/0
+      # ORM sessions connect as the non-superuser `kb_app` role (derived from DATABASE_URL
+      # plus this password) so RLS applies. The entrypoint creates the role on boot.
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:-kb_app_password}
       # The entrypoint migrates before starting; only this service may, so the worker below
       # never races it.
       RUN_MIGRATIONS: "1"
@@ -54,12 +39,11 @@ services:
     depends_on:
       db:
         condition: service_healthy
-      cache:
-        condition: service_healthy
 
   # Ingestion worker: same image/code as the api, but runs the Procrastinate worker
   # instead of uvicorn. It consumes ingestion jobs from the Postgres-backed queue and
   # runs the extract -> chunk -> embed pipeline. Scale with `--scale worker=N`.
+  # (Production runs this inside the api process instead: RUN_WORKER_IN_PROCESS=1.)
   worker:
     build:
       context: ./apps/api
@@ -67,8 +51,7 @@ services:
       - .env
     environment:
       DATABASE_URL: postgresql+psycopg://kb_user:kb_password@db:5432/kb_new
-      APP_DATABASE_URL: postgresql+psycopg://kb_app:${APP_DB_PASSWORD:-kb_app_password}@db:5432/kb_new
-      CACHE_URL: redis://cache:6379/0
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:-kb_app_password}
     command: procrastinate --app=src.infrastructure.queue.app.app worker
     # Same image as the api, but no HTTP server — so the inherited HEALTHCHECK would fail
     # forever. Disable it rather than let the worker report a false "unhealthy".
@@ -82,33 +65,6 @@ services:
         condition: service_healthy
       db:
         condition: service_healthy
-      cache:
-        condition: service_healthy
-
-  # The two Next apps build their PRODUCTION images here (same Dockerfiles CI ships), so
-  # `pnpm run docker:dev` is a faithful local rehearsal of the deployed stack rather than a
-  # second, differently-behaving dev setup. For hot reload, use `pnpm run dev` instead.
-  web:
-    build:
-      context: .
-      dockerfile: apps/web/Dockerfile
-      args:
-        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
-        NEXT_PUBLIC_WEBSITE_URL: ${NEXT_PUBLIC_WEBSITE_URL:-http://localhost:3001}
-    ports:
-      - "${WEB_PORT:-3000}:3000"
-    depends_on:
-      - api
-
-  website:
-    build:
-      context: .
-      dockerfile: apps/website/Dockerfile
-      args:
-        NEXT_PUBLIC_PRODUCT_URL: ${NEXT_PUBLIC_PRODUCT_URL:-http://localhost:3000/app}
-    ports:
-      - "${WEBSITE_PORT:-3001}:3000"
 
 volumes:
   kb_postgres_data:
-  kb_valkey_data:

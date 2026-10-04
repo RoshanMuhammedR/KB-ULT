@@ -19,10 +19,10 @@ class TenantScopedSession(Session):
 
 
 # ORM sessions connect as the non-superuser app role when configured, so Postgres RLS
-# applies (see app_database_url). Falls back to the superuser URL when unset.
+# applies (see Settings.orm_database_url). Falls back to the superuser URL when unset.
 _settings = get_settings()
 engine = create_async_engine(
-    _settings.app_database_url or _settings.database_url,
+    _settings.orm_database_url,
     pool_pre_ping=True,
     # Sized explicitly rather than left on SQLAlchemy's 5+10 default: this pool is what
     # actually caps concurrency. See the arithmetic on `db_pool_size` in core/config.py.

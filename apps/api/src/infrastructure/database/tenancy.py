@@ -161,7 +161,7 @@ async def assert_rls_enforced(engine, *, required: bool) -> None:
         f"ORM sessions connect as '{role}', which bypasses Row-Level Security "
         f"(superuser={is_superuser}, bypassrls={bypasses_rls}). Postgres RLS is dormant "
         "and tenant isolation rests on the ORM filter alone. Set APP_DATABASE_URL to the "
-        "non-superuser app role (see scripts/create_app_role.sql)."
+        "non-superuser app role (see scripts/ensure_app_role.py)."
     )
     if required:
         raise RLSNotEnforcedError(detail)

@@ -17,6 +17,11 @@ if [ "${RUN_MIGRATIONS:-0}" = "1" ]; then
 		# Already applied is not an error worth failing a deploy over; anything else is.
 		echo "    (schema already present)"
 	}
+
+	# After migrations, so the grants cover any table they just created. A no-op without
+	# APP_DB_PASSWORD; with it, the ORM connects as this role (see Settings.orm_database_url).
+	echo "==> ensure app role"
+	python scripts/ensure_app_role.py
 fi
 
 exec "$@"

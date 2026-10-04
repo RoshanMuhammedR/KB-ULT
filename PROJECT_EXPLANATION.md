@@ -11,7 +11,7 @@
 >
 > **Stack:** FastAPI (Python 3.11+) · SQLAlchemy 2.x · PostgreSQL + pgvector ·
 > Procrastinate (Postgres-backed job queue) · Next.js 15 / React 19 (two apps) ·
-> pnpm + Turborepo monorepo · Docker + GHCR + a VPS behind Caddy.
+> pnpm + Turborepo monorepo · Vercel (Next apps) + Render (API) + Supabase (Postgres).
 
 ---
 
@@ -36,7 +36,7 @@ There are **four runtime processes** and **three stateful backing services**:
 
 ```
                           ┌──────────────────────────────────────┐
-                          │            Caddy (reverse proxy)     │
+                          │  Vercel: @kb/website's rewrites      │
                           │  one origin: https://saga.dedyn.io   │
                           └───────┬───────────┬──────────────┬───┘
                             /*    │      /app/*              │ /api/*
@@ -69,11 +69,11 @@ There are **four runtime processes** and **three stateful backing services**:
                                             │ original files       │   │ (OpenAI-compatible) │
                                             └──────────────────────┘   │ chat/embed/STT      │
                                                                        └─────────────────────┘
-                                            ┌──────────────────────┐
-                                            │ Valkey (Redis-proto) │  ← provisioned, port
-                                            │ ICache adapter only  │    reserved, unused today
-                                            └──────────────────────┘
 ```
+
+In production (free tiers) the API and the worker are one Render web service: the worker
+runs on the API's event loop (`RUN_WORKER_IN_PROCESS=1`), because Render has no free
+worker tier. Locally, docker-compose still runs them as separate containers.
 
 **The single most important architectural decision in this codebase:** the API process
 never does slow work. Uploading a 200-page PDF returns `202 Accepted` in milliseconds;
@@ -92,7 +92,7 @@ This is the flagship flow. Follow it once and most of the system falls into plac
 sequenceDiagram
     autonumber
     participant B as Browser (@kb/web)
-    participant P as Caddy
+    participant P as Vercel (rewrites)
     participant A as FastAPI (kb-api)
     participant S3 as Filebase (S3)
     participant DB as PostgreSQL
@@ -281,7 +281,6 @@ KB/
 │   │           ├── langchain_adapters/ # chat_model.py, embeddings.py, text_splitter.py
 │   │           ├── ai_providers/     #   aicredits_client.py, transcription.py
 │   │           ├── auth/             #   jwt_token_service.py, password_hasher.py, google_id_token.py
-│   │           └── cache/            #   valkey_cache.py, keys.py (tenant-namespaced keys)
 │   │
 │   ├── web/                          # ← the PRODUCT app (Next.js 15, basePath: "/app")
 │   │   ├── next.config.ts            #   basePath "/app", output "standalone", transpilePackages
@@ -316,9 +315,9 @@ KB/
 │   ├── config/
 │   └── sdk/
 │
-├── deploy/docker-compose.yml         # PRODUCTION stack (external postgres/redis/caddy networks)
-├── docker-compose.yml                # LOCAL stack (db + cache + api + worker + web + website)
-├── .github/workflows/{ci,deploy}.yml # PR checks; push-to-main → GHCR → rsync → VPS
+├── render.yaml                       # PRODUCTION API (Render Blueprint, free plan)
+├── docker-compose.yml                # LOCAL stack (db + api + worker)
+├── .github/workflows/{ci,keepalive}.yml # PR checks; pings the API so Supabase never pauses
 ├── scripts/{run,compose}.mjs         # cross-platform script shims (no `sh` assumed)
 ├── turbo.json                        # task graph + env passthrough allowlist
 └── docs/                             # architecture.md, DESIGN.md, setup.md, deployment.md
@@ -471,10 +470,9 @@ that is extremely common in codebases with two separate wiring paths.
 > runtime magic. The trade-off is verbosity: every new collaborator means editing this
 > file. That's a feature at this size and a chore at 100 services.
 
-Note the two deliberate **singletons** in this file and *why* each exists:
+Note the deliberate **singleton** in this file and *why* it exists:
 
 ```python
-_cache: ValkeyCache | None = None          # one connection pool process-wide
 _google_verifier: GoogleIdTokenVerifier | None = None  # so the JWKS cache is reused
 ```
 
@@ -1627,21 +1625,20 @@ unrecoverable failure is converted into a **working alternative path**, not a de
 | Purpose | Marketing / landing | The product |
 | Served at | `/` | `/app/*` (`basePath: "/app"`) |
 | Auth | None | Required |
-| Container | `kb-website` | `kb-web` |
+| Vercel project | `kb-website` (owns the domain) | `kb-web` |
 
 ```ts
 // apps/web/next.config.ts
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   transpilePackages: ["@kb/ui", "@kb/shared"],  // workspace packages ship raw TS/TSX
-  basePath: "/app",     // so both apps share one origin behind Caddy
-  output: "standalone", // self-contained server bundle for the Docker image
+  basePath: "/app",     // so both apps share one origin (website rewrites /app/* here)
 };
 ```
 
 **Why one origin matters:** because `/app/*` and `/api/*` are the same origin as `/`, the
 browser never issues a CORS preflight in production, cookies are trivially shared, and
-there is exactly one TLS certificate. The cost is a routing rule in Caddy and the `basePath`
+there is exactly one TLS certificate. The cost is a rewrite in the website's `next.config.ts` and the `basePath`
 awareness sprinkled through the client (e.g. `LOGIN_PATH = "/app/login"` in `api.ts`,
 because `window.location.assign` — unlike `next/navigation`'s router — knows nothing about
 `basePath`).

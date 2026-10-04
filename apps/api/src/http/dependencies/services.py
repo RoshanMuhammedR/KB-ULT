@@ -11,7 +11,6 @@ from src.application.ingestion.service import IngestionService
 from src.application.knowledge_base import KnowledgeBaseService
 from src.composition import (
     build_auth_service,
-    build_cache,
     build_chat_service,
     build_file_storage,
     build_ingestion_service,
@@ -20,7 +19,6 @@ from src.composition import (
 from src.core.config import Settings, get_settings
 from src.core.identity import Identity
 from src.domain.interfaces import IFileStorage
-from src.domain.interfaces.cache import ICache
 from src.http.middleware import SCOPE_IDENTITY_KEY
 from src.infrastructure.database.session import get_db
 
@@ -42,10 +40,6 @@ def get_ingestion_service(db: DbSession, settings: AppSettings) -> IngestionServ
 
 def get_file_storage(settings: AppSettings) -> IFileStorage:
     return build_file_storage(settings)
-
-
-def get_cache(settings: AppSettings) -> ICache:
-    return build_cache(settings)
 
 
 def get_knowledge_base_service(db: DbSession) -> KnowledgeBaseService:

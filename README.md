@@ -52,8 +52,8 @@ pnpm run docker:db:migrate
 pnpm run docker:db:sql
 ```
 
-Deploying to a server is documented in [docs/deployment.md](docs/deployment.md): a push to
-`main` builds images to GHCR and rolls them onto the VPS behind a health gate.
+Production runs on free tiers — Vercel (both Next apps), Render (API + worker) and Supabase
+(Postgres) — and a push to `main` deploys it. See [docs/deployment.md](docs/deployment.md).
 
 The Docker scripts call `scripts/compose.mjs`, which uses `docker compose` when
 the plugin exists and falls back to `docker-compose` on machines with the
@@ -74,7 +74,7 @@ Built now:
 - pgvector storage and retrieval
 - AICredits/OpenAI-compatible chat
 - Citation-backed answers
-- Push-to-deploy CI/CD onto a VPS behind a health gate
+- Push-to-deploy onto Vercel + Render + Supabase, all on free tiers
 
 Not built yet:
 

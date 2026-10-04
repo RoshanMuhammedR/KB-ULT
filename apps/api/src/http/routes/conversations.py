@@ -42,8 +42,8 @@ router = APIRouter(prefix="/conversations", tags=["conversations"])
 NEW_CONVERSATION = "new"
 
 # Streaming responses must not be buffered anywhere between the model and the browser,
-# or the whole point (a visibly progressing answer) is lost. Caddy's reverse_proxy does
-# not buffer by default; X-Accel-Buffering covers an nginx sitting in front.
+# or the whole point (a visibly progressing answer) is lost. Vercel's rewrite proxy streams
+# the body through; X-Accel-Buffering covers an nginx sitting in front.
 # Sent when the answer has produced nothing for this long. Comfortably under the 30-60s
 # idle timeout typical of proxies and load balancers, and long enough that a normally
 # responsive model never triggers it.

@@ -84,7 +84,7 @@ class UserModel(Base):
 class RefreshTokenModel(Base):
     """Durable, revocable refresh-token record (rotation-based revocation — see plan §4).
 
-    Kept in Postgres, not Valkey: revocation truth must survive cache eviction. Only the
+    Kept in Postgres so revocation truth is durable. Only the
     token's hash is stored. Reuse of a revoked token revokes the whole `family_id`.
     Not `TenantScoped`: issued/rotated during auth, under `system_scope`.
     """
